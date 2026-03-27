@@ -435,6 +435,18 @@ Mistake: Скрипт взял все активные проекты из facto
 Why: Предположили что «активный = новый». Не было проверки реального статуса проекта.
 Fix: При bulk-создании client-пользователей — обязательно `SELECT id, project, onboarding_stage FROM validator_projects` и проверять логику: stage=5 → действующий, не трогать или явно сбрасывать на нужный этап.
 
+## 2026-03-27 — Router написан под схему БД которой не существует
+Context: validator/backend/src/routers/contract.py — GET /api/contract/status
+Mistake: `contract.py` делает SELECT `plan_phones, plan_accounts, plan_publications, plan_views, contract_start, contract_end` из `validator_projects`. Ни одной из этих колонок в таблице нет. Каждый вызов → 500.
+Why: Роутер написан заранее «под будущую схему» без создания миграции. Код задеплоен, таблица — нет.
+Fix: Перед деплоем любого нового роутера — проверить что все используемые колонки и таблицы существуют в БД: `\d table_name`. Если нет — сначала миграция, потом деплой кода.
+
+## 2026-03-27 — autowarm_day_logs: колонка views отсутствует — молчаливая потеря данных
+Context: warmer.py → save_day_log() → INSERT в autowarm_day_logs с полем views
+Mistake: `save_day_log` падает с `column "views" of relation "autowarm_day_logs" does not exist` — статистика дня не сохраняется, ошибка только в PM2 логах, в UI не видна.
+Why: Колонка добавлена в код но не добавлена в схему БД (нет ALTER TABLE или миграции).
+Fix: При добавлении нового поля в INSERT/UPDATE — сначала ALTER TABLE, потом деплой кода. Порядок: БД → код, не наоборот.
+
 ## 2026-03-26 — Создание таблицы БД без миграции в коде
 Context: validator_support_history — таблица создана прямым SQL, не через Alembic миграцию
 Mistake: Таблица создана через `psql CREATE TABLE` напрямую. В коде нет миграции → при следующем `alembic upgrade head` или деплое на чистый сервер таблицы не будет.
