@@ -1,7 +1,7 @@
 # logs
 
 **Размер:** 257M
-**Обновлено:** 2026-03-27 21:10 UTC
+**Обновлено:** 2026-03-27 21:20 UTC
 
 ## Файлы
 ```
@@ -28,6 +28,7 @@ telegram_incremental.log
 telegram_parse_fast.log
 telegram_parse_fast2.log
 telegram_parse_fast3.log
+telegram_parse_tail.log
 telegram_parser.log
 zoom_account2 (2).log
 zoom_account2.log
