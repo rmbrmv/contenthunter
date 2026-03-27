@@ -128,7 +128,7 @@ ANTHROPIC_MODEL=claude-3-5-sonnet-20241022
 
 # Or OpenAI alternative:
 # AI_PROVIDER=openai
-# OPENAI_API_KEY=[REDACTED-API-KEY]
+# OPENAI_API_KEY=sk-xxxxxxxxxxxxxxxxxxxxx
 # OPENAI_MODEL=gpt-4-turbo-preview
 
 # Payment OCR
