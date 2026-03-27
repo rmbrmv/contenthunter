@@ -1,7 +1,30 @@
+# === СЕКРЕТЫ — НИКОГДА НЕ ПУШИТЬ ===
+secrets.json
+secrets.json.*
 *.key
 *.pem
-secrets.*
+*.p12
+*.pfx
+
+# API ключи и токены
 .env
+.env.*
+*.env
+
+# OAuth и credentials
+token.json
+credentials.json
+*credentials*.json
+*-credentials.json
+*_credentials.json
+service-account*.json
+
+# Специфичные файлы
+anthropic-key*.txt
+telegram-pairing.json
+pairing-notified.json
+
+# Бинари и медиа
 node_modules/
 *.mp4
 *.jpg
@@ -10,6 +33,18 @@ node_modules/
 *.gif
 *.zip
 *.tar.gz
-credentials/
-__pycache__/
 *.pyc
+__pycache__/
+venv/
+venv-*/
+dist/
+.git/
+
+# Логи
+*.log
+logs/
+
+# IDE
+.DS_Store
+.idea/
+.vscode/
