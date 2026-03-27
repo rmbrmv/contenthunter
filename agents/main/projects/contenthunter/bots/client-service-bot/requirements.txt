@@ -1,0 +1,38 @@
+# Telegram Bot
+python-telegram-bot==20.7
+python-telegram-bot[job-queue]
+
+# Airtable
+pyairtable==2.3.3
+
+# AI Providers
+openai==1.12.0
+anthropic==0.18.1
+
+# Database
+psycopg2-binary==2.9.9
+sqlalchemy==2.0.25
+
+# Utilities
+python-dotenv==1.0.1
+requests==2.31.0
+validators==0.22.0
+
+# Async
+aiohttp==3.9.3
+asyncio==3.4.3
+
+# Logging & Monitoring
+loguru==0.7.2
+
+# Vector Search (для RAG)
+sentence-transformers==2.3.1
+faiss-cpu>=1.8.0
+numpy==1.26.3
+
+# Rate Limiting
+ratelimit==2.2.1
+
+# OCR.space API (бесплатный OCR для платёжек)
+# Используется requests для HTTP запросов
+google-api-python-client>=2.0.0

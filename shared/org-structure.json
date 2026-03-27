@@ -1,0 +1,92 @@
+{
+  "projects": {
+    "content-hunter": {
+      "name": "Content Hunter",
+      "departments": {
+        "marketing": {
+          "name": "Маркетинг",
+          "emoji": "📣",
+          "teams": {
+            "content": {
+              "name": "Контент",
+              "agents": ["dasha-smyslovik", "oleg-marketolog", "pasha-novostnik"]
+            },
+            "outreach": {
+              "name": "Аутрич",
+              "agents": ["outreach-lead", "outreach-finder", "outreach-analyst", "outreach-contact", "outreach-offer", "outreach-crm"]
+            }
+          }
+        },
+        "development": {
+          "name": "Разработка",
+          "emoji": "💻",
+          "agents": ["genri", "autrichard", "yura", "edward", "seryoga"]
+        },
+        "operations": {
+          "name": "Операционка",
+          "emoji": "⚙️",
+          "agents": ["plahov-operdir", "misha-metodolog"]
+        },
+        "hr": {
+          "name": "HR",
+          "emoji": "👩‍💼",
+          "agents": ["elena"]
+        },
+        "client-service": {
+          "name": "Клиентский сервис",
+          "emoji": "🎧",
+          "agents": ["kira-pomoschnitsa-km"]
+        },
+        "analytics": {
+          "name": "Аналитика",
+          "emoji": "📊",
+          "agents": ["fyodor"]
+        },
+        "sysadmin": {
+          "name": "Сисадмин",
+          "emoji": "🔧",
+          "agents": ["volodya-sisadmin"]
+        },
+        "design": {
+          "name": "Дизайн",
+          "emoji": "🎨",
+          "agents": ["mark-dizayner"]
+        },
+        "delivery": {
+          "name": "Delivery",
+          "emoji": "📦",
+          "agents": ["alfiya", "nuriya", "sasha"]
+        }
+      }
+    },
+    "systematika": {
+      "name": "Систематика",
+      "departments": {
+        "editorial-v1": {
+          "name": "Редакция v1",
+          "emoji": "✍️",
+          "agents": ["pisaka", "vseznayka", "akaketo", "apochemu", "redaktor", "redaktor2", "kopirayter"]
+        },
+        "editorial-v2": {
+          "name": "Редакция v2",
+          "emoji": "✍️",
+          "agents": ["pisaka-v2", "vseznayka-v2", "akaketo-v2", "apochemu-v2"]
+        },
+        "methodology": {
+          "name": "Методология",
+          "emoji": "📚",
+          "agents": ["olezhka", "tanyushka", "alenka", "dzheff"]
+        },
+        "finance": {
+          "name": "Финансы",
+          "emoji": "💰",
+          "agents": ["nik-finmanager"]
+        }
+      }
+    }
+  },
+  "general": {
+    "name": "Общее",
+    "agents": ["main"]
+  }
+}

@@ -1,0 +1,15 @@
+*.key
+*.pem
+secrets.*
+.env
+node_modules/
+*.mp4
+*.jpg
+*.jpeg
+*.png
+*.gif
+*.zip
+*.tar.gz
+credentials/
+__pycache__/
+*.pyc

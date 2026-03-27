@@ -1,0 +1,30 @@
+{
+  "295230564": {
+    "name": "Роман",
+    "username": "rmbrmv",
+    "role": "Операционный директор",
+    "company": "Content Hunter",
+    "notes": "Основной руководитель. Обращаться на ты."
+  },
+  "8161667050": {
+    "name": "Аня",
+    "username": "gengo_care",
+    "role": "Клиентский менеджер",
+    "company": "Content Hunter",
+    "notes": ""
+  },
+  "242574724": {
+    "name": "Даниил Павлов",
+    "username": "Danil_Pavlov_123",
+    "role": "",
+    "company": "Content Hunter",
+    "notes": "Доступ к Генри (genri-dev)"
+  },
+  "348164067": {
+    "name": "Наталья Абрамова",
+    "username": "natalya_shigaeva",
+    "role": "",
+    "company": "Content Hunter",
+    "notes": "Доступ к Юре (yura)"
+  }
+}
