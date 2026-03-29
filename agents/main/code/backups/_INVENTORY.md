@@ -1,7 +1,7 @@
 # backups
 
 **Размер:** 9.1G
-**Обновлено:** 2026-03-29 22:50 UTC
+**Обновлено:** 2026-03-29 23:00 UTC
 
 ## Файлы
 ```
@@ -27,6 +27,7 @@ postgresql/daily/db_litellm_2026-03-25.sql.gz
 postgresql/daily/db_litellm_2026-03-26.sql.gz
 postgresql/daily/db_litellm_2026-03-27.sql.gz
 postgresql/daily/db_litellm_2026-03-28.sql.gz
+postgresql/daily/db_litellm_2026-03-29.sql.gz
 postgresql/daily/db_test_leadgen_2026-03-20.sql.gz
 postgresql/daily/db_test_leadgen_2026-03-21.sql.gz
 postgresql/daily/db_test_leadgen_2026-03-22.sql.gz
@@ -47,6 +48,7 @@ postgresql/daily/openclaw_schema_client_service_2026-03-25.sql.gz
 postgresql/daily/openclaw_schema_client_service_2026-03-26.sql.gz
 postgresql/daily/openclaw_schema_client_service_2026-03-27.sql.gz
 postgresql/daily/openclaw_schema_client_service_2026-03-28.sql.gz
+postgresql/daily/openclaw_schema_client_service_2026-03-29.sql.gz
 postgresql/daily/openclaw_schema_drive_2026-03-20.sql.gz
 postgresql/daily/openclaw_schema_drive_2026-03-21.sql.gz
 postgresql/daily/openclaw_schema_drive_2026-03-22.sql.gz
@@ -56,6 +58,7 @@ postgresql/daily/openclaw_schema_drive_2026-03-25.sql.gz
 postgresql/daily/openclaw_schema_drive_2026-03-26.sql.gz
 postgresql/daily/openclaw_schema_drive_2026-03-27.sql.gz
 postgresql/daily/openclaw_schema_drive_2026-03-28.sql.gz
+postgresql/daily/openclaw_schema_drive_2026-03-29.sql.gz
 postgresql/daily/openclaw_schema_factory_2026-03-20.sql.gz
 postgresql/daily/openclaw_schema_factory_2026-03-21.sql.gz
 postgresql/daily/openclaw_schema_factory_2026-03-22.sql.gz
@@ -65,6 +68,7 @@ postgresql/daily/openclaw_schema_factory_2026-03-25.sql.gz
 postgresql/daily/openclaw_schema_factory_2026-03-26.sql.gz
 postgresql/daily/openclaw_schema_factory_2026-03-27.sql.gz
 postgresql/daily/openclaw_schema_factory_2026-03-28.sql.gz
+postgresql/daily/openclaw_schema_factory_2026-03-29.sql.gz
 postgresql/daily/openclaw_schema_finance_2026-03-20.sql.gz
 postgresql/daily/openclaw_schema_finance_2026-03-21.sql.gz
 postgresql/daily/openclaw_schema_finance_2026-03-22.sql.gz
@@ -101,8 +105,4 @@ postgresql/daily/openclaw_schema_knowledge_base_2026-03-25.sql.gz
 postgresql/daily/openclaw_schema_knowledge_base_2026-03-26.sql.gz
 postgresql/daily/openclaw_schema_knowledge_base_2026-03-27.sql.gz
 postgresql/daily/openclaw_schema_knowledge_base_2026-03-28.sql.gz
-postgresql/daily/openclaw_schema_meetings_2026-03-20.sql.gz
-postgresql/daily/openclaw_schema_meetings_2026-03-21.sql.gz
-postgresql/daily/openclaw_schema_meetings_2026-03-22.sql.gz
-postgresql/daily/openclaw_schema_meetings_2026-03-23.sql.gz
 ```
