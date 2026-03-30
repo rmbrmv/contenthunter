@@ -435,6 +435,18 @@ Mistake: Скрипт взял все активные проекты из facto
 Why: Предположили что «активный = новый». Не было проверки реального статуса проекта.
 Fix: При bulk-создании client-пользователей — обязательно `SELECT id, project, onboarding_stage FROM validator_projects` и проверять логику: stage=5 → действующий, не трогать или явно сбрасывать на нужный этап.
 
+## 2026-03-30 — Колонки в INSERT без проверки схемы → ошибка на каждую задачу
+Context: autowarm/warmer.py → save_day_log() → INSERT в autowarm_day_logs с views, profile_visits и др.
+Mistake: Код использует 6 колонок которых не было в таблице. Ошибка `column "views" does not exist` падала на каждую задачу фарминга с 25 марта (5 дней!), статистика дня не сохранялась.
+Why: Колонки добавлены в INSERT при написании кода, но ALTER TABLE не сделан. Ошибка silent — только в PM2 логах, в UI не видна.
+Fix: Добавлены 6 колонок ALTER TABLE. Правило: перед деплоем INSERT с новыми полями → `\d table_name`, убедиться что все поля существуют. Если нет — сначала ALTER TABLE, потом код.
+
+## 2026-03-30 — Anthropic ключ в warmer.py не обновлён после ротации
+Context: warmer.py → analyze_audience_with_ai → Anthropic API → 403 Forbidden
+Mistake: warmer.py использует Anthropic ключ напрямую. После ротации ключей (25 марта: anthropic_genri → anthropic_default) validator обновили, но warmer.py — нет. Все AI-анализы аудитории дают 403.
+Why: Ключи обновлялись точечно в одном месте, не проверялись все сервисы использующие тот же ключ.
+Fix: При ротации API ключей — grep по всем сервисам: `grep -rn "ANTHROPIC\|anthropic" /root/.openclaw/workspace-genri/` и обновить везде синхронно.
+
 ## 2026-03-27 — Router написан под схему БД которой не существует
 Context: validator/backend/src/routers/contract.py — GET /api/contract/status
 Mistake: `contract.py` делает SELECT `plan_phones, plan_accounts, plan_publications, plan_views, contract_start, contract_end` из `validator_projects`. Ни одной из этих колонок в таблице нет. Каждый вызов → 500.
