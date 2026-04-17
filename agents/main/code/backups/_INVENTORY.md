@@ -1,7 +1,7 @@
 # backups
 
 **Размер:** 12G
-**Обновлено:** 2026-04-17 22:50 UTC
+**Обновлено:** 2026-04-17 23:00 UTC
 
 ## Файлы
 ```
@@ -33,6 +33,7 @@ postgresql/daily/db_litellm_2026-04-13.sql.gz
 postgresql/daily/db_litellm_2026-04-14.sql.gz
 postgresql/daily/db_litellm_2026-04-15.sql.gz
 postgresql/daily/db_litellm_2026-04-16.sql.gz
+postgresql/daily/db_litellm_2026-04-17.sql.gz
 postgresql/daily/db_test_leadgen_2026-03-20.sql.gz
 postgresql/daily/db_test_leadgen_2026-03-21.sql.gz
 postgresql/daily/db_test_leadgen_2026-03-22.sql.gz
@@ -104,5 +105,4 @@ postgresql/daily/openclaw_schema_drive_2026-03-29.sql.gz
 postgresql/daily/openclaw_schema_drive_2026-03-30.sql.gz
 postgresql/daily/openclaw_schema_drive_2026-03-31.sql.gz
 postgresql/daily/openclaw_schema_drive_2026-04-01.sql.gz
-postgresql/daily/openclaw_schema_drive_2026-04-02.sql.gz
 ```
