@@ -8,6 +8,37 @@
 - Роман (@rmbrmv, 295230564) — owner
 - Даниил Павлов (@Danil_Pavlov_123, 242574724) — работает над уникализацией и выкладкой (delivery.contenthunter.ru)
 
+## 2026-04-05 — autowarm: Factory Accounts UI редизайн (Генри)
+
+**Коммит:** `40c8261` → GenGo2/delivery-contenthunter
+
+Раздел `#accounts/factory` (delivery.contenthunter.ru):
+- Кнопка «Обновить» в шапке рядом с «Создать задачу»
+- Виджеты статистики компактные
+- Таблица Аккаунты: порядок колонок ID/Gmail/IG/TT/YT/Проект/Устройство/Дата/Лог
+- Sticky заголовки и фильтры при скролле
+- Фильтры Проект и Устройство — выпадающие списки
+- Колонка Лог: 📝 (модал лога) / ▶️ (видео S3) / 📸 (скриншот)
+- Новые функции: `renderFactoryAccounts`, `filterFactoryAccounts`, `openFactoryTaskLog`
+
+## 2026-04-06 — account_factory: задачи #36-#38 (фиксы регистрации Gmail)
+
+### Задача #36 (коммит `290ea26`)
+- AI hang detection: `_detect_stuck_screen()` — 2 скриншота → md5 → Groq Vision если завис
+- Popup «Управление приложениями» фикс после long-press
+
+### Задача #37 (коммит `910421c`) — 4 бага
+- AI тапнул на Google Maps → `_is_on_google_signup_screen()` + `_safe_ai_tap()`
+- Groq HTTP 500 без retry → retry x3 в `_ai_tap` и `_ai_describe_screen`
+- Accept-петля 12x → детект повторяющейся ошибки (3x → return False)
+- Проверка навигации после DOB/пароля в обоих Chrome методах
+
+### Задача #38 (коммит `43a7551`) — username cleanup
+- `_clear_and_type_username` НЕ чистила поле: `KEYCODE_CTRL_A` не работает через ADB
+- Фикс: 100x backspace вместо CTRL_A
+- Chrome page load: 8→12 попыток (24→36 сек)
+- README.md и HELP_CONTENT обновлены
+
 
 ---
 
@@ -19,6 +50,23 @@
 Chose: {option}
 Why: {reason}
 -->
+
+## 2026-04-03 — validator: блокировка загрузки контента на прошлые даты (Генри+Даниил)
+
+**Файл:** `validator/frontend/src/pages/client/ClientDashboard.vue`
+**Коммит:** `699e3a6` → GenGo2/validator-contenthunter
+
+### Что сделано
+Загрузка контента в планировщике разрешена **только на завтра и позднее** — для всех ролей.
+- Пустые слоты прошлых дат/сегодня → 🔒 серый, клик заблокирован
+- Drag-and-drop в прошлые слоты заблокирован
+- Кнопка `+ Слот` скрыта для прошлых дат/сегодня
+- Тур и README обновлены
+
+### Правило
+Загрузка на прошлые даты невозможна — бизнес-требование, не баг. Нужна исключение → отдельная задача.
+
+---
 
 ## 2026-03-25 — warmer.py: фикс фарминга Instagram (Генри+Даниил)
 
@@ -213,7 +261,65 @@ Files: `workspace-genri/autowarm/server.js` — `assignUnicResultsToQueue()` и 
 
 ---
 
-## TODO
+## autowarm — запись экрана при регистрации аккаунтов (2026-04-05, Генри)
+
+**Коммит:** `888651a` → GenGo2/delivery-contenthunter
+
+**Новый модуль:** `screen_recorder.py`
+
+**Как работает:**
+- Старт при `/api/factory/run` → запись чанками по 170 сек (`adb screenrecord --bit-rate 1500000 --size 720x1560`)
+- После завершения/падения → чанки склеиваются ffmpeg на `91.98.180.103` → S3 `reg_acc/YYYY-MM-DD/task_{id}.mp4`
+- Ссылка пишется в `factory_reg_tasks.video_url` и `factory_reg_accounts.video_url`
+- UI: новая колонка ▶️ в таблицах Задачи и Аккаунты (`#accounts/factory`)
+
+**Параметры:** 720×1560, 1.5 Mbps, ~110 МБ/10 мин
+
+**Диагностика:** видео загружается даже при падении задачи (блок `finally`). Ссылка: UI или `SELECT video_url FROM factory_reg_tasks WHERE id=...`
+
+---
+
+## autowarm — account_factory.py фиксы (2026-04-05, вечер)
+
+**Коммиты:** `8b4a846`, `b2cc140`, `4bcaa3f` → GenGo2/delivery-contenthunter
+
+### Три фикса Gmail-регистрации (найдены через анализ видео)
+
+1. **Username**: `'Создать собственный адрес Gmail'` — добавлен в список вариантов (был только 'Создать свой')
+2. **Settings открывается медленно**: sleep 8с + retry x3 при поиске Google
+3. **Вводный экран верификации телефона**: после пароля — экран загрузки, потом «Подтвердить» без поля → нажать → ждать поле ввода
+
+### Правила (НЕЛЬЗЯ НАРУШАТЬ)
+- Список вариантов выбора адреса Gmail покрывает все локали: 'Создать свой', 'Создать собственный', 'Создать адрес Gmail', 'Create a Gmail address'  
+- Вводный экран верификации (есть «Подтвердить», нет EditText) — нажимать, не пропускать
+- `log_step()` обновляет `updated_at` — watchdog heartbeat, не убирать
+- Параллельный запуск на одном устройстве заблокирован на уровне API
+
+---
+
+## autowarm — account_factory.py AI hang detection (2026-04-06, анализ задачи #36)
+
+**Коммит:** `290ea26` → GenGo2/delivery-contenthunter
+
+### Задача #36 — анализ видео
+- Chrome завис 60 сек на экране имени на Samsung SM-A175F (поля пустые)
+- Popup «Управление приложениями» после long-press блокировал ввод username
+- Корень: Chrome WebView плохо поддаётся automation, long-press вызывает системный popup
+
+### Новый метод: `_detect_stuck_screen(what_expected, context, wait_sec=15)`
+- 2 скриншота с интервалом → md5 сравнение → если идентичны → Groq Vision AI
+- AI (Llama-4-Scout): что за экран, почему зависло, конкретный совет
+- Логи: `[HANG-DETECT]` → `🤖 HANG-DETECT`
+
+### Точки проверки:
+1. `create_gmail_browser()`: страница имени не загрузилась за 24 сек → AI + force-stop Chrome + reopen
+2. После «Далее» на имени: остались на том же экране → AI + повторный тап
+3. Нативный метод после пароля: нераспознанный экран → AI-диагностика
+
+### Фикс popup:
+- `_clear_and_type_username()`: после long-press проверяет XML dump на `'Управление приложениями'` / `'Manage applications'` → `KEYCODE_BACK` (4) → пере-тап поля
+
+### TODO
 - [ ] Реализовать геотеги для Instagram в `_fill_instagram_caption_and_publish`
 
 ---
@@ -550,3 +656,144 @@ node /root/.openclaw/workspace-genri/autowarm/scripts/validate_html_js.js \
 ### Диагностика публикации
 
 **Правило:** при проблемах с публикацией — тянуть скринкаст с устройства: `adb -H <host> -P <port> -s <serial> pull /sdcard/debug_screenshots/screenrec_<id>_*.mp4`. Видео показывает точный экран в момент ошибки.
+
+## validator — трёхшаговая форма загрузки контента (2026-04-03)
+
+**Файл:** `validator/frontend/src/components/UploadModal.vue`
+**Коммит:** `21882d8` в GenGo2/validator-contenthunter
+
+Форма загрузки переработана в 3 шага:
+
+| Шаг | Содержание | Условие перехода |
+|-----|-----------|-----------------|
+| 1 — Тип контента | Два блока: 🎬 Видео / 🖼 Карусель | Кнопка «Далее» всегда |
+| 2 — Загрузка и проверка | Дропзона + технические чеки (формат, размер, ориентация, разрешение, кодек, аудио) | Все чеки ✅ → «Далее» |
+| 3 — Название и описание | Заголовок YouTube (обязательно), описание, хэштеги, геолокация | «Загрузить» |
+
+**Логика:** клиент сначала убеждается что видео технически проходит, и только потом тратит время на тексты.
+
+Вся логика анализа MP4, polling статуса валидации, XHR-загрузки — без изменений.
+Результат валидации (модерация, виральность, параметры видео) показывается на шаге 3 после загрузки.
+
+**Правило:** при разработке новых функций загрузки — не ломать шаговую структуру; шаг 2 → шаг 3 ТОЛЬКО при videoChecksPass=true.
+
+## validator — планировщик: исправление генерации слотов (2026-04-03, Даниил)
+
+**Коммит:** `34ba2cf` → GenGo2/validator-contenthunter
+
+### Что изменилось
+Исправлен баг: клиент видел 7 охватных слотов вместо 3 в планировщике.
+
+**Причина:** `POST /schedule/generate-week` закрыт для роли `client` → 403 → слоты не создавались → фронт рисовал placeholder (1 охватный × 7 дней).
+
+**Фикс:**
+- `GET /schedule` (backend) теперь сам генерирует слоты если неделя пустая — для всех ролей
+- Убрана ручная генерация из `loadSlots()` в `ClientDashboard.vue`
+- Убраны некорректные placeholder-блоки во фронте
+
+**Схема слотов (менять нельзя):**
+- Пн pos1 → reach (охватный)
+- Ср pos2 → reach (охватный)
+- Пт pos1 → reach (охватный)
+- Все остальные → client (продающий)
+- Итого: 14 слотов/неделя = 3 reach + 11 client
+
+**Авто-генерация:** при переходе на любую пустую неделю — слоты создаются автоматически через `GET /schedule`, скрипты запускать не нужно.
+
+## validator — сброс мастера схем уникализации (2026-04-04, Даниил)
+
+**Коммит:** `f832d32` → GenGo2/validator-contenthunter
+
+**Проблема:** у клиента BigKefBot на шаге генерации превью был загружен семпл от другого проекта. Не было способа сбросить и начать заново.
+
+**Решение:**
+- **Backend** `routers/schemes.py`: `DELETE /api/schemes/reset/{project_id}`
+  - Удаляет `validator_scheme_previews` (все превью + семпл записи) для проекта
+  - Удаляет `validator_scheme_preferences` (выборы схем) для проекта
+  - Удаляет файлы из S3 (семпл + превью + тумбы)
+  - Сбрасывает `_generation_status[project_id]` из памяти
+  - Доступ: только **admin** + **manager** (403 для остальных)
+- **Frontend** `SchemesPage.vue`: кнопка «🗑 Сбросить мастер»
+  - Видна только admin/manager при `readiness.previews_generated > 0`
+  - Confirm-диалог перед сбросом
+  - После — wizard возвращается на step='upload'
+- **API** `api/schemes.ts`: добавлена `resetSchemeWizard(projectId)` → DELETE
+
+**Правило:** `resetSchemeWizard` = DELETE /reset/:id. Не путать с `resetSchemePreferences` (старый POST — только префы, без S3).
+
+---
+
+## screen_recorder.py — фикс загрузки видео (2026-04-05)
+
+Коммиты `86b9beb`, `89ad602`, `a699393` → GenGo2/delivery-contenthunter
+
+### Фиксы
+
+**1. adb pull таймаут при скачивании чанков**
+Таймаут 120с → 600с, retry x3 с паузой 5с. Актуально для сетевого ADB (`-H host -P port`).
+
+**2. S3 XAmzContentSHA256Mismatch на Beget**
+boto3 1.35+ ломает Beget S3 из-за автоматических SHA256 checksum. Фикс:
+```python
+config=Config(
+    signature_version='s3v4',
+    request_checksum_calculation='when_required',
+    response_checksum_validation='when_required',
+)
+```
+Этот паттерн уже был в `unic-worker/worker.py` — брать оттуда.
+
+**ПРАВИЛО:** всегда использовать этот Config для всех boto3 S3-клиентов на Beget (publisher.py, warmer.py тоже используют S3 — там пока не исправлено, т.к. endpoint другой).
+
+### factory create modal
+После завершения задачи кнопка меняется на «✅ Готово — Закрыть» (зелёная). Коммит `4198c15`.
+
+---
+
+## account_factory.py — фиксы верификации (2026-04-05, задачи #22 и #23)
+
+Коммиты `5f8b41f`, `2c15125`, `85004cb` → GenGo2/delivery-contenthunter
+
+### Как работает верификация после регистрации
+
+**Instagram inline verify:**
+- НЕ тапаем на таб «Профиль» — он переключает на предыдущий активный аккаунт
+- Открываем hamburger ≡ (content-desc="Options") → Settings → ищем username в шапке
+- Fallback: тапаем верхний правый угол (1035, 200) если hamburger не найден
+
+**TikTok inline verify:**
+- Тапаем Profile таб (в TikTok он показывает текущую активную сессию)
+- Если username не найден → три точки в верхнем углу экрана профиля → Settings
+
+**YouTube verify:**
+- Таб «Вы» в рус. локали = библиотека, не профиль
+- Имя канала может быть только в `content-desc=""` (не в `text=""`)
+- Если не нашли → тапаем на аватар/Account → страница канала
+
+**Gmail verify:**
+- `dumpsys account` — ждём до 60с после gmail_done (аккаунт не сразу попадает в AccountManager)
+- Пока ждём — пропускаем диалоги («Пропустить», «Готово» и т.д.)
+
+**Gmail phone verify — два сценария:**
+- Экран с кнопкой «Пропустить» → пропускаем (добровольное предложение номера)
+- Экран без «Пропустить» → OnlineSim: `get_number('google', 7)` → вводим → `wait_for_sms(tzid, 180)` → вводим код → `confirm_number(tzid)`
+- OnlineSim баланс: `python3 onlinesim.py` (покажет баланс)
+- API ключ: в `/root/.openclaw/workspace-genri/autowarm/onlinesim.py`
+
+---
+
+## autowarm — account_factory.py фиксы (2026-04-05, вечер)
+
+**Коммиты:** `8b4a846`, `b2cc140`, `4bcaa3f` → GenGo2/delivery-contenthunter
+
+### Три фикса Gmail-регистрации (найдены через анализ видео)
+
+1. **Username**: `'Создать собственный адрес Gmail'` — добавлен в список вариантов (был только 'Создать свой')
+2. **Settings открывается медленно**: sleep 8с + retry x3 при поиске Google
+3. **Вводный экран верификации телефона**: после пароля — экран загрузки, потом «Подтвердить» без поля → нажать → ждать поле ввода
+
+### Правила (НЕЛЬЗЯ НАРУШАТЬ)
+- Список вариантов выбора адреса Gmail покрывает все локали: 'Создать свой', 'Создать собственный', 'Создать адрес Gmail', 'Create a Gmail address'  
+- Вводный экран верификации (есть «Подтвердить», нет EditText) — нажимать, не пропускать
+- `log_step()` обновляет `updated_at` — watchdog heartbeat, не убирать
+- Параллельный запуск на одном устройстве заблокирован на уровне API

@@ -1,19 +1,44 @@
 # autowarm
 
-**Размер:** 42M
-**Обновлено:** 2026-03-30 21:10 UTC
+**Размер:** 57M
+**Обновлено:** 2026-04-17 18:20 UTC
 
 ## Файлы
 ```
+.ai-factory/ARCHITECTURE.md
+.ai-factory/DESCRIPTION.md
+.ai-factory/FIX_PLAN.md
+.ai-factory/PLAN.md
+.ai-factory/config.yaml
+.ai-factory/plans/feat-account-switch-publish.md
+.ai-factory/plans/feat-publisher-pipeline-reliability.md
+.ai-factory/plans/feat-publisher-watchdog.md
+.ai-factory/plans/fix-account-switch-test-run.md
+.ai-factory/plans/fix-devices-real-status.md
+.ai-factory/plans/fix-revision-accounts-dropdown.md
+.ai-factory/rules/base.md
 .env
 .env.onlinesim
 .github-repo
 .gitignore
+.mcp.json
+.pytest_cache/.gitignore
+.pytest_cache/CACHEDIR.TAG
+.pytest_cache/README.md
+.pytest_cache/v/cache/lastfailed
+.pytest_cache/v/cache/nodeids
+.pytest_cache/v/cache/stepwise
+AGENTS.md
 ALGORITHM.md
 NOTES.md
 PUBLISH-NOTES.md
 README.md
 account_factory.py
+account_factory.py.bak.20260408_170433
+account_factory.py.bak_20260408_093152
+account_factory.py.bak_swap
+account_revision.py
+account_switcher.py
 ad_hoc_logger.py
 adb_utils.py
 analytics_collector.py
@@ -21,12 +46,22 @@ analytics_collector_v2.py
 apks/ADBKeyboard.apk
 archive_scheduler.py
 archiver_base.py
+audit_2026-04-13.json
+docs/account-switch.md
+docs/autowarm.md
+docs/changelog.md
+docs/revision-lessons.md
+docs/revision-pipeline.md
+docs/revision-selectors.md
+docs/sla.md
+gmail_factory_appium.py
 id_parser.py
 instagram_archiver.py
 onlinesim.py
 package-lock.json
 package.json
 phone_warmer.py
+pi_audit.js
 posts_parser.py
 profile_inspector.py
 proxy_manager.py
@@ -39,19 +74,35 @@ run_nightly_audit.sh
 run_parallel_audit.py
 run_retry_audit.py
 scheduler.js
+screen_recorder.py
+scripts/test_device_mapping.js
+scripts/test_devices_status_parity.js
+scripts/test_revision_adb.js
+scripts/test_revision_reset.js
 scripts/validate_html_js.js
+scripts/watchdog_observability.sql
 server.js
 sim_scanner.py
 social_audit.py
 telegram_warmer.py
+tests/fixtures/flag_secure_empty.xml
+tests/fixtures/ig_account_list.xml
+tests/fixtures/ig_gallery_no_camera.xml
+tests/fixtures/ig_profile_header.xml
+tests/fixtures/ig_settings_screen.xml
+tests/fixtures/tt_feed_no_sheet.xml
+tests/fixtures/tt_foreign_profile_ssdwa1v.xml
+tests/fixtures/tt_own_profile_pay_target.xml
+tests/fixtures/tt_profile_screen.xml
+tests/fixtures/yt_account_modal.xml
+tests/fixtures/yt_notifications_dialog.xml
+tests/test_account_switcher.py
+tests/test_publisher_ig_editor.py
+tests/test_revision_real_adb.py
+tests/test_revision_tiktok_virtual.py
+tests/test_watchdog_timer.py
 tiktok_archiver.py
 unic-worker/.env
 unic-worker/README.md
 unic-worker/ecosystem.config.js
-unic-worker/requirements.txt
-unic-worker/worker.py
-wa_register_all.py
-warmer.py
-whatsapp_warmer.py
-youtube_archiver.py
 ```

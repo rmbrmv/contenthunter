@@ -1,4 +1,226 @@
 
+## account_factory.py — AI hang detection + popup fix, задача #36 (2026-04-06)
+
+**Коммит:** `290ea26` → GenGo2/delivery-contenthunter
+
+### Новый метод: `_detect_stuck_screen(what_expected, context, wait_sec=15)`
+AI-диагностика зависаний: 2 скриншота → сравнение md5 → Groq Vision Llama-4-Scout.
+Если экраны идентичны → AI описывает проблему и советует конкретное действие.
+Логи: `[HANG-DETECT]` → `🤖 HANG-DETECT: {diag}`
+
+### Точки диагностики:
+1. `create_gmail_browser()` — если страница имени не загрузилась за 24 сек → AI-чек + force-stop Chrome + reopen
+2. После «Далее» на имени — остались на том же экране → AI-чек + повторный тап
+3. Нативный `create_gmail()` — после пароля нераспознанный экран → AI-диагностика
+
+### Фикс popup «Управление приложениями»:
+`_clear_and_type_username()` после long-press: если в XML `'Управление приложениями'` → BACK + пере-тап.
+
+### Правила:
+- `_detect_stuck_screen()` вызывать после 20+ сек ожидания без прогресса
+- wait_sec=10–15 — оптимальный диапазон
+- После long-press ВСЕГДА проверять на системные popup-и
+
+---
+
+## account_factory.py — фиксы задач #28, #29: OnlineSim retry + username (2026-04-06)
+
+**Коммиты:** `01e039c`, `86db367` → GenGo2/delivery-contenthunter
+
+### Фикс 1: OnlineSim retry x5 при заблокированном номере
+Задача #28: Google отклонил номер «слишком много раз» → Gmail не создался → задача крашилась в самом конце.
+**Теперь:** после отправки номера → проверка экрана на `'слишком много раз'`, `'too many times'`, `'другой номер'` → если заблокирован: `cancel_number()` + новый номер (до 5 попыток).
+При 5 провалах → `create_gmail()` возвращает `False`.
+
+### Фикс 2: Gmail fail = немедленный стоп pipeline
+`create_gmail()` → `False` = сразу `raise Exception("Gmail creation failed: ...")`.
+IG/TikTok/YouTube не запускаются. Раньше: 8 минут тратилось впустую на соцсети без Gmail.
+
+### Фикс 3: Username retry x5 + `_clear_and_type_username()`
+Задача #29: username «занят» → очистка через `--meta 0x41` не работала → текст клеился → «слишком длинный» → бесконечное зависание.
+**Новая функция `_clear_and_type_username(field_x, field_y, text)`:**
+- Долгий тап (1500мс) → «Выделить всё» из контекстного меню → DEL
+- Fallback: `KEYCODE_CTRL_A` + DEL
+- Обрезка до 30 символов перед вводом (лимит Google)
+**Retry x5:** при «занято» или «слишком длинный» → `base[:24] + 4-значный суффикс` → `_clear_and_type_username()`.
+После 5 провалов → `return False`.
+
+### Правила
+- После ввода OnlineSim-номера ВСЕГДА проверять экран на ошибку Google перед wait_for_sms
+- Username поле ВСЕГДА чистить через `_clear_and_type_username()` — не добавлять текст в поле напрямую
+- Gmail fail → немедленный стоп, IG/TT/YT без Gmail не запускать
+
+---
+
+## account_factory.py — фиксы авторегистрации Gmail (2026-04-05, вечерняя сессия)
+
+**Коммиты:** `8b4a846`, `b2cc140`, `4b70c0e`, `7a71d19`, `4bcaa3f` → GenGo2/delivery-contenthunter
+
+### Три новых фикса (найдены через анализ видео задач #24, #26, #27)
+
+**1. Username — «Создать собственный адрес Gmail»**
+В русской локали текст радиокнопки = `'Создать собственный адрес Gmail'` (не «свой», не «адрес Gmail»).
+Скрипт не находил её → EditText попадал в поле с предложенным адресом → ошибка «Укажите адрес Gmail».
+Добавлен вариант в оба места кода (нативный + браузерный метод).
+
+**2. Параллельный запуск (задача #26)**
+`POST /api/factory/run` теперь проверяет `status=running` на том же `device_id` → 409 если занято.
+`ADD_ACCOUNT_SETTINGS`: sleep 8с + retry x3 (свайп + 3с пауза).
+
+**3. Вводный экран верификации телефона (задача #27)**
+После пароля — экран загрузки «Это может занять время», dump попадал туда → phone_screen=False.
+Google показывает 2-шаговую верификацию: сначала «Подтвердить» без поля → затем поле ввода.
+Фикс: sleep 6с + retry dump x3 + обработка вводного экрана (нажать «Подтвердить», ждать поле).
+
+### Кнопка Stop + Watchdog + PID
+- `factory_reg_tasks.pid INTEGER` — PID процесса при запуске
+- `POST /api/factory/tasks/:id/stop` — SIGKILL + status=failed
+- Watchdog (каждую минуту): running без updated_at > 30 мин → failed
+- `log_step()` → обновляет `updated_at` (heartbeat)
+- UI: кнопка ⏹ Стоп у running-задач
+
+---
+
+## account_factory.py — фикс верификации inline + YouTube «Вы» (2026-04-05)
+
+**Коммит:** `68e765a` → GenGo2/delivery-contenthunter
+
+### Проблема (задача #21, анализ лога + видео)
+- `verify_instagram/tiktok` делали `force_stop + relaunch` → открывался ПОСЛЕДНИЙ активный аккаунт на телефоне (не новый)
+- YouTube: в рус. локали кнопка профиля = `content-desc="Вы"`, не Account/Profile → тап не находился
+
+### Фиксы
+1. **Inline-верификация IG/TikTok** встроена в `register_instagram()` / `register_tiktok()` — пока приложение открыто на новом аккаунте
+2. `run_verification()` читает `ig_status`/`tiktok_status` из БД через `_get_account_field()` — если `verified`, не перезапускает
+3. **YouTube**: добавлен `'Вы'` в поиск content-desc + fallback tap `(1000,2200)`
+4. **ffmpeg concat.txt**: создаётся локально → SCP (не `printf` через SSH — ломало кавычки)
+
+### Правило (НЕЛЬЗЯ НАРУШАТЬ)
+`verify_instagram` / `verify_tiktok` НИКОГДА не делают `force_stop + relaunch` в standalone-режиме — открывается чужой аккаунт. Только inline из открытого приложения. `run_verification()` использует уже сохранённый статус из БД.
+
+---
+
+## account_factory.py — рефакторинг create_gmail + верификация (2026-04-05)
+
+**Коммиты:** `0408579`, `3abbd3b`, `278d45d`, `6539e74` → GenGo2/delivery-contenthunter
+
+### Причина: анализ видео задач 19 и 20
+- Chrome разворачивал телефон горизонтально → браузерный метод отключён
+- Месяц dropdown: тап по y=2002 (за экраном) → фиксировался январь → добавлена проверка y < 1900 + скролл
+- Пол не выбирался → Google сбрасывал форму → скрипт писал username/пароль в поля День/Год
+- DOB retry: перечитываем EditText, перезаполняем все поля заново (до 3 попыток)
+
+### Ключевые правила:
+- `create_gmail()` — ЕДИНСТВЕННЫЙ активный метод. `create_gmail_browser()` — в коде но НЕ вызывается
+- Перед регистрацией: `settings put system user_rotation 0` + force-stop Chrome
+- EditText поля ищутся по bounds динамически, НЕ хардкод координат
+- Месяц dropdown: проверять y < 1900px, иначе скроллить
+- Пол dropdown: Spinner class → текст «Пол»/«Не указан» → coords+230px
+
+### Верификация после регистрации:
+- `verify_gmail()` → `dumpsys account`
+- `verify_instagram/tiktok()` → запуск приложения → экран профиля → username в UIAutomator
+- `verify_youtube()` → запуск YT → имя канала в шапке аккаунта
+- Статусы: `active` (gmail + 2+ соцсети) / `partial` / `failed`
+- Gmail не верифицирован → задача `failed`
+
+### UI:
+- Колонка «Статус» в таблице Аккаунты: active/partial/failed/gmail_ok/pending
+- Иконки соцсетей: 🔵 created / ✅ verified / ❌ failed
+- Фильтр по статусу аккаунта
+
+---
+
+## autowarm — Factory Accounts UI: редизайн таблицы (2026-04-05)
+
+**Коммит:** `40c8261` → GenGo2/delivery-contenthunter
+
+### Что изменено в разделе `#accounts/factory`
+
+**Шапка страницы:**
+- Кнопка «↻ Обновить» вынесена рядом с «+ Создать задачу» (больше не внутри блока)
+- Виджеты статистики компактные — горизонтальные таблетки вместо больших карточек
+- Заголовок «Аккаунты» над таблицей убран
+
+**Таблица Аккаунты — новый порядок столбцов:**
+ID / Gmail·Пароль / Instagram / TikTok / YouTube / Проект / Устройство / Дата / **Лог**
+
+**Фильтры:**
+- Gmail, IG, TikTok, YouTube — текстовые инпуты
+- Проект и Устройство — **выпадающие списки** (заполняются из данных через `filterFactoryAccounts()`)
+- Строка заголовков + фильтров **sticky** при скролле (`sticky top-0/top-[37px] z-20`)
+
+**Колонка Лог** (три кнопки):
+- 📝 — открывает модальное окно с логом задачи (`/api/factory/tasks/:id/log`)
+- ▶️ — открывает видео S3 (прямая ссылка `a.video_url`)
+- 📸 — открывает скриншот-доказательство (`/api/factory/accounts/:id/screenshot`)
+
+**Новые JS-функции:**
+- `renderFactoryAccounts(accounts)` — рендер таблицы (отделён от `loadFactory`)
+- `filterFactoryAccounts()` — применяет фильтры (проект/устройство)
+- `openFactoryTaskLog(taskId)` — открывает модал с логом
+- `window._factoryAccounts` — глобальный кэш аккаунтов для фильтрации
+- `window._factoryTaskMap` — map `account_id → task` (для кнопки 📝)
+
+**Новый модал:** `modal-factory-task-log` — лог задачи в `<pre>` блоке
+
+**Таблица Задачи** — заголовки и фильтры тоже sticky.
+
+**HELP_CONTENT** и **README.md** обновлены под новый UI.
+
+---
+
+## validator — модерация: водяные знаки = предупреждение (2026-04-03)
+
+Водяные знаки **не блокируют загрузку видео** — только показывают предупреждение клиенту.
+
+### Что изменено (коммит `7df054d`)
+- **backend** `validation.py`: убрана установка `status=blocked` и `score=0` при обнаружении водяных знаков. Добавляется только `recommendations` с текстом: «Загрузка видео с водяными знаками может негативно сказаться на количестве просмотров и охватах. Рекомендуется загружать видео без водяных знаков.»
+- **frontend** `UploadModal.vue`: блок водяных знаков перекрашен в жёлтый (`bg-yellow-50/border-yellow-300`), иконка ⚠️ вместо 🚫, текст — рекомендация, не ошибка
+
+### Правило (НЕЛЬЗЯ ОТМЕНЯТЬ)
+Водяные знаки никогда не переводят модерацию в `blocked`. Это бизнес-решение Даниила 2026-04-03.
+Если понадобится вернуть блокировку — только через явное подтверждение от Даниила.
+
+---
+
+## validator — планировщик: блокировка прошлых дат (2026-04-03)
+
+Загрузка контента разрешена **только на завтра и позднее** — для всех ролей (client, manager, producer, admin).
+
+### Что сделано (коммит `699e3a6`)
+- `isPastOrToday(dateStr)` — функция-проверка в `ClientDashboard.vue`
+- `weekDays` computed добавляет флаг `isPast` (true если дата ≤ сегодня)
+- Пустые слоты прошлых дат → 🔒 серый блок «Загрузка недоступна», клик не открывает загрузку
+- Drag-and-drop в прошлые слоты заблокирован (`onDragOver` + `onDrop`)
+- Кнопка `+ Слот` скрыта для прошлых дат (`!day.isPast`)
+- Тур обновлён (описание грида), README обновлён
+
+### Правило
+**Никогда не убирать блокировку прошлых дат** — это бизнес-требование, не баг.
+Если понадобится исключение (например, загрузка бэкдейтом для admin) — отдельная задача с подтверждением.
+
+---
+
+## validator — планировщик: исправление генерации слотов (2026-04-03, Даниил)
+
+### Причина бага
+Клиент открывал новую неделю → `GET /schedule` возвращал пустой список → фронт вызывал `POST /schedule/generate-week` → получал **403** (эндпоинт закрыт для роли `client`) → слоты не создавались → фронт рендерил placeholder-блоки: **1 охватный на каждый из 7 дней = 7 охватных** вместо 3.
+
+### Что исправлено
+- **Backend** (`routers/schedule.py`): `GET /schedule` теперь авто-генерирует слоты если неделя пустая — для **всех ролей** включая `client`. Схема: Пн pos1 / Ср pos2 / Пт pos1 → reach, остальные → client.
+- **Frontend** (`ClientDashboard.vue`): убрана ручная генерация через `POST /schedule/generate-week` из `loadSlots()`. Убраны некорректные placeholder-блоки.
+- **БД**: перегенерированы слоты для 55 проектов от 2026-02-16 до 2026-08-17 включительно (схема 3 reach + 11 client = 14 слотов/неделя).
+- **Скрипт**: `validator/backend/scripts/regenerate_slots.py` — ручной запуск при необходимости.
+
+### Правила
+- Авто-генерация слотов происходит в `GET /schedule` на бэкенде — при переходе на любую пустую неделю слоты создаются автоматически, без отдельных скриптов.
+- `POST /schedule/generate-week` остаётся только для менеджеров/продюсеров/админов.
+- Схема расписания: **3 охватных** (Пн pos1, Ср pos2, Пт pos1) + **11 продающих** = **14 слотов/неделя**.
+- Коммиты: `34ba2cf` → GenGo2/validator-contenthunter
+
+---
+
 ## publisher.py — Instagram аудиодиалог + YouTube заголовок (2026-03-25, Юра+Даниил)
 
 ### Instagram: диалог «Название аудиодорожки» (коммит `3c0a09a`)
@@ -471,3 +693,145 @@ Canvas/WebView → `clickable=false`. Перебираем `(540,290)/(540,350)/
 ### Диагностика
 
 При проблемах: `adb pull /sdcard/debug_screenshots/screenrec_<id>_*.mp4` — показывает точный момент ошибки.
+
+---
+
+## screen_recorder.py — S3 на Beget: правило (2026-04-05)
+
+**ОБЯЗАТЕЛЬНО** для всех boto3-клиентов на Beget S3 (boto3 1.35+ ломает):
+```python
+config=Config(
+    signature_version='s3v4',
+    request_checksum_calculation='when_required',
+    response_checksum_validation='when_required',
+)
+```
+Без этого → `XAmzContentSHA256Mismatch`. Паттерн взят из `unic-worker/worker.py`.
+`publisher.py` и `warmer.py` используют CDN endpoint (`save.gengo.io`) — пока работают, но при смене endpoint сломаются.
+
+**adb pull через сетевой ADB:** таймаут 600с + retry x3 (было 120с без retry → падало на чанках ~30 МБ).
+
+**factory create modal:** после завершения задачи кнопка → «✅ Готово — Закрыть» (зелёная). Коммит `4198c15`.
+
+---
+
+## autowarm — запись экрана регистрации аккаунтов (2026-04-05)
+
+### Новый модуль `screen_recorder.py`
+
+`ScreenRecorder` — фоновая запись экрана телефона через ADB во время `account_factory.py`.
+
+**Архитектура:**
+- Фоновый поток пишет чанки по 170 сек (`adb screenrecord --time-limit 170`)
+- Параметры: 720×1560, 1.5 Mbps → ~110 МБ за ~10 мин
+- После `stop_and_upload()`: adb pull → SCP на `91.98.180.103` → `ffmpeg -f concat` → SCP обратно → S3 → БД
+- S3 путь: **`reg_acc/YYYY-MM-DD/task_{id}.mp4`** (изолировано от фарминга `autowarm/screenrecords/`)
+
+**Интеграция в `account_factory.py`:**
+- `recorder.start()` — ДО Gmail (в `run()`)
+- `recorder.stop_and_upload()` — в блоке `finally` (видео снимается даже при падении)
+
+**БД:**
+```sql
+factory_reg_tasks.video_url TEXT
+factory_reg_accounts.video_url TEXT
+```
+
+**UI:** колонка ▶ в таблицах Задачи и Аккаунты раздела `#accounts/factory`
+
+**Правила:**
+- S3 папка `reg_acc/` — только регистрация. Не класть туда фарминг/выкладку
+- TTL lifecycle на бакете НЕ настроен (решение Даниила 2026-04-05)
+- SSH на 91.98.180.103 через sshpass (FFMPEG_SSH_PASS в autowarm/.env)
+- Коммиты: `888651a`, `40d4e9c` → GenGo2/delivery-contenthunter
+
+**Диагностика:** задачи `done`, но `video_url` пустой → `pm2 logs autowarm` → искать строки `[REC]` с ошибками S3/ffmpeg/scp.
+
+---
+
+## account_factory.py — фиксы верификации (2026-04-05, задачи #22 и #23)
+
+Коммиты `5f8b41f`, `2c15125`, `85004cb` → GenGo2/delivery-contenthunter
+
+### Правила верификации (НЕЛЬЗЯ НАРУШАТЬ)
+
+**Instagram inline verify:**
+НЕ тапать таб «Профиль» — открывает предыдущий аккаунт телефона.
+Путь: hamburger ≡ (content-desc="Options") → Settings → username в шапке.
+Fallback tap: (1035, 200) если hamburger не найден по content-desc.
+
+**TikTok inline verify:**
+Profile таб в TikTok показывает текущую активную сессию (в отличие от Instagram).
+Если username не найден → три точки → Settings.
+
+**YouTube verify:**
+- `content-desc` обязателен для поиска имени канала — `text=""` недостаточно
+- Таб «Вы» в рус. локали = библиотека → тапаем аватар для открытия страницы канала
+
+**Gmail sync:**
+После gmail_done ждать до 60с (проверка `dumpsys account` каждые 5с) — AccountManager обновляется не сразу.
+
+**Gmail phone verify:**
+- Есть кнопка «Пропустить» → пропускаем
+- Нет «Пропустить» → OnlineSim: get_number → ввод → wait_for_sms(180с) → ввод кода → confirm_number
+- `read_sms_code()` (inbox телефона) НЕЛЬЗЯ использовать для OnlineSim-верификации
+- Баланс OnlineSim: `50.5 руб` (проверено 2026-04-05)
+
+**SCP таймаут (screen_recorder.py):**
+`_scpfrom()` timeout = 600с (было 300с — падало на файлах >30 МБ).
+
+---
+
+## Watchdog + PID — мониторинг (2026-04-05, Даниил)
+
+**Ключевые точки наблюдения:**
+
+- Если видишь `factory_reg_tasks` задачи в `status=running` дольше 30 мин → watchdog не работает. Проверить: `PM2_HOME=/root/.pm2 pm2 logs 1 --lines 20 | grep watchdog`
+- Watchdog живёт внутри `autowarm/server.js` через `setInterval` — умирает вместе с PM2-процессом. После `pm2 restart autowarm` поднимается автоматически.
+- Колонка `factory_reg_tasks.pid INTEGER` — если исчезнет после восстановления БД:
+  ```sql
+  ALTER TABLE factory_reg_tasks ADD COLUMN IF NOT EXISTS pid INTEGER;
+  ```
+
+---
+
+## account_factory.py — Chrome primary + OnlineSim fixes (2026-04-06 сессия #30-#34)
+
+### Главный принцип: Chrome + OnlineSim — ОСНОВНОЙ метод, никогда device SIM
+
+Нативный метод (Settings → Google) запускает Google Play Services → проверка SIM устройства → когда исчерпана → бесконечная петля `Подтвердить → спиннер → "Повторите попытку"`. EditText НИКОГДА не появляется.
+
+### onlinesim.py — финальные исправления:
+- `response=1` (int) ✅ / `response == "1"` (string) ❌ → UNDEFINED_COUNTRY
+- getNum НЕ возвращает number → брать из getState
+- `response == "TZ_NUM_OK"` в getState (не response=2)
+- Default country: 77 (KZ), НЕ 7 (RU недоступна)
+
+### Детект SIM-петли: 3x "Повторите попытку" → Chrome fallback
+
+### Синхронизация: create_gmail_browser → update_account → read DB → sync self.data → соцсети на правильный Gmail
+
+### Коммиты: b485326, 1417443, 5e524aa, f0c2703, bdbd811, c815422
+
+---
+
+## account_factory.py — Chrome+OnlineSim основной метод (2026-04-06)
+
+**Задачи #30–#34:** серия фиксов phone verify + смена основного метода регистрации Gmail.
+
+### onlinesim.py — финальные правила:
+- `country=77` (KZ), НЕ 7 (RU = UNDEFINED_COUNTRY)
+- `get_number` response=1 (int), НЕ строка "1"
+- Номер телефона из `getState.php`, НЕ из `getNum.php`
+- `wait_for_sms`: `response == "TZ_NUM_OK"` (string), НЕ `response == 2`
+- При ошибке get_number → `continue`, НЕ `break`
+
+### Архитектура Gmail регистрации:
+1. **ОСНОВНОЙ:** `create_gmail_browser()` — Chrome + OnlineSim (нет доступа к SIM)
+2. **Fallback:** `create_gmail()` — натив с детектом SIM-петли (≥3 повторений → Chrome)
+3. **Sync:** после browser create → `update_account()` → `run()` читает БД → sync `self.data`
+
+### SIM-петля (НЕЛЬЗЯ ИГНОРИРОВАТЬ):
+Google Play Services проверяет SIM устройства → когда исчерпана → бесконечная петля `Подтвердить → спиннер → "Повторите попытку" → Далее → снова Подтвердить`. EditText НИКОГДА не появляется. Решение: Chrome.
+
+### Коммиты: b485326, 1417443, 5e524aa, f0c2703, bdbd811, c815422

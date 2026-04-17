@@ -1,18 +1,38 @@
 # validator
 
-**Размер:** 156M
-**Обновлено:** 2026-03-30 21:10 UTC
+**Размер:** 237M
+**Обновлено:** 2026-04-17 18:20 UTC
 
 ## Файлы
 ```
+.ai-factory/ARCHITECTURE.md
+.ai-factory/DESCRIPTION.md
+.ai-factory/PLAN.md
+.ai-factory/config.yaml
+.ai-factory/patches/2026-04-09-14.30.md
+.ai-factory/patches/2026-04-16-14.31.md
+.ai-factory/plans/feat-content-card-carousel-ui.md
+.ai-factory/plans/feat-scheduler-carousel-post-upload.md
+.ai-factory/plans/feature-fix-schemes-upload-multipart.md
+.ai-factory/plans/fix-scheduler-today-lock-and-tray-scope.md
+.ai-factory/plans/fix-upload-s3-direct.md
+.ai-factory/rules/base.md
 .env
 .env.example
 .github-repo
 .gitignore
+.mcp.json
+AGENTS.md
 NOTES.md
 README.md
 SPEC.md
 backend/.env
+backend/.pytest_cache/.gitignore
+backend/.pytest_cache/CACHEDIR.TAG
+backend/.pytest_cache/README.md
+backend/.pytest_cache/v/cache/lastfailed
+backend/.pytest_cache/v/cache/nodeids
+backend/.pytest_cache/v/cache/stepwise
 backend/Dockerfile
 backend/alembic.ini
 backend/alembic/env.py
@@ -20,6 +40,7 @@ backend/alembic/versions/001_initial.py
 backend/alembic/versions/002_add_hashtags_geo.py
 backend/requirements.txt
 backend/scripts/generate_scheme_previews.py
+backend/scripts/regenerate_slots.py
 backend/sql/create_scheme_tables.sql
 backend/src/__init__.py
 backend/src/config.py
@@ -62,47 +83,26 @@ backend/src/services/accounts_service.py
 backend/src/services/auth_service.py
 backend/src/services/delivery_webhook.py
 backend/src/services/groq_keys.py
+backend/src/services/image_metadata.py
+backend/src/services/image_moderation_service.py
 backend/src/services/moderation_service.py
 backend/src/services/ocr_service.py
 backend/src/services/s3_service.py
+backend/src/services/s3_upload.py
 backend/src/services/schedule_service.py
 backend/src/services/schemes_service.py
 backend/src/services/transcription_service.py
 backend/src/services/uniqueness_service.py
 backend/src/services/video_metadata.py
 backend/src/services/virality_service.py
+backend/tests/__init__.py
+backend/tests/test_carousel_reorder.py
+backend/tests/test_image_metadata.py
+backend/tests/test_image_validation_summary.py
+backend/tests/test_schedule_lock.py
+backend/tests/test_upload_complete.py
+backend/tests/test_upload_images_direct.py
+backend/tests/test_upload_s3_timeout.py
 docker-compose.prod.yml
 docker-compose.yml
-docs/ARCHITECTURE.md
-docs/client-cabinet.md
-docs/db-structure-approved-videos.md
-frontend/Dockerfile
-frontend/index.html
-frontend/nginx.conf
-frontend/package-lock.json
-frontend/package.json
-frontend/package.json.bak
-frontend/postcss.config.js
-frontend/src/App.vue
-frontend/src/api/admin.ts
-frontend/src/api/auth.ts
-frontend/src/api/client.ts
-frontend/src/api/content.ts
-frontend/src/api/schemes.ts
-frontend/src/api/upload.ts
-frontend/src/components/DateRangePicker.vue
-frontend/src/components/FieldHint.vue
-frontend/src/components/FieldHintV2.vue
-frontend/src/components/FieldHintV3.vue
-frontend/src/components/FieldHintV4.vue
-frontend/src/components/FieldQuality.vue
-frontend/src/components/HelpDrawer.vue
-frontend/src/components/ImportModerationModal.vue
-frontend/src/components/OnboardingFlow.vue
-frontend/src/components/PlatformIcon.vue
-frontend/src/components/SupportChat.vue
-frontend/src/components/TourGuide.vue
-frontend/src/components/UploadModal.vue
-frontend/src/components/calendar/SlotCard.vue
-frontend/src/components/calendar/WeeklyGrid.vue
 ```

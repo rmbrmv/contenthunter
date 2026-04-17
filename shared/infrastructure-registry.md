@@ -50,8 +50,8 @@
 - **Тип:** OAuth token
 - **Credentials:** /root/.openclaw/workspace/integrations/google-calendar/token.json
 - **Создал:** Варенька
-- **Статус:** ❌ КРИТИЧНО: token EXPIRED 14 дней (2026-03-10T06:39:56Z, истёк 2026-03-10)
-- **Последняя проверка:** 2026-03-24 02:00 UTC
+- **Статус:** ❌ КРИТИЧНО: token EXPIRED (истёк более 22 дня назад)
+- **Последняя проверка:** 2026-04-01 02:00 UTC
 - **Требуется:** Ручная переавторизация через OAuth consent screen
 
 ### Google Docs (Даша)
@@ -59,17 +59,16 @@
 - **Тип:** OAuth token
 - **Credentials:** /root/.openclaw/workspace-dasha-smyslovik/integrations/google-docs/token.json
 - **Создал:** Даша
-- **Статус:** ❌ КРИТИЧНО: token EXPIRED 14 дней (2026-03-10T06:39:56Z, истёк 2026-03-10)
-- **Последняя проверка:** 2026-03-24 02:00 UTC
-- **Требуется:** Ручная переавторизация через OAuth consent screen
+- **Статус:** ⚠️ ПРОВЕРИТЬ: expires_at=null в файле, но refresh_token присутствует. Может потребоваться переавторизация.
+- **Последняя проверка:** 2026-04-03 02:00 UTC
 
 ### Google Sheets (Кира)
 - **URL:** Google Sheets API
 - **Тип:** OAuth token
 - **Credentials:** /root/.openclaw/workspace-kira-pomoschnitsa-km/integrations/google-sheets/token.json
 - **Создал:** Кира
-- **Статус:** ❌ КРИТИЧНО: token EXPIRED 14 дней (2026-03-10T06:39:56Z, истёк 2026-03-10)
-- **Последняя проверка:** 2026-03-24 02:00 UTC
+- **Статус:** ❌ КРИТИЧНО: token EXPIRED (истёк более 22 дня назад)
+- **Последняя проверка:** 2026-04-01 02:00 UTC
 - **Требуется:** Ручная переавторизация через OAuth consent screen
 
 ### Zoom API (Account 1 — Роман)
@@ -109,7 +108,7 @@
 - **Последняя проверка:** 2026-03-23 02:00 UTC
 
 ---
-_Последнее обновление: 2026-03-25 02:00 UTC_
+_Последнее обновление: 2026-04-01 02:00 UTC_
 
 ## rizz.market — проект MP2
 - **URL:** https://app.rizz.market
@@ -188,3 +187,6 @@ _Последнее обновление: 2026-03-25 02:00 UTC_
 als/anthropic-key-2.txt
 - **Назначение:** TBD (второй ключ для распределения нагрузки / решение overloaded_error)
 �юч для распределения нагрузки / решение overloaded_error)
+aded_error)
+рузки / решение overloaded_error)
+ed_error)
