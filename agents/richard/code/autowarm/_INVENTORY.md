@@ -1,7 +1,7 @@
 # autowarm
 
 **Размер:** 57M
-**Обновлено:** 2026-04-18 10:40 UTC
+**Обновлено:** 2026-04-18 10:50 UTC
 
 ## Файлы
 ```
@@ -88,6 +88,8 @@ telegram_warmer.py
 tests/fixtures/flag_secure_empty.xml
 tests/fixtures/ig_account_list.xml
 tests/fixtures/ig_gallery_no_camera.xml
+tests/fixtures/ig_gallery_picker_in_camera.xml
+tests/fixtures/ig_highlights_empty_state.xml
 tests/fixtures/ig_profile_header.xml
 tests/fixtures/ig_settings_screen.xml
 tests/fixtures/tt_feed_no_sheet.xml
@@ -97,12 +99,10 @@ tests/fixtures/tt_profile_screen.xml
 tests/fixtures/yt_account_modal.xml
 tests/fixtures/yt_notifications_dialog.xml
 tests/test_account_switcher.py
+tests/test_publisher_ig_camera_recovery.py
 tests/test_publisher_ig_editor.py
 tests/test_revision_real_adb.py
 tests/test_revision_tiktok_virtual.py
 tests/test_watchdog_timer.py
 tiktok_archiver.py
-unic-worker/.env
-unic-worker/README.md
-unic-worker/ecosystem.config.js
 ```
