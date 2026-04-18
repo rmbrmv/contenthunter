@@ -1,3 +1,4 @@
+<<<<<<< HEAD
 # Plan: Техдолг публикаций — guard + инфра (v2, пересобрано после проверки кода)
 
 **Created:** 2026-04-16
@@ -28,9 +29,44 @@
 | T5 | **P2** | ✅ `validator/backend/src/routers/schemes.py:_download_file` → `asyncio.to_thread` | Техдолг event-loop (background, но накапливается) | 45 мин |
 | T6 | **P2** | ✅ openclaw-gateway systemd limits (MemoryMax=1500M, OOMPolicy=kill, TimeoutStopSec=20s) вместо патча vendor supervisor'а | Анти-zombie 89% CPU (случай 2026-04-16) | 1ч (нужно найти репо) |
 | T7 | **P2** | ✅ Validator Vite assets: cron `find /var/www/validator/assets -mtime +7 -delete` | 4105 файлов / 72MB cruft после каждого deploy | 20 мин |
+=======
+# Plan: Публикация контента — round-6 (IG flow + guard block-on-NULL + TT anti-markers)
 
-## Tasks
+**Created:** 2026-04-18
+**Closed:** 2026-04-18 (same day)
+**Mode:** Fast
+**Репо с кодом:** `GenGo2/delivery-contenthunter` (`/root/.openclaw/workspace-genri/autowarm/`)
 
+## Итоговое состояние
+
+Все 8 задач закрыты. Большая часть кода **уже была deployed** в main до начала сессии (коммиты 10f7353, 8b7ca95, 49c7ebe — 2026-04-17), план pivot'нулся на verification + T3 seed.
+
+| # | Задача | Статус | Итог |
+|---|--------|--------|------|
+| T1 | IG «Настройки публикации» handler | ✅ уже deployed (commit 10f7353) | publisher.py:2327, helpers :776/:860, 7/7 unit-tests green |
+| T2 | IG gallery-picker fallback | ✅ уже deployed (commit 8b7ca95) | publisher.py:2377, helper :813, category `gallery_shown_no_camera_option` |
+| T3 | Seed expansion NULL-columns | ✅ выполнено сегодня | 17 устройств × 3 платформы = 51 NULL-triple, project=`manual-seed-round-6-20260418` |
+| T4 | Guard block-on-NULL | ✅ уже deployed (commit 10f7353) | publisher.py:5286-5373, 12 блоков/48h в live логах подтверждено |
+| T5 | TT anti-markers | ✅ уже deployed (commit 49c7ebe) | account_switcher.py, reason `tt_target_not_logged_in_on_device` |
+| T6 | Deploy + smoke | ✅ verification via event log | Live rerun не требуется (все 3 reference-task на seeded устройствах) |
+| T7 | Post-deploy verification | ✅ выполнено | Evidence: round-6-post-deploy-analysis-20260418.md |
+| T8 | Unit tests for guard | ⏸ deferred | Guard работает в проде, тесты nice-to-have |
+
+## Ключевые результаты
+
+### T4 guard block-on-NULL работает в проде
+За 48h — **12 событий** с `meta.reason='platform_not_configured_for_device'`. Каждое событие = fast-fail за <5с вместо 5-мин pipeline. Экономия ADB/CPU ≈ 1 час/день **только** из round-5 seed'а.
+
+### T3 seed round-6 выполнен
+17 устройств × 3 платформы = **51 новых blocking-triple** активированы. Ожидаемая экономия в следующие 24ч: **~4 часа** пустого pipeline'а (при текущем throughput скедулера 50+ fail/day).
+
+### ⚠️ Новая регрессия (не в скоупе, follow-up)
+**`ig_camera_open_failed`** — 6 событий за 48h на aneco/anecole кластере (RF8Y80ZT14T, RF8Y90LBX3L, RF8Y90LBZPJ). Падает **до** editor-loop (в `_open_instagram_camera()` publisher.py:2050). RF8Y90LBX3L имел done 2 дня назад — регрессия. Требует отдельного `/aif-fix`.
+>>>>>>> 9cf184661 (docs(evidence): round-6 seed (17 devices) + post-deploy analysis)
+
+## Evidence (в contenthunter/.ai-factory/evidence/)
+
+<<<<<<< HEAD
 ### Phase P0 — Fast-fail guard
 
 #### T1. Account→device mapping guard в `run_publish_task`
@@ -139,3 +175,35 @@ P0 → P1 → P2. P2 независим от P0/P1 (если P0/P1 ждут по
 
 ## Next Steps
 Start T1 в autowarm репо, ветка `fix/publisher-mapping-guard`.
+=======
+- `seed-round-6-20260418.sql` — idempotent SQL seed + rollback
+- `seed-round-6-20260418.log` — вывод psql при выполнении
+- `round-6-post-deploy-analysis-20260418.md` — полный анализ T7
+
+## Rollback
+
+Seed reverse'ится одной командой:
+```sql
+DELETE FROM account_packages WHERE project='manual-seed-round-6-20260418';
+```
+
+Для индивидуального онбординга устройства — UPDATE колонки (не DELETE):
+```sql
+UPDATE account_packages SET instagram='new_acc', updated_at=NOW()
+ WHERE device_serial='RFGYA19DBAX' AND project='manual-seed-round-6-20260418';
+```
+
+## Follow-ups на следующую сессию
+
+1. **`ig_camera_open_failed` regression** на aneco/anecole — отдельный `/aif-fix`, сбор xml-дампа из `/tmp/publish_media/`
+2. **`publish_failed_generic` 15 events** — раздельная триажка категорий
+3. **Live T1/T2 smoke** — когда появится task на non-seeded устройстве хитающая editor loop
+4. **T8 guard unit tests** — когда будут править guard-логику
+
+## Commit plan
+
+Один commit в contenthunter для evidence:
+```
+docs(evidence): round-6 post-deploy analysis + seed-round-6 SQL + log
+```
+>>>>>>> 9cf184661 (docs(evidence): round-6 seed (17 devices) + post-deploy analysis)

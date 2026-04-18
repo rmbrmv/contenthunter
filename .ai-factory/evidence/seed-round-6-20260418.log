@@ -1,0 +1,34 @@
+BEGIN
+INSERT 0 17
+   kind   | count 
+----------+-------
+ inserted |    17
+(1 row)
+
+ device_serial | instagram | tiktok | youtube 
+---------------+-----------+--------+---------
+ RF8Y80ZT14T   |           |        | 
+ RF8Y80ZTTMV   |           |        | 
+ RF8Y80ZTVJJ   |           |        | 
+ RF8Y80ZV8NW   |           |        | 
+ RF8YA0V5KWN   |           |        | 
+ RF8YA0VDZ3X   |           |        | 
+ RFGYA19B0FD   |           |        | 
+ RFGYA19BD6M   |           |        | 
+ RFGYA19BGWT   |           |        | 
+ RFGYA19BMFX   |           |        | 
+ RFGYA19DB8K   |           |        | 
+ RFGYA19DBAX   |           |        | 
+ RFGYB07Y65V   |           |        | 
+ RFGYB1EBCBA   |           |        | 
+ RFGYC2VWBKN   |           |        | 
+ RFGYC31P1RH   |           |        | 
+ RFGYC31P7DT   |           |        | 
+(17 rows)
+
+ devices | blocking_triples 
+---------+------------------
+      17 |               51
+(1 row)
+
+COMMIT
