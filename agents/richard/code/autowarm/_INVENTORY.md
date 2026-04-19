@@ -1,7 +1,7 @@
 # autowarm
 
 **Размер:** 58M
-**Обновлено:** 2026-04-19 19:50 UTC
+**Обновлено:** 2026-04-19 20:00 UTC
 
 ## Файлы
 ```
@@ -10,12 +10,14 @@
 .ai-factory/FIX_PLAN.md
 .ai-factory/PLAN.md
 .ai-factory/config.yaml
+.ai-factory/patches/2026-04-19-19.56.md
 .ai-factory/plans/feat-account-switch-publish.md
 .ai-factory/plans/feat-publisher-pipeline-reliability.md
 .ai-factory/plans/feat-publisher-watchdog.md
 .ai-factory/plans/fix-account-switch-test-run.md
 .ai-factory/plans/fix-devices-real-status.md
 .ai-factory/plans/fix-revision-accounts-dropdown.md
+.ai-factory/plans/fix-warmer-force-reset-app.md
 .ai-factory/plans/ig-publishing-resolution.md
 .ai-factory/plans/infra-adb-chunked-push-BRIEF.md
 .ai-factory/plans/infra-adb-chunked-push.md
@@ -80,6 +82,8 @@ run_parallel_audit.py
 run_retry_audit.py
 scheduler.js
 screen_recorder.py
+scripts/adb_push_chunked_48h.sql
+scripts/fix_warmer_force_reset_seed.sql
 scripts/ig_publishing_48h.sql
 scripts/test_device_mapping.js
 scripts/test_devices_status_parity.js
@@ -88,6 +92,7 @@ scripts/test_revision_reset.js
 scripts/tt_publishing_48h.sql
 scripts/tt_session_audit.py
 scripts/validate_html_js.js
+scripts/verify_warmer_force_reset_24h.sql
 scripts/watchdog_observability.sql
 scripts/yt_publishing_48h.sql
 server.js
@@ -100,9 +105,4 @@ tests/fixtures/ig_gallery_no_camera.xml
 tests/fixtures/ig_gallery_picker_in_camera.xml
 tests/fixtures/ig_highlights_empty_state.xml
 tests/fixtures/ig_profile_header.xml
-tests/fixtures/ig_settings_screen.xml
-tests/fixtures/tt_feed_no_sheet.xml
-tests/fixtures/tt_foreign_profile_ssdwa1v.xml
-tests/fixtures/tt_own_profile_pay_target.xml
-tests/fixtures/tt_profile_screen.xml
 ```
