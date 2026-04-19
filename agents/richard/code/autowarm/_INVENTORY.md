@@ -1,7 +1,7 @@
 # autowarm
 
 **Размер:** 57M
-**Обновлено:** 2026-04-19 17:10 UTC
+**Обновлено:** 2026-04-19 17:20 UTC
 
 ## Файлы
 ```
@@ -17,6 +17,7 @@
 .ai-factory/plans/fix-devices-real-status.md
 .ai-factory/plans/fix-revision-accounts-dropdown.md
 .ai-factory/plans/ig-publishing-resolution.md
+.ai-factory/plans/yt-publishing-resolution.md
 .ai-factory/rules/base.md
 .env
 .env.onlinesim
@@ -76,6 +77,7 @@ run_parallel_audit.py
 run_retry_audit.py
 scheduler.js
 screen_recorder.py
+scripts/ig_publishing_48h.sql
 scripts/test_device_mapping.js
 scripts/test_devices_status_parity.js
 scripts/test_revision_adb.js
@@ -100,9 +102,7 @@ tests/fixtures/tt_profile_screen.xml
 tests/fixtures/yt_account_modal.xml
 tests/fixtures/yt_notifications_dialog.xml
 tests/test_account_switcher.py
+tests/test_publish_guard.py
 tests/test_publisher_ig_camera_recovery.py
 tests/test_publisher_ig_editor.py
-tests/test_revision_real_adb.py
-tests/test_revision_tiktok_virtual.py
-tests/test_watchdog_timer.py
 ```
