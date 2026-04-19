@@ -1,7 +1,7 @@
 # autowarm
 
 **Размер:** 58M
-**Обновлено:** 2026-04-19 19:20 UTC
+**Обновлено:** 2026-04-19 19:30 UTC
 
 ## Файлы
 ```
@@ -17,6 +17,7 @@
 .ai-factory/plans/fix-devices-real-status.md
 .ai-factory/plans/fix-revision-accounts-dropdown.md
 .ai-factory/plans/ig-publishing-resolution.md
+.ai-factory/plans/infra-adb-chunked-push-BRIEF.md
 .ai-factory/plans/tt-publishing-resolution.md
 .ai-factory/plans/yt-publishing-resolution.md
 .ai-factory/rules/base.md
@@ -104,5 +105,4 @@ tests/fixtures/tt_foreign_profile_ssdwa1v.xml
 tests/fixtures/tt_own_profile_pay_target.xml
 tests/fixtures/tt_profile_screen.xml
 tests/fixtures/yt_account_modal.xml
-tests/fixtures/yt_notifications_dialog.xml
 ```
