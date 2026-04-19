@@ -1,7 +1,7 @@
 # autowarm
 
 **Размер:** 58M
-**Обновлено:** 2026-04-19 18:40 UTC
+**Обновлено:** 2026-04-19 18:50 UTC
 
 ## Файлы
 ```
@@ -83,6 +83,7 @@ scripts/test_device_mapping.js
 scripts/test_devices_status_parity.js
 scripts/test_revision_adb.js
 scripts/test_revision_reset.js
+scripts/tt_publishing_48h.sql
 scripts/tt_session_audit.py
 scripts/validate_html_js.js
 scripts/watchdog_observability.sql
@@ -104,5 +105,4 @@ tests/fixtures/tt_own_profile_pay_target.xml
 tests/fixtures/tt_profile_screen.xml
 tests/fixtures/yt_account_modal.xml
 tests/fixtures/yt_notifications_dialog.xml
-tests/test_account_switcher.py
 ```
