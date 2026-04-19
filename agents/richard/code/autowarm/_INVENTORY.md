@@ -1,7 +1,7 @@
 # autowarm
 
 **Размер:** 57M
-**Обновлено:** 2026-04-19 17:40 UTC
+**Обновлено:** 2026-04-19 17:50 UTC
 
 ## Файлы
 ```
@@ -85,6 +85,7 @@ scripts/test_revision_adb.js
 scripts/test_revision_reset.js
 scripts/validate_html_js.js
 scripts/watchdog_observability.sql
+scripts/yt_publishing_48h.sql
 server.js
 sim_scanner.py
 social_audit.py
@@ -104,5 +105,4 @@ tests/fixtures/yt_account_modal.xml
 tests/fixtures/yt_notifications_dialog.xml
 tests/test_account_switcher.py
 tests/test_publish_guard.py
-tests/test_publisher_ig_camera_recovery.py
 ```
