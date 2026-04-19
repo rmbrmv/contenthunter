@@ -1,7 +1,7 @@
 # autowarm
 
 **Размер:** 56M
-**Обновлено:** 2026-04-19 16:50 UTC
+**Обновлено:** 2026-04-19 17:00 UTC
 
 ## Файлы
 ```
@@ -16,6 +16,7 @@
 .ai-factory/plans/fix-account-switch-test-run.md
 .ai-factory/plans/fix-devices-real-status.md
 .ai-factory/plans/fix-revision-accounts-dropdown.md
+.ai-factory/plans/ig-publishing-resolution.md
 .ai-factory/rules/base.md
 .env
 .env.onlinesim
@@ -104,5 +105,4 @@ tests/test_publisher_ig_editor.py
 tests/test_revision_real_adb.py
 tests/test_revision_tiktok_virtual.py
 tests/test_watchdog_timer.py
-tiktok_archiver.py
 ```
