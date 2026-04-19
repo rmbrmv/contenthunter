@@ -1,7 +1,7 @@
 # autowarm
 
 **Размер:** 57M
-**Обновлено:** 2026-04-19 17:20 UTC
+**Обновлено:** 2026-04-19 17:30 UTC
 
 ## Файлы
 ```
@@ -17,6 +17,7 @@
 .ai-factory/plans/fix-devices-real-status.md
 .ai-factory/plans/fix-revision-accounts-dropdown.md
 .ai-factory/plans/ig-publishing-resolution.md
+.ai-factory/plans/tt-publishing-resolution.md
 .ai-factory/plans/yt-publishing-resolution.md
 .ai-factory/rules/base.md
 .env
@@ -104,5 +105,4 @@ tests/fixtures/yt_notifications_dialog.xml
 tests/test_account_switcher.py
 tests/test_publish_guard.py
 tests/test_publisher_ig_camera_recovery.py
-tests/test_publisher_ig_editor.py
 ```
