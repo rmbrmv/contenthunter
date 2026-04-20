@@ -196,7 +196,7 @@ T4 блокируется T1-T3 только мягко: желательно в
 
 ### Phase 4 — Guard unit tests (T6)
 
-#### T6. Unit tests для `_check_account_device_mapping`
+#### T6. Unit tests для `_check_account_device_mapping` ✅ (2026-04-20; уже покрыто — `tests/test_publish_guard.py`, 10 passing)
 
 **Источник:** память `project_publish_followups.md` §3, landmark `publisher.py:5286-5373`.
 
