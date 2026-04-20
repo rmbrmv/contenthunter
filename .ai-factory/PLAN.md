@@ -1,5 +1,6 @@
 <<<<<<< HEAD
 <<<<<<< HEAD
+<<<<<<< HEAD
 # Plan: Техдолг публикаций — guard + инфра (v2, пересобрано после проверки кода)
 
 **Created:** 2026-04-16
@@ -35,37 +36,33 @@
 =======
 # Plan: Fix `ig_camera_open_failed` regression (aneco/anecole кластер)
 >>>>>>> 04d176b47 (docs(evidence): ig_camera_open_failed fix — T1-T6 deploy evidence)
+=======
+# PLAN — Carousel rendering fix + content-card title `[проект] + [тип]`
+>>>>>>> 91d2f733e (docs(plans): carousel rendering fix + content-card title — executed 2026-04-20)
 
-**Created:** 2026-04-18
-**Mode:** Fast
-**Follow-up от:** `.ai-factory/evidence/round-6-post-deploy-analysis-20260418.md` (раздел «⚠️ Новая regression»)
-**Репо с кодом:** `GenGo2/delivery-contenthunter` (`/root/.openclaw/workspace-genri/autowarm/`)
-**Репо с evidence/планом:** contenthunter (текущий)
+**Тип:** bugfix (frontend+backend) + small UX
+**Создан:** 2026-04-20
+**Инициатор:** bug-отчёт `@Danil_Pavlov_123` от 2026-04-20 13:08 UTC (`contenthunter_knowledge/sources/bugs/inbox/2026-04-20T130857Z-Danil_Pavlov_123-почему-то-у-меня-не-.md`) + устное добавление по заголовку карточки.
+**Код:** `/root/.openclaw/workspace-genri/validator/` (PM2 `validator` + `/var/www/validator`).
 
 ## Settings
 
 | | |
 |---|---|
-| Testing | **yes** — юнит-тесты на детекторы + recovery-пути (по образцу `tests/test_publisher_ig_editor.py`) |
-| Logging | **verbose** — DEBUG-логи на каждом детекторе + отдельные event-категории для триажа |
-| Docs | **warn-only** — баг-фикс в боевом модуле, docs-drift маловероятен |
-| Roadmap linkage | skipped — регрессия, не milestone |
+| Testing | **no** — UI-правки + маленькая серверная проекция; smoke через curl и ручной клик по `/content/1877`. Если к моменту реализации окажется, что backend-проекция задевает модели — ограничиться 1 pytest-снапшотом. |
+| Logging | **verbose** — `log.debug("[content GET] id=%s type=%s images=%s")` в `_content_to_dict`; `console.debug("[ContentDetail] type=%s urls=%s")` при маунте; `[ClientDashboard] slot_title=%s %s" for project+type)` для быстрой диагностики в DevTools. |
+| Docs | **no** |
+| Roadmap linkage | skipped — реакция на bug-репорт |
 
-## Контекст регрессии (6 fails / 48h)
+## Research Context — что уже знаем
 
-6 задач на 3 устройствах aneco/anecole кластера:
+### Баг с каруселью (repro-линк в жалобе: `https://client.contenthunter.ru/content/1877`)
 
-| task_id | device | account | date |
-|---|---|---|---|
-| 389 | RF8Y90LBZPJ | anecole_education | 2026-04-18 |
-| 388 | RF8Y80ZT14T | aneco.le_edu | 2026-04-18 |
-| 382 | RF8Y90LBX3L | anecole.online | 2026-04-18 |
-| 373 | RF8Y90LBX3L | anecole.online | 2026-04-18 |
-| 370 | RF8Y80ZT14T | aneco.le_edu | 2026-04-18 |
-| 372 | RF8Y90LBZPJ | anecole_education | 2026-04-18 |
+**Симптом:** клиент загружает карусель (несколько изображений), открывает карточку контента → видит шаблон под видео, а не карусель. «Для всех платформ».
 
-`RF8Y90LBX3L/anecole.online` и `RF8Y90LBZPJ/anecole_education` имели успешные done'ы **2026-04-16** → истинная регрессия, не first-run.
+**Что найдено в коде:**
 
+<<<<<<< HEAD
 <<<<<<< HEAD
 ### ⚠️ Новая регрессия (не в скоупе, follow-up)
 **`ig_camera_open_failed`** — 6 событий за 48h на aneco/anecole кластере (RF8Y80ZT14T, RF8Y90LBX3L, RF8Y90LBZPJ). Падает **до** editor-loop (в `_open_instagram_camera()` publisher.py:2050). RF8Y90LBX3L имел done 2 дня назад — регрессия. Требует отдельного `/aif-fix`.
@@ -73,9 +70,18 @@
 =======
 ### Root cause — по XML-дампам из `/tmp/autowarm_ui_dumps/`
 >>>>>>> 04d176b47 (docs(evidence): ig_camera_open_failed fix — T1-T6 deploy evidence)
+=======
+- Backend модель уже поддерживает `ValidatorCarouselImage` с `relationship("ValidatorCarouselImage", back_populates="content", cascade="all, delete-orphan")` в `backend/src/models/content.py:82`. Таблица `validator_carousel_images` с `content_id` FK (строки 85-98).
+- Upload-поток для карусели (`POST /api/upload/images`) уже работает после фикса 2026-04-20 (`e4deb3c`) — preflight 1080×1920/1080×1080 в UI, backend пишет записи в `validator_carousel_images`.
+- **Корень 1 (backend):** `GET /api/content/{content_id}` возвращает `_content_to_dict(c)` в `backend/src/routers/content.py:318-347`, и этот словарь **не содержит `carousel_images`** — только `s3_url` (для video оно указывает на mp4, для carousel — либо NULL, либо на первую картинку, нужно проверить по записи 1877). То есть фронт физически не получает список URL картинок.
+- **Корень 2 (frontend):** `frontend/src/pages/client/ContentDetail.vue:347-360` рендерит `<video :src="content.s3_url">` **безусловно**, без ветвления по `content.content_type`. Даже если backend-словарь отдаст картинки — рендериться всё равно будет видео-плеер.
+- Для списковых карточек в планировщике (`frontend/src/pages/client/ClientDashboard.vue:134-154`) отображается `contentTypeIcon(slot.content_type)` (🖼️ для carousel) + `slot.content_title || 'Контент'`. Иконку и тип видно, но клиент всё равно переходит по клику на `openContent(slot.content_id)` → попадает в сломанный `ContentDetail.vue`.
+>>>>>>> 91d2f733e (docs(plans): carousel rendering fix + content-card title — executed 2026-04-20)
 
-Две разные конечные стадии (обе падают в общем catch-all `ig_camera_open_failed` в `publisher.py:2050`):
+**Что проверить до кода (Task 1):**
+- запись `validator_content.id = 1877` — что в ней: `content_type`, `s3_url`, сколько `validator_carousel_images` с `content_id=1877`, их `s3_url`-ы.
 
+<<<<<<< HEAD
 <<<<<<< HEAD
 <<<<<<< HEAD
 ### Phase P0 — Fast-fail guard
@@ -208,206 +214,177 @@ resource-id       = com.instagram.android:id/empty_state_headline_component
 resource-id       = com.instagram.android:id/igds_headline_emphasized_headline
 ```
 IG приземлился в архив Highlights (пустой), а не в Reels-камеру. Новый регресс — не покрыт handler'ами round-5/6 (T1/T2/T7 в publisher.py:2020-2100).
+=======
+### Feature «заголовок карточки = [проект] + [тип]»
+>>>>>>> 91d2f733e (docs(plans): carousel rendering fix + content-card title — executed 2026-04-20)
 
-**Экран B — gallery_picker-only** (2/6: #388, #370)
-```
-resource-id       = com.instagram.android:id/gallery_picker_view
-resource-id       = com.instagram.android:id/feed_gallery_app_bar
-resource-id       = com.instagram.android:id/gallery_folder_menu_container
-content-desc      = "Выбрано Миниат.юра видео создано 18 апреля 2026 г. …"
-content-desc      = "Отмена"
-```
-Тот же паттерн что исторический #320 (2026-04-16 triage). **T2 gallery-picker fallback** (commit `8b7ca95`, publisher.py:2377, helper :813) **есть** в коде, но срабатывает уже ПОСЛЕ камера-wait-loop (т.е. после того как `ig_camera_open_failed` уже залогирован). Для текущей регрессии fallback фактически не триггерится в нужной точке.
-
-### Диагноз
-
-Оба экрана — симптом того же первичного сбоя:
-- Либо `instagram://reels-camera` deeplink срабатывает некорректно когда IG уже foreground (в последнем known state: Stories/Highlights или Gallery)
-- Либо bottomsheet-fallback (publisher.py:1988-1993) ведёт к home-экрану, но "+" тап (top-left, coords 50,160 из FIX-IG-stuck-on-profile) на profile-screen иногда открывает Highlights/Story-editing вместо Reels bottomsheet
+- Сейчас `ClientDashboard.vue:154` → `{{ slot.content_title || 'Контент' }}`. `slot.project_name` и `slot.content_type` уже есть в том же слоте (используются в бейдже «📁 {{ slot.project_name }}» на `:149-152` — **только в режиме `viewMode === 'all'`** — и в `contentTypeIcon` на `:136`).
+- Клиент-дефолт (клиентский логин видит только свой проект) = `viewMode === 'my'` → бейдж проекта невидим, клиент видит только иконку типа и `slot.content_title` — т.е. в сегодняшней жалобе «карточка не как карусель» может быть усугублена тем, что по заголовку «Контент» непонятно, что это. Задача: на всех карточках ставить строковый заголовок `<project_name> · <content_type_label>` единообразно (и в client/all-видах).
+- `content_title` сохраняем — но НЕ показываем как основной заголовок; он остаётся для `title` атрибута (hover) или второй строки (решим при реализации — скорее всего вторая строка, т.к. клиенты часто вручную вводили title).
 
 ## Tasks
 
-- [x] T1 — Детектор+recovery для Highlights empty-state (publisher.py)
-- [x] T2 — Gallery-picker detector в camera-wait loop (publisher.py)
-- [x] T3 — Unified unknown-screen recovery после 3 попыток (publisher.py)
-- [x] T4 — Расширенный fail meta (detected_state + ui_snippet + ui_dumps)
-- [x] T5 — Юнит-тесты на детекторы и recovery-ветки (14 passed)
-- [x] T6 — Deploy + pm2 restart + scheduler smoke (evidence: `ig-camera-fix-deploy-20260418.md`)
-- [ ] T7 — Post-deploy 24h verification (через 24ч, 2026-04-19)
+### Task 1 — [x] зафиксировать состояние записи 1877 и DB-шему
+**File:** SQL-запросы прямо в psql (`openclaw:openclaw123@localhost:5432`), результат — в `/home/claude-user/contenthunter/evidence/carousel-bug-1877-2026-04-20.md` (новый).
+**Шаги:**
+1. `SELECT id, content_type, s3_url, s3_key, title, status, project_id, created_at FROM validator_content WHERE id=1877;`
+2. `SELECT id, content_id, s3_url, s3_key, order_index, width, height FROM validator_carousel_images WHERE content_id=1877 ORDER BY order_index;`
+3. `\d validator_carousel_images` — зафиксировать точные имена колонок (order_index vs position; есть ли width/height).
+4. Записать: что реально лежит у 1877, какие пути S3, видны ли картинки публично (`curl -I <s3_url>` → 200).
+**Деливери:** evidence-файл с выдержкой + одним скриншотом ответа сервера на `GET /api/content/1877` под jwt клиента (`client_el_kosmetik_content_hunter`).
+**Логирование:** n/a.
 
-### T1 — Детектор+recovery для экрана «Добавление в актуальное» (Highlights empty-state)
+### Task 2 — [x] backend: включить `carousel_images` в ответ `GET /content/{id}` и список `GET /content`
+**Files:**
+- `/root/.openclaw/workspace-genri/validator/backend/src/routers/content.py` — `get_content` (стр. 85-116), `list_content` (вызывает `_content_to_dict` в цикле), `_content_to_dict` (стр. 318-347).
+- `/root/.openclaw/workspace-genri/validator/backend/src/models/content.py` — проверить точные имена колонок `ValidatorCarouselImage` (order_index, s3_url, width, height).
 
-**Что:**
-- Добавить helper `_is_ig_highlights_empty_state(ui: str) -> bool` в `publisher.py` (по образцу существующих `_dismiss_ig_edits_promo`).
-  Маркеры (all-match): `'empty_state_view_root'` + (`'Добавление в актуальное'` or `'Дополните свою историю'`).
-- Встроить в camera-wait loop (publisher.py:2020-2050) **после** `_dismiss_ig_edits_promo()` и **до** check на `'Редактировать профиль'`:
+**Деливери:**
+- В `get_content` добавить eager-load: `select(ValidatorContent).options(selectinload(ValidatorContent.carousel_images)).where(...)`. Импорт `from sqlalchemy.orm import selectinload`.
+- В `_content_to_dict` добавить ключ:
+  ```python
+  "carousel_images": [
+      {"s3_url": img.s3_url, "order_index": img.order_index, "width": img.width, "height": img.height}
+      for img in sorted(c.carousel_images or [], key=lambda x: x.order_index)
+  ] if c.content_type and c.content_type.value == "carousel" else [],
   ```
-  if self._is_ig_highlights_empty_state(ui):
-      log.warning(f'[FIX: IG-highlights-empty-state] попытка {attempt} → reset IG')
-      self.log_event('info', 'IG: экран Highlights empty-state',
-                     meta={'category': 'ig_highlights_empty_state_seen',
-                           'platform': self.platform, 'step': 'open_camera',
-                           'attempt': attempt})
-      # Recovery: force-stop + am start MainTabActivity (чистое переоткрытие)
-      self.adb(f'am force-stop {package}')
-      time.sleep(1)
-      self.ensure_unlocked()
-      self.adb(f'am start -n {package}/.activity.MainTabActivity')
-      time.sleep(5)
-      # После reset — повторяем bottomsheet path (tap "+" → Reels)
-      # (логика вынесена в helper `_reopen_ig_reels_via_home()`)
-      self._reopen_ig_reels_via_home()
-      continue
-  ```
-- Helper `_reopen_ig_reels_via_home()`: dump_ui → если видим home feed (маркеры `home_tab` / bottom-nav «Главная»/«Home»), тапаем «+» через `tap_element(['Создать','Create','Новая публикация'], clickable_only=True)` → опционально fallback на известные coords профиля.
+  (сортировка — чтобы порядок был стабильный; имена полей подтвердить после Task 1).
+- В `list_content` — тоже `selectinload(carousel_images)`, чтобы списковый эндпоинт тоже был честным (на случай если где-то нужен preview).
+- `log.debug("[content GET] id=%s type=%s images=%s title=%r", c.id, c.content_type.value if c.content_type else None, len(c.carousel_images or []), c.title)` перед `return` в `_content_to_dict`.
 
-**Логирование (verbose):**
-- `DEBUG` на каждый dump_ui в recovery
-- `log_event('info', ...)` с категорией `ig_highlights_empty_state_seen` на первую детекцию (по которой мы сможем трекать в live-логах, работает ли фикс)
+**Acceptance:** `curl -s -H "Authorization: Bearer <jwt>" http://localhost:8000/api/content/1877 | jq '.content_type, (.carousel_images|length)'` → `"carousel"` + ненулевое число.
 
-**Файлы:**
-- `publisher.py` (автоwarm-репо) — helpers + встройка в loop
-- Тест — отдельно в T5
+### Task 3 — [x] frontend: `ContentDetail.vue` — рендер карусели по `content_type`
+**File:** `/root/.openclaw/workspace-genri/validator/frontend/src/pages/client/ContentDetail.vue`.
 
-### T2 — Встроить gallery-picker-detector в camera-wait loop
+**Изменения в правой колонке (шаблон, стр. 317-365):**
+- Обернуть текущий `<video>` в `<template v-if="content.content_type === 'video'">`.
+- Для `content.content_type === 'carousel'`: рендерить слайдер:
+  - Контейнер тех же размеров (`height: 65vh`, `width: calc(65vh * 9/16)` для 9:16 и `calc(65vh)` для 1:1 — определяем по `width === height` первой картинки).
+  - Активная картинка `<img :src="activeImage.s3_url" class="w-full h-full object-contain" style="background:#000" />`.
+  - Миниатюры под блоком: `<button v-for="(img, i) in content.carousel_images" @click="activeIndex = i" :class="{ 'ring-2 ring-indigo-500': i === activeIndex }"><img :src="img.s3_url" class="h-14 w-14 object-cover rounded" /></button>`.
+  - Стрелки «◀ ▶» для навигации по клавишам/кликам.
+  - Счётчик `{{ activeIndex + 1 }} / {{ content.carousel_images.length }}`.
+- Для `content.content_type === 'post'`: fallback-заглушка «Текстовый пост» (без визуала) — чтобы тоже не падало на `<video>`.
+- «⬇️ Скачать видео» (стр. 361-364) переименовать в `⬇️ Скачать {{ contentTypeLabel }}` и подменить `href`: для карусели — на текущую активную картинку.
 
-**Что:**
-- Существующий helper для gallery-picker (publisher.py:~813, shipped в 8b7ca95) срабатывает позже — в editor-loop. Для текущей регрессии `gallery_picker_view` виден **в camera-wait loop**, т.е. до editor.
-- Добавить в тот же loop (сразу после T1-чека) проверку:
-  ```
-  if 'gallery_picker_view' in ui or 'gallery_coordinator' in ui:
-      log.warning(f'[FIX: IG-gallery-picker-in-camera-loop] попытка {attempt}')
-      self.log_event('info', 'IG: gallery picker вместо camera',
-                     meta={'category': 'ig_gallery_picker_in_camera_loop',
-                           'platform': self.platform, 'step': 'open_camera',
-                           'attempt': attempt})
-      # Стратегия: tap "Отмена" (action_bar_cancel) → вернёмся в feed → повтор bottomsheet path
-      if self.tap_element(ui, ['Отмена', 'Cancel'], clickable_only=True):
-          time.sleep(2)
-          self._reopen_ig_reels_via_home()
-      continue
-  ```
-- Категория `ig_gallery_picker_in_camera_loop` — отличается от существующей `gallery_shown_no_camera_option` (та ловит gallery в editor-loop, после успешной camera-open) чтобы не путать при триаже.
+**Изменения в левой колонке:**
+- «🔄 Заменить видео» (стр. 100-112): `accept="video/mp4,..."` → для карусели скрыть кнопку (или показать «Замена недоступна для карусели») — не расширяем скоуп, замена для carousel — отдельная история.
+- «Метаданные файла» (стр. 201-211): `duration_seconds` скрыть для carousel; вместо этого строка «Картинок: {{ count }}».
+- «Файл» (стр. 97-115): `content.original_filename` для карусели скорее всего NULL → показать «Карусель из N картинок».
+- «Технические требования» (стр. 213-222): для carousel — другой набор (размер ≤ 30 МБ/картинка, формат JPG/PNG, разрешение 1080×1920 или 1080×1080). Добавить computed `techRequirements(content_type)` вместо хардкода.
 
-**Файлы:**
-- `publisher.py` — встройка в loop publisher.py:2020-2050
-
-### T3 — Unified «unknown-screen» recovery после 3 неудачных попыток
-
-**Что:**
-- Текущий loop крутится 6 × 2s = 12s всё равно в unknown state. Добавить: если `attempt >= 3` и **ни один** детектор не сработал, и ни один из camera-маркеров не найден — принудительный reset (force-stop + MainTabActivity) до остатка попыток.
-- Чтобы не зациклиться: флаг `tried_full_reset` — максимум **один** full-reset за весь вызов `publish_instagram_reel`.
-- Дополнительно собираем `_save_debug_artifacts('instagram_pre_reset')` на момент reset — чтобы после deploy видеть, в каком новом состоянии IG приземляется.
+**Script:**
+- `const activeIndex = ref(0)` + `const activeImage = computed(() => content.value?.carousel_images?.[activeIndex.value])`.
+- `const contentTypeLabel = computed(() => { const m = {video: 'видео', carousel: 'карусель', post: 'пост'}; return m[content.value?.content_type] ?? 'контент' })`.
+- `onMounted`: если `content_type === 'carousel'` и `carousel_images?.length === 0` — `console.warn("[ContentDetail] carousel without images", content.value.id)` + показать в UI предупреждение «Картинки не найдены».
 
 **Логирование:**
-- `log_event('warn', ...)` с категорией `ig_camera_open_reset_attempted` + дампом UI snippet в meta (первые 200 символов ui)
+- `console.debug("[ContentDetail] mounted", { id, content_type, images: content.carousel_images?.length, title })` в `onMounted` сразу после `content.value = res.data`.
 
-**Файлы:**
-- `publisher.py` — одна модификация в camera-wait loop
+**Acceptance:** открыть `https://client.contenthunter.ru/content/1877` под клиентом Эль-косметик → видна карусель с навигацией, миниатюрами, счётчиком.
 
-### T4 — Расширенный fail meta для post-mortem
+### Task 4 — [x] card title: `[проект] + [тип]` в слотах планировщика
+**File:** `/root/.openclaw/workspace-genri/validator/frontend/src/pages/client/ClientDashboard.vue` (основное место) + проверить другие места где виден `slot.content_title` (grep по repo).
 
-**Что:**
-В `log_event('error', 'Instagram: не удалось открыть камеру', meta=…)` (publisher.py:2050) добавить в `meta`:
-- `ui_snippet` — последние 300 символов `ui` с последней попытки
-- `detected_state` — одно из `{'highlights_empty_state','gallery_picker','profile_stuck','unknown'}` — заполняется на основе тех же детекторов что в T1/T2/existing profile-stuck-fix
-- Список URL-ов собранных `_collected_ui_dumps` (уже есть, но убедиться что прикрепляется)
+**Деливери в `ClientDashboard.vue:122-164`:**
+- Убрать ветку `v-if="viewMode === 'all'"` у бейджа проекта (:149) — показывать его **всегда**, если `slot.project_name` не пустой. В client-режиме проект один → бейдж будет всегда с одним названием; это ок, клиент лишний раз видит «в каком проекте я» — не вредит.
+- Заменить основной текст:
+  ```html
+  <div class="text-xs font-medium text-gray-900 truncate">
+    {{ (slot.project_name || 'Проект') }} · {{ contentTypeLabel(slot.content_type) }}
+  </div>
+  <div v-if="slot.content_title" class="text-[11px] text-gray-500 truncate" :title="slot.content_title">
+    {{ slot.content_title }}
+  </div>
+  ```
+- `contentTypeLabel` уже есть в файле (стр. 434-439) — переиспользовать.
+- То же самое внести в `TransferTray.vue` / `SlotCard.vue` / `WeeklyGrid.vue`, если там рисуется отдельный компонент карточки слота. Grep `slot.content_title` по `frontend/src` — пройти по всем хитам и привести к единой форме «проект · тип / [title мелким]».
 
-**Файлы:**
-- `publisher.py` — блок `if not camera_ready` (строка ~2045-2055)
-
-### T5 — Юнит-тесты на детекторы и recovery-ветки
-
-**Что:**
-Новый файл `tests/test_publisher_ig_camera_recovery.py`:
-- `test_is_highlights_empty_state_true` — fixture = содержимое `/tmp/autowarm_ui_dumps/publish_389_instagram_no_camera_1776490674.xml` (скопировать в `tests/fixtures/ig_ui_dumps/`)
-- `test_is_highlights_empty_state_false_on_camera_screen` — negative sample (собрать из любого successful xml)
-- `test_gallery_picker_in_camera_loop_detection` — fixture = `publish_388_instagram_no_camera_*.xml`
-- `test_reopen_ig_reels_via_home_taps_plus_button` — mock `self.adb`, `self.dump_ui`, `self.tap_element`, assert вызова с `['Создать','Create','Новая публикация']`
-- `test_camera_loop_triggers_full_reset_after_3_failed_attempts` — mock dump_ui → возвращает unknown screen 3 раза, assert вызова `am force-stop`
+**Бэк-требование:** в `GET /api/schedule/slots` (или что даёт `slot`-массив дашборда) уже есть `project_name` и `content_type` (видно из существующего шаблона). Проверить, что endpoint действительно их отдаёт — если в `viewMode='my'` их не возвращает, добавить. Быстрый grep: `grep -rn "content_type\|project_name" backend/src/routers/schedule.py`.
 
 **Логирование:**
-В тестах проверяем что `log_event` был вызван с корректной `category` (mock `self.log_event` → assert call_args).
+- `console.debug("[ClientDashboard] cards", slots.value.slice(0,3).map(s => ({ project: s.project_name, type: s.content_type, title: s.content_title })))` после загрузки слотов — разово, чтобы по DevTools увидеть, что прилетает с бэка.
 
-**Файлы:**
-- `tests/test_publisher_ig_camera_recovery.py` (новый)
-- `tests/fixtures/ig_ui_dumps/publish_389_highlights_empty.xml` (скопировать из /tmp/)
-- `tests/fixtures/ig_ui_dumps/publish_388_gallery_picker.xml` (скопировать из /tmp/)
+**Acceptance:** клиент Эль-косметик видит в каждой ячейке планировщика строку вида «Эль-косметик · Карусель» (или «Эль-косметик · Видео»), а `slot.content_title` — второй строкой мелким серым.
 
-### T6 — Deploy + live smoke
+### Task 5 — [x] сборка + деплой фронта + рестарт бэка
+**Команды (все в `/root/.openclaw/workspace-genri/validator`):**
+1. Бэк: `sudo -n pm2 restart validator` (после Task 2). Дождаться `Application startup complete`.
+2. Smoke бэка:
+   ```
+   curl -s -X POST http://localhost:8000/api/auth/login -d '{"login":"client_el_kosmetik_content_hunter","password":"<...>"}' -H 'Content-Type: application/json'
+   curl -s -H "Authorization: Bearer <jwt>" http://localhost:8000/api/content/1877 | jq '.content_type, .carousel_images | length'
+   ```
+3. Фронт: `cd frontend && npm run build` (postbuild уже копирует `dist/*` в `/var/www/validator/`).
+4. Если postbuild не скопировал или прав не хватило: `sudo -n cp -r dist/* /var/www/validator/`.
+5. Live-проверка: `https://client.contenthunter.ru/content/1877` под клиентом.
 
-**Что:**
-1. Коммит автоwarm изменений в `GenGo2/delivery-contenthunter` (conventional: `fix(publisher): recover IG camera open on highlights/gallery screens`).
-2. `pm2 restart autowarm` на fra-1-vm-y49r.
-3. Проверить `pm2 logs autowarm --lines 50` — pm2 поднялся без ошибок импорта.
-4. Re-run одной из failed tasks: `#389 RF8Y90LBZPJ anecole_education` или `#382 RF8Y90LBX3L anecole.online` (через scheduler rerun или вручную `python publisher.py --task-id 389`).
-5. Мониторить event-категории 1h: должно появиться `ig_highlights_empty_state_seen` (с recovery), но **не** `ig_camera_open_failed` с тем же detected_state.
+**Логирование:** `tail -f /root/.pm2/logs/validator-out.log` на время smoke — убедиться что есть `[content GET] id=1877 type=carousel images=N`.
 
-**Evidence:**
-- `/home/claude-user/contenthunter/.ai-factory/evidence/ig-camera-fix-smoke-20260418.md` — snippet логов + query результат.
+### Task 6 — [ ] закрыть bug-тикет + обновить memory
+**Шаги:**
+1. Переместить `sources/bugs/inbox/2026-04-20T130857Z-Danil_Pavlov_123-почему-то-у-меня-не-.md` в `sources/bugs/resolved/` с добавкой секции `## Resolution` (git-sha коммита + скриншот «до/после»).
+2. Memory update: `project_publish_followups.md` не трогаем (это про autowarm publishing, не про UI карусели). Новая memory `feedback_validator_ui.md` — короткая запись «UI всегда рендерит по `content_type`; при добавлении нового типа — обновить `ContentDetail.vue` + `contentTypeLabel` + preview в `ClientDashboard`».
 
-### T7 — Post-deploy verification (24h)
+## Dependencies
 
-**Что:**
-Через 24ч проверить в task_events:
-```sql
-SELECT meta->>'category' AS cat, meta->>'detected_state' AS state, COUNT(*)
- FROM task_events
-WHERE created_at > NOW() - INTERVAL '24 hours'
-  AND meta->>'category' LIKE 'ig_camera_%' OR meta->>'category' LIKE 'ig_highlights_%' OR meta->>'category' LIKE 'ig_gallery_picker_%'
-GROUP BY cat, state
-ORDER BY COUNT(*) DESC;
+- **Task 1** — первый, независим. Без evidence идти дальше рискованно (возможно у 1877 carousel_images = 0 и надо сначала понять, почему).
+- **Task 2** — после Task 1 (подтверждаем точные поля FK). Независим от Task 3/4.
+- **Task 3** — после Task 2 (фронт использует новое поле `carousel_images`).
+- **Task 4** — независим от Task 2/3; можно делать параллельно с Task 3 (обе — фронт, в разных файлах).
+- **Task 5** — после Task 2/3/4 (общий билд + restart).
+- **Task 6** — после Task 5.
+
+## Commit Plan
+
+**Checkpoint 1 — backend projection:**
 ```
-**Success criteria:**
-- `ig_camera_open_failed` на aneco/anecole кластере: < 1/24h (с 6/48h → практически 0)
-- `ig_highlights_empty_state_seen` с последующим успехом задачи ≥ 3 events (доказательство что recovery работает)
-- Нет новых `ig_camera_open_reset_attempted` без последующего успеха (признак бесконечного reset-loop'а)
+fix(validator): expose carousel_images in GET /content/{id}
 
-**Evidence:**
-- `.ai-factory/evidence/ig-camera-fix-24h-20260419.md`
-
-## Commit plan
-
-Два commit'а в автоwarm-репо + один evidence-commit в contenthunter.
-
-**Checkpoint 1 — после T1+T2+T3+T4 (core fix):**
+- _content_to_dict возвращает массив {s3_url, order_index, width, height} для content_type=carousel
+- selectinload на relationship чтобы не было N+1
+- debug-лог "[content GET] id=... type=... images=..."
 ```
-fix(publisher): recover IG camera open on highlights/gallery screens
+Tasks: 2. Деплой: `sudo -n pm2 restart validator`.
 
-- detect highlights empty-state and full-reset IG (fixes anecole cluster regression)
-- detect gallery_picker in camera-wait loop (was handled only in editor-loop)
-- single full-reset fallback after 3 unknown-screen attempts
-- enriched fail meta with detected_state + ui_snippet
-- new event categories: ig_highlights_empty_state_seen, ig_gallery_picker_in_camera_loop, ig_camera_open_reset_attempted
+**Checkpoint 2 — frontend carousel render + card title:**
 ```
+<<<<<<< HEAD
 <<<<<<< HEAD
 >>>>>>> 9cf184661 (docs(evidence): round-6 seed (17 devices) + post-deploy analysis)
 =======
+=======
+fix(validator): carousel preview вместо видео-плеера в ContentDetail; card title = [проект] · [тип]
+>>>>>>> 91d2f733e (docs(plans): carousel rendering fix + content-card title — executed 2026-04-20)
 
-**Checkpoint 2 — после T5 (тесты):**
+- ContentDetail.vue: ветвление <video|slider|post-stub> по content_type
+- слайдер с миниатюрами/стрелками/счётчиком для carousel
+- метаданные/тех.требования по типу контента
+- ClientDashboard.vue: заголовок карточки = {project} · {type}, content_title во второй строке
+- console.debug для диагностики
 ```
-test(publisher): unit coverage for IG camera recovery paths
+Tasks: 3, 4. Деплой: `npm run build` → `/var/www/validator/`.
 
-fixtures from live xml dumps (publish_389/388), covers highlights detection,
-gallery-picker-in-camera-loop detection, and full-reset-after-3-attempts branch.
-```
+**Out-of-commit:** Task 1 (evidence в `contenthunter`), Task 6 (knowledge-repo git push — отдельный репозиторий).
 
-**Checkpoint 3 — evidence в contenthunter (после T6+T7):**
-```
-docs(evidence): ig_camera_open_failed fix — deploy smoke + 24h verification
-```
+## Acceptance (после деплоя)
 
-## Rollback
+1. `https://client.contenthunter.ru/content/1877` под клиентом Эль-косметик → слайдер картинок (не видео-плеер), видны миниатюры, стрелки работают.
+2. Планировщик (dashboard) → в каждой filled-карточке слота заголовок вида «Эль-косметик · Карусель» / «Эль-косметик · Видео», content_title — серым мельче.
+3. `curl /api/content/1877` возвращает `carousel_images: [...]` с непустым массивом.
+4. В логах есть `[content GET] id=1877 type=carousel images=N`.
+5. Bug-тикет в knowledge-repo перемещён в `resolved/` с SHA коммита.
 
-Если после deploy появятся новые fail-категории или количество `ig_camera_open_failed` вырастет:
-```bash
-cd /root/.openclaw/workspace-genri/autowarm/
-git revert <fix-commit-hash>
-pm2 restart autowarm
-```
-Риск низкий — изменения аддитивные (новые ветки в loop), старые handler'ы не трогаем.
+## Follow-up (вне этого плана, но зафиксировать)
 
+<<<<<<< HEAD
 ## Next step
 
 После review этого плана — `/aif-implement` запустит задачи T1–T7 последовательно.
 >>>>>>> 04d176b47 (docs(evidence): ig_camera_open_failed fix — T1-T6 deploy evidence)
+=======
+- Пока **не делаем:** replace-файл для карусели (кнопка «🔄 Заменить» скрыта для carousel).
+- Пока **не делаем:** preview карусели в списочных карточках слотов (сейчас только иконка 🖼️ + заголовок — достаточно).
+- Если выяснится, что `content_type = 'post'` где-то в продакшене — сделать отдельный шаблон (сейчас — fallback-заглушка).
+>>>>>>> 91d2f733e (docs(plans): carousel rendering fix + content-card title — executed 2026-04-20)
