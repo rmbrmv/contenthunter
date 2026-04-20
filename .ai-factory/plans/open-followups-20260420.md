@@ -222,7 +222,7 @@ T4 блокируется T1-T3 только мягко: желательно в
 
 ### Phase 5 — Housekeeping (T7)
 
-#### T7. Merge `feature/aif-global-reinstall` в main
+#### T7. Merge `feature/aif-global-reinstall` в main ⚠️ (2026-04-20; локальный FF-merge ок, push на origin blocked — unrelated histories)
 
 **Источник:** текущая ветка `feature/aif-global-reinstall`; `contenthunter/.ai-factory/plans/aif-global-reinstall.md` — все T1-T7 ✅.
 
