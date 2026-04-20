@@ -1,7 +1,7 @@
 # autowarm
 
 **Размер:** 59M
-**Обновлено:** 2026-04-20 10:40 UTC
+**Обновлено:** 2026-04-20 10:50 UTC
 
 ## Файлы
 ```
@@ -82,10 +82,12 @@ run_parallel_audit.py
 run_retry_audit.py
 scheduler.js
 screen_recorder.py
+screen_recovery.py
 scripts/adb_push_chunked_48h.sql
 scripts/fix_warmer_force_reset_seed.sql
 scripts/guard_status_consistency.sql
 scripts/ig_publishing_48h.sql
+scripts/llm_recovery_schema.sql
 scripts/test_device_mapping.js
 scripts/test_devices_status_parity.js
 scripts/test_revision_adb.js
@@ -103,6 +105,4 @@ telegram_warmer.py
 tests/fixtures/flag_secure_empty.xml
 tests/fixtures/ig_account_list.xml
 tests/fixtures/ig_gallery_no_camera.xml
-tests/fixtures/ig_gallery_picker_in_camera.xml
-tests/fixtures/ig_highlights_empty_state.xml
 ```
