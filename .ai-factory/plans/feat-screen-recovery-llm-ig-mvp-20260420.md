@@ -567,7 +567,7 @@ FROM (
 
 ---
 
-#### T10 — Deploy (commits + pm2 restart) + enable на 1 устройстве
+#### T10 — Deploy (commits + pm2 restart) + enable на 1 устройстве ⚠️ (2026-04-20; 4 commits + pm2 restart ✅; flag ON blocked — .env ANTHROPIC_API_KEY это OAuth token `sk-ant-oat...`, нужен service API key `sk-ant-api...`)
 
 **Что сделать:**
 
