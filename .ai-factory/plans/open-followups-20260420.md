@@ -106,7 +106,7 @@ T4 блокируется T1-T3 только мягко: желательно в
 
 ---
 
-#### T3. ADB chunked-push T15 — post-deploy smoke ⚠️ (2026-04-20, FAIL — chunked-push сломан в проде)
+#### T3. ADB chunked-push T15 — post-deploy smoke ⚠️→✅ (2026-04-20: FAIL найден, fix задеплоен commit `73938df` autowarm/main)
 
 **Файл-чекбокс:** `autowarm/.ai-factory/plans/infra-adb-chunked-push.md:170` (T15 ⏳).
 
@@ -129,7 +129,7 @@ T4 блокируется T1-T3 только мягко: желательно в
 
 ### Phase 2 — Triage: publish_failed_generic catch-all (T4)
 
-#### T4. Триаж `publish_failed_generic` (15 events/48h) → spawn plan-потомок
+#### T4. Триаж `publish_failed_generic` (15 events/48h) → spawn plan-потомок ✅ (2026-04-20; catch-all closed, найден real follow-up: guard-status generalize)
 
 **Источник:** память `project_publish_followups.md` §2.
 
@@ -167,7 +167,7 @@ T4 блокируется T1-T3 только мягко: желательно в
 
 ### Phase 3 — Farming Candidate D: LLM screen-recovery (T5)
 
-#### T5. Создать отдельный plan-потомок `/aif-plan full` под LLM-classifier screen-state
+#### T5. Создать отдельный plan-потомок `/aif-plan full` под LLM-classifier screen-state ✅ (2026-04-20; brief готов)
 
 **Источник:** `.ai-factory/evidence/farming-reuse-matrix-20260419.md` §Top-3 Candidate D + структурный аудит `.ai-factory/evidence/farming-t7-auto-public-audit-20260419.md` (llm_manager + anthropic/open_router providers).
 
