@@ -1,7 +1,7 @@
 # autowarm
 
 **Размер:** 59M
-**Обновлено:** 2026-04-20 10:00 UTC
+**Обновлено:** 2026-04-20 10:10 UTC
 
 ## Файлы
 ```
@@ -84,6 +84,7 @@ scheduler.js
 screen_recorder.py
 scripts/adb_push_chunked_48h.sql
 scripts/fix_warmer_force_reset_seed.sql
+scripts/guard_status_consistency.sql
 scripts/ig_publishing_48h.sql
 scripts/test_device_mapping.js
 scripts/test_devices_status_parity.js
@@ -104,5 +105,4 @@ tests/fixtures/ig_account_list.xml
 tests/fixtures/ig_gallery_no_camera.xml
 tests/fixtures/ig_gallery_picker_in_camera.xml
 tests/fixtures/ig_highlights_empty_state.xml
-tests/fixtures/ig_profile_header.xml
 ```
