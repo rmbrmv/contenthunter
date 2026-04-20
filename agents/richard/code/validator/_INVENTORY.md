@@ -1,7 +1,7 @@
 # validator
 
 **Размер:** 237M
-**Обновлено:** 2026-04-20 08:30 UTC
+**Обновлено:** 2026-04-20 08:40 UTC
 
 ## Файлы
 ```
@@ -97,6 +97,7 @@ backend/src/services/video_metadata.py
 backend/src/services/virality_service.py
 backend/tests/__init__.py
 backend/tests/test_carousel_reorder.py
+backend/tests/test_fixes_2026_04_20.py
 backend/tests/test_image_metadata.py
 backend/tests/test_image_validation_summary.py
 backend/tests/test_schedule_lock.py
@@ -104,5 +105,4 @@ backend/tests/test_upload_complete.py
 backend/tests/test_upload_images_direct.py
 backend/tests/test_upload_s3_timeout.py
 docker-compose.prod.yml
-docker-compose.yml
 ```
