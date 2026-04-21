@@ -21,7 +21,8 @@
 |---|---|---|---|---|
 | T1 | Carousel storyboard drag-n-drop (реордер) | ✅ 2026-04-21 (root cause: `chosen-class` с пробелом падал в SortableJS `classList.add`) | validator | **P1** — обещано клиенту на 2026-04-21 |
 | T2 | Ротация validator `ANTHROPIC_API_KEY` (OAuth истёк) | ✅ 2026-04-21 (OAuth, expires 14:09 UTC) | validator | **P1** — `/upload/generate-description` сломан для клиентов |
-| T3 | LLM-recovery T10 — enable pilot (autowarm) | ⏳ отложен (нет смысла включать на 4h-окне OAuth) | autowarm | P2 — ждёт permanent sk-ant-api03 key |
+| T3 | LLM-recovery T10 — enable pilot (autowarm) | ⏳ отложен (ждёт permanent Anthropic key для screen_recovery, либо миграция на Groq vision-модель) | autowarm | P2 |
+| T6 | Migrate `/generate-description` на Groq | ✅ 2026-04-21 (commit `2132233`, llama-3.3-70b-versatile, 0.79s smoke, permanent fix без OAuth зависимости) | validator | **P1 — done** |
 | T4 | `feature/aif-global-reinstall` → main: push на origin | ✅ 2026-04-21 (cherry-pick 13 commits → rebase → push без force → ветка удалена) | contenthunter | P3 — housekeeping |
 | T5 | LLM-recovery T11 — pilot week-1 review | ⏳ pending (~2026-04-28 при T3-approve) | contenthunter | passive wait |
 
