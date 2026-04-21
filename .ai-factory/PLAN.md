@@ -26,6 +26,7 @@
 | T4 | `feature/aif-global-reinstall` → main: push на origin | ✅ 2026-04-21 (cherry-pick 13 commits → rebase → push без force → ветка удалена) | contenthunter | P3 — housekeeping |
 | T5 | LLM-recovery T11 — pilot week-1 review | ⏳ pending (~2026-04-28 при T3-approve) | contenthunter | passive wait |
 | T7 | Publish testbench + agent fix-loop — 24/7 контур автоисправления publisher'а | ✅ 2026-04-21 18/19 tasks (plan: `publish-testbench-agent-20260421.md`, evidence: `evidence/publish-testbench-20260421.md`). T16 CI-gate отложен — нужен XML-replay harness | autowarm+delivery | **P1 — done** (полный контур на VPS, autofix enabled) |
+| T8 | Single-account switcher short-circuit (phone #19) — SA-fastpath + Cyrillic regex | ✅ 2026-04-21 commit `6eb806a` на testbench (plan: `single-account-switcher-shortcircuit-20260421.md`, evidence: `evidence/single-account-switcher-20260421.md`). Post-deploy smoke: task #559 IG SA-fastpath success, #558 YT SA-preflight с Cyrillic. 157 tests passed. | autowarm-testbench | **P1 — done** (ждёт пассивной verify 1-2h 10 задач) |
 
 **Закрыто за прошлые сессии и не входит в этот план:**
 - Carousel rendering (ContentDetail.vue + ClientDashboard.vue) — ✅ commit `674818a`, `e93082e`.
