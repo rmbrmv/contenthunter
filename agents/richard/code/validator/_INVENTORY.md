@@ -1,7 +1,7 @@
 # validator
 
 **Размер:** 237M
-**Обновлено:** 2026-04-21 07:20 UTC
+**Обновлено:** 2026-04-21 07:30 UTC
 
 ## Файлы
 ```
@@ -27,6 +27,7 @@ README.md
 SPEC.md
 backend/.env
 backend/.env.bak-2026-04-20
+backend/.env.bak-2026-04-21-expired-oauth
 backend/.pytest_cache/.gitignore
 backend/.pytest_cache/CACHEDIR.TAG
 backend/.pytest_cache/README.md
@@ -104,5 +105,4 @@ backend/tests/test_upload_images_direct.py
 backend/tests/test_upload_s3_timeout.py
 docker-compose.prod.yml
 docker-compose.yml
-docs/ARCHITECTURE.md
 ```
