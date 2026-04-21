@@ -25,6 +25,7 @@
 | T6 | Migrate `/generate-description` на Groq | ✅ 2026-04-21 (commit `2132233`, llama-3.3-70b-versatile, 0.79s smoke, permanent fix без OAuth зависимости) | validator | **P1 — done** |
 | T4 | `feature/aif-global-reinstall` → main: push на origin | ✅ 2026-04-21 (cherry-pick 13 commits → rebase → push без force → ветка удалена) | contenthunter | P3 — housekeeping |
 | T5 | LLM-recovery T11 — pilot week-1 review | ⏳ pending (~2026-04-28 при T3-approve) | contenthunter | passive wait |
+| T7 | Publish testbench + agent fix-loop — 24/7 контур автоисправления publisher'а | ✅ 2026-04-21 18/19 tasks (plan: `publish-testbench-agent-20260421.md`, evidence: `evidence/publish-testbench-20260421.md`). T16 CI-gate отложен — нужен XML-replay harness | autowarm+delivery | **P1 — done** (полный контур на VPS, autofix enabled) |
 
 **Закрыто за прошлые сессии и не входит в этот план:**
 - Carousel rendering (ContentDetail.vue + ClientDashboard.vue) — ✅ commit `674818a`, `e93082e`.
