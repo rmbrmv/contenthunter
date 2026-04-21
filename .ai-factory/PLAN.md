@@ -1,6 +1,7 @@
 <<<<<<< HEAD
 <<<<<<< HEAD
 <<<<<<< HEAD
+<<<<<<< HEAD
 # Plan: Техдолг публикаций — guard + инфра (v2, пересобрано после проверки кода)
 
 **Created:** 2026-04-16
@@ -39,29 +40,50 @@
 =======
 # PLAN — Carousel rendering fix + content-card title `[проект] + [тип]`
 >>>>>>> 91d2f733e (docs(plans): carousel rendering fix + content-card title — executed 2026-04-20)
+=======
+# PLAN — Бэклог 2026-04-21: открытые задачи (umbrella)
+>>>>>>> 3dccb2b0e (docs(plans): бэклог 2026-04-21 + T1 drag + T2 key ротация)
 
-**Тип:** bugfix (frontend+backend) + small UX
-**Создан:** 2026-04-20
-**Инициатор:** bug-отчёт `@Danil_Pavlov_123` от 2026-04-20 13:08 UTC (`contenthunter_knowledge/sources/bugs/inbox/2026-04-20T130857Z-Danil_Pavlov_123-почему-то-у-меня-не-.md`) + устное добавление по заголовку карточки.
-**Код:** `/root/.openclaw/workspace-genri/validator/` (PM2 `validator` + `/var/www/validator`).
+**Тип:** mixed (UI-fix + prod-hotfix + infra deploy + git housekeeping + passive review)
+**Создан:** 2026-04-21
+**Режим:** Fast — overwrite предыдущего PLAN.md (carousel rendering, все T1-T6 ✅ за 2026-04-20)
+**Основа:** аудит `.ai-factory/plans/*.md` + memory `project_carousel_drag_wip`, `project_validator_anthropic_key`, `project_publish_followups` + git log по `contenthunter` / `validator` / `autowarm`
 
 ## Settings
 
 | | |
 |---|---|
-| Testing | **no** — UI-правки + маленькая серверная проекция; smoke через curl и ручной клик по `/content/1877`. Если к моменту реализации окажется, что backend-проекция задевает модели — ограничиться 1 pytest-снапшотом. |
-| Logging | **verbose** — `log.debug("[content GET] id=%s type=%s images=%s")` в `_content_to_dict`; `console.debug("[ContentDetail] type=%s urls=%s")` при маунте; `[ClientDashboard] slot_title=%s %s" for project+type)` для быстрой диагностики в DevTools. |
-| Docs | **no** |
-| Roadmap linkage | skipped — реакция на bug-репорт |
+| Testing | **по задаче** — T1 (drag): ручной smoke в браузере (UI-only); T3 (LLM T10): uses существующие pytest от T1-T8 как regression-guard; остальные — нет нового кода → no tests |
+| Logging | **verbose** для T1 (drag) — console.debug на onDragStart/End/Update + state-snapshot; **standard** для остальных (SQL/bash логи в evidence) |
+| Docs | **warn-only** — многодоменный план; полноценный docs-checkpoint сделаем только если T1 всплывёт новая UI-концепция |
+| Roadmap linkage | skipped — `paths.roadmap` отсутствует |
+| Language | ru (per config.yaml) |
 
-## Research Context — что уже знаем
+## Открытый бэклог — фактические остатки на 2026-04-21
 
-### Баг с каруселью (repro-линк в жалобе: `https://client.contenthunter.ru/content/1877`)
+| # | Заголовок | Статус | Репо | Срочность |
+|---|---|---|---|---|
+| T1 | Carousel storyboard drag-n-drop (реордер) | ✅ 2026-04-21 (root cause: `chosen-class` с пробелом падал в SortableJS `classList.add`) | validator | **P1** — обещано клиенту на 2026-04-21 |
+| T2 | Ротация validator `ANTHROPIC_API_KEY` (OAuth истёк) | ✅ 2026-04-21 (OAuth, expires 14:09 UTC) | validator | **P1** — `/upload/generate-description` сломан для клиентов |
+| T3 | LLM-recovery T10 — enable pilot (autowarm) | ⚠️ blocked on API key (OAuth vs service) | autowarm | P2 — ждёт T2 (тот же класс ключа) |
+| T4 | `feature/aif-global-reinstall` → main: push на origin | ⚠️ unrelated histories | contenthunter | P3 — housekeeping, по согласию force-with-lease |
+| T5 | LLM-recovery T11 — pilot week-1 review | ⏳ pending (≈2026-04-27 при T3-approve) | contenthunter | passive wait |
 
-**Симптом:** клиент загружает карусель (несколько изображений), открывает карточку контента → видит шаблон под видео, а не карусель. «Для всех платформ».
+**Закрыто за прошлые сессии и не входит в этот план:**
+- Carousel rendering (ContentDetail.vue + ClientDashboard.vue) — ✅ commit `674818a`, `e93082e`.
+- IG T7 24h verification, TT 48h, ADB T15 post-deploy — ✅ `1ba8d16f4`.
+- `publish_failed_generic` catch-all триаж — ✅ `f2b98d5b6` (обнаружен пропущенный category → в T2 backfill).
+- Guard-status backfill (20 TT + 18 YT) + TT/YT tests — ✅ `f355d03ea` + autowarm `5fbffc1`.
+- LLM-recovery T1-T9 (DB+service+tests+SQL) — ✅ autowarm `92e4a8a`..`2fe9a33`.
+- Residual task 444 (IG streak-counter escalation) — ✅ autowarm `ig-publishing-resolution.md` T1.
+- ADB chunked-push — ✅ autowarm `5b9830d`, `73938df`.
 
-**Что найдено в коде:**
+**Out of scope:**
+- ADB fundamental packet loss TimeWeb hop4 — user-owned трек (тикет в TimeWeb).
+- VK/FB/X платформы (per memory `project_autowarm_scope`).
+- Новые продуктовые фичи.
 
+<<<<<<< HEAD
 <<<<<<< HEAD
 <<<<<<< HEAD
 ### ⚠️ Новая регрессия (не в скоупе, follow-up)
@@ -221,135 +243,248 @@ IG приземлился в архив Highlights (пустой), а не в Re
 - Сейчас `ClientDashboard.vue:154` → `{{ slot.content_title || 'Контент' }}`. `slot.project_name` и `slot.content_type` уже есть в том же слоте (используются в бейдже «📁 {{ slot.project_name }}» на `:149-152` — **только в режиме `viewMode === 'all'`** — и в `contentTypeIcon` на `:136`).
 - Клиент-дефолт (клиентский логин видит только свой проект) = `viewMode === 'my'` → бейдж проекта невидим, клиент видит только иконку типа и `slot.content_title` — т.е. в сегодняшней жалобе «карточка не как карусель» может быть усугублена тем, что по заголовку «Контент» непонятно, что это. Задача: на всех карточках ставить строковый заголовок `<project_name> · <content_type_label>` единообразно (и в client/all-видах).
 - `content_title` сохраняем — но НЕ показываем как основной заголовок; он остаётся для `title` атрибута (hover) или второй строки (решим при реализации — скорее всего вторая строка, т.к. клиенты часто вручную вводили title).
+=======
+## Граф зависимостей
+
+```
+T1 (drag)          — параллельно, начать сразу с DevTools-логов
+T2 (validator key) — параллельно, quick smoke (запрос к Anthropic → замена → pm2 restart)
+T3 (LLM T10)       — блокируется T2 (если используем тот же Console key)
+T4 (aif merge)     — ортогонально, требует явного approve перед push
+T5 (LLM review)    — блокируется T3 + 7d wait
+```
+>>>>>>> 3dccb2b0e (docs(plans): бэклог 2026-04-21 + T1 drag + T2 key ротация)
 
 ## Tasks
 
-### Task 1 — [x] зафиксировать состояние записи 1877 и DB-шему
-**File:** SQL-запросы прямо в psql (`openclaw:openclaw123@localhost:5432`), результат — в `/home/claude-user/contenthunter/evidence/carousel-bug-1877-2026-04-20.md` (новый).
-**Шаги:**
-1. `SELECT id, content_type, s3_url, s3_key, title, status, project_id, created_at FROM validator_content WHERE id=1877;`
-2. `SELECT id, content_id, s3_url, s3_key, order_index, width, height FROM validator_carousel_images WHERE content_id=1877 ORDER BY order_index;`
-3. `\d validator_carousel_images` — зафиксировать точные имена колонок (order_index vs position; есть ли width/height).
-4. Записать: что реально лежит у 1877, какие пути S3, видны ли картинки публично (`curl -I <s3_url>` → 200).
-**Деливери:** evidence-файл с выдержкой + одним скриншотом ответа сервера на `GET /api/content/1877` под jwt клиента (`client_el_kosmetik_content_hunter`).
-**Логирование:** n/a.
+---
 
-### Task 2 — [x] backend: включить `carousel_images` в ответ `GET /content/{id}` и список `GET /content`
-**Files:**
-- `/root/.openclaw/workspace-genri/validator/backend/src/routers/content.py` — `get_content` (стр. 85-116), `list_content` (вызывает `_content_to_dict` в цикле), `_content_to_dict` (стр. 318-347).
-- `/root/.openclaw/workspace-genri/validator/backend/src/models/content.py` — проверить точные имена колонок `ValidatorCarouselImage` (order_index, s3_url, width, height).
+### T1 — Carousel storyboard drag-n-drop: диагностика + фикс
 
-**Деливери:**
-- В `get_content` добавить eager-load: `select(ValidatorContent).options(selectinload(ValidatorContent.carousel_images)).where(...)`. Импорт `from sqlalchemy.orm import selectinload`.
-- В `_content_to_dict` добавить ключ:
-  ```python
-  "carousel_images": [
-      {"s3_url": img.s3_url, "order_index": img.order_index, "width": img.width, "height": img.height}
-      for img in sorted(c.carousel_images or [], key=lambda x: x.order_index)
-  ] if c.content_type and c.content_type.value == "carousel" else [],
+**Цель:** заставить реордер миниатюр на `https://client.contenthunter.ru/content/<id>` работать — drag визуально захватывает, но порядок не меняется, PATCH не улетает.
+
+**Файлы:**
+- `/root/.openclaw/workspace-genri/validator/frontend/src/components/validation/CarouselStoryboard.vue`
+- `/root/.openclaw/workspace-genri/validator/frontend/src/pages/client/ContentDetail.vue`
+- `/root/.openclaw/workspace-genri/validator/backend/src/routers/content.py` (endpoint уже работает, round-trip через curl прошёл — не трогаем).
+
+**Уже пробовали (по memory, все попытки в `@main`):**
+1. Убрать `handle=".drag-handle"` (был на item'е, не на дескенденте).
+2. Вернуть handle + вынести на отдельный `<div>` сверху.
+3. `isDragging` flag + `@start/@end` + `setTimeout(50)` для ignore click-after-drop.
+4. `v-model="internalFiles"` вместо `:list="internalFiles"`.
+
+**План:**
+
+**Шаг 1 (диагностика, БЕЗ кода):** открыть `/content/1877` в DevTools → Console → попробовать drag.
+- Если в консоли появляются `[CarouselStoryboard] drag start` / `drag end` — SortableJS работает, проблема в watch/reactivity (переходим к Шагу 2).
+- Если **НЕ появляются** `drag start` — SortableJS не зарегистрировал listeners (Шаг 3).
+
+**Шаг 2 (watch props.files сбрасывает порядок):**
+- Закомментировать `watch(() => props.files, ...)` в `CarouselStoryboard.vue`.
+- Сделать инициализацию `internalFiles` только через `onMounted` (разово).
+- Ручной smoke: реордер → PATCH → после refresh порядок сохраняется.
+- Если работает — оставить; если отваливается на refresh — ввести `watch` с явным guard `if (!isDragging.value) internalFiles.value = [...newFiles]`.
+
+**Шаг 3 (если Шаг 1 не даёт drag-событий вообще):**
+- Проверить `package.json` validator/frontend: `vuedraggable@^4.1.0` + peer `sortablejs`. Если `sortablejs` не в deps — `npm i sortablejs` → `npm run build` → re-test.
+- Если peer OK — отказаться от `vuedraggable` в `CarouselStoryboard` и переписать на нативный HTML5 `@dragstart/@dragover/@drop` по образцу `SlotCard.vue` (там drag между слотами работает без vuedraggable).
+
+**Логирование (verbose):**
+- `console.debug("[CarouselStoryboard] drag start", { index, file })` в `@start`.
+- `console.debug("[CarouselStoryboard] drag end", { oldIndex, newIndex, newOrder: internalFiles.value.map(f => f.name) })` в `@end`.
+- `console.debug("[CarouselStoryboard] watch props.files fired", { len, internalLen })` в watch-коллбеке (если оставим watch).
+
+**Acceptance:**
+1. Клиент делает drag миниатюры из позиции 2 в позицию 4 → она визуально становится на 4-й → PATCH `/api/content/:id/images/order` с новым `order_index` уходит → 200 OK.
+2. Refresh страницы — порядок сохраняется.
+3. Smoke на одном из реальных content_id с ≥3 картинками (напр. 1877).
+
+**Деплой:**
+- `cd validator/frontend && npm run build` (postbuild копирует в `/var/www/validator/`).
+- Без pm2 restart — это pure frontend.
+- User-side verification: клиент Danil повторяет drag в DevTools.
+
+**Коммит (validator repo):**
+```
+fix(validator): carousel storyboard drag — <гипотеза-фикс>
+
+- <что именно поправили по итогам DevTools-лога>
+- console.debug на старт/конец drag для быстрой диагностики
+```
+
+**Риски:**
+- Если после Шага 3 всё ещё нет drag-событий — проблема может быть в Vue 3 reactivity с `<draggable>` + computed source. Fallback: переписать компонент с нуля на HTML5 drag — затратно по времени, поэтому только если 2 часа на Шаги 1-2 не дают результата.
+
+**Оценка:** 30 мин диагностика + 30-60 мин фикс, если гипотеза «watch сбрасывает порядок» верна.
+
+---
+
+### T2 — Ротация Anthropic API key в validator/.env
+
+**Цель:** восстановить `/upload/generate-description` для клиентов (истёк OAuth токен 2026-04-20 14:50 UTC → сегодня `/upload/generate-description` снова отдаёт 502).
+
+**Файлы:**
+- `/root/.openclaw/workspace-genri/validator/backend/.env` — единственная строка `ANTHROPIC_API_KEY=sk-ant-oat01-...` (OAuth из прошлой Claude Code session).
+- Бэкап предыдущего протухшего ключа: `.env.bak-2026-04-20` (оставить).
+
+**План:**
+
+**Шаг 1 — verify live 502:**
+```bash
+cd /root/.openclaw/workspace-genri/validator/backend
+KEY=$(grep ^ANTHROPIC .env | cut -d= -f2)
+curl -s -X POST https://api.anthropic.com/v1/messages \
+  -H "x-api-key: $KEY" \
+  -H "anthropic-version: 2023-06-01" \
+  -H "content-type: application/json" \
+  -d '{"model":"claude-haiku-4-5","max_tokens":10,"messages":[{"role":"user","content":"ping"}]}' \
+  | jq '.error.type // .content[0].text'
+```
+Ожидание: `"authentication_error"` (если OAuth истёк) или `"invalid x-api-key"`.
+
+**Шаг 2 — получить постоянный Console key:**
+- User-side: зайти на https://console.anthropic.com/settings/keys → создать новый key `sk-ant-api03-...` (не OAuth) с именем `validator-contenthunter-prod`.
+- **Запросить у пользователя:** ввести ключ в сессии (через dictation/paste) — я НЕ генерирую и НЕ запрашиваю ключи автономно.
+
+**Шаг 3 — подстановка:**
+```bash
+cd /root/.openclaw/workspace-genri/validator/backend
+cp .env .env.bak-2026-04-21-expired-oauth
+sed -i 's|^ANTHROPIC_API_KEY=.*|ANTHROPIC_API_KEY=<NEW_KEY>|' .env
+# verify:
+grep ^ANTHROPIC .env | cut -c1-25
+```
+
+**Шаг 4 — restart + smoke:**
+```bash
+sudo -n pm2 restart validator --update-env
+sleep 3
+# Smoke через прод endpoint:
+curl -s -X POST http://localhost:8000/api/upload/generate-description \
+  -H "Authorization: Bearer <test_jwt>" \
+  -F "image=@/tmp/sample.jpg" | jq '.description // .detail'
+```
+Должно вернуть реальный текст (либо валидный 4xx если файла нет — но НЕ 502).
+
+**Логирование:** отдельного нет — стандартный `pm2 logs validator` достаточно (`log.info` на каждый generate-description call в `upload.py:238-253`).
+
+**Acceptance:**
+1. `curl https://api.anthropic.com/v1/messages` с новым key → 200 OK (не `authentication_error`).
+2. `/api/upload/generate-description` возвращает описание или валидный 4xx — НЕ 502.
+3. Memory `project_validator_anthropic_key.md` обновить: new expiry дата (permanent keys не истекают, но memo про rotation-workflow).
+
+**Коммит:** нет (`.env` в `.gitignore`). Только memory update в `contenthunter`.
+
+**Риски:**
+- Если пользователь не готов создать key прямо сейчас — откладываем T2 и ставим второй OAuth из текущей Claude Code session (но это опять временное решение на 4h; прямо сказать пользователю: «нужен permanent Console key, иначе через 4h снова ломаемся»).
+- Если `pm2 restart --update-env` не перечитывает `.env` (некоторые версии pm2 бывают с багом) — использовать `pm2 stop validator && pm2 start validator`.
+
+**Оценка:** 5 мин curl-verify + ожидание ключа от пользователя + 5 мин подстановки и restart.
+
+---
+
+### T3 — LLM-recovery T10: enable pilot (ONE device) после Т2
+
+**Цель:** снять блокер из `feat-screen-recovery-llm-ig-mvp-20260420.md` T10 — раньше deploy падал на `autowarm/.env` `ANTHROPIC_API_KEY=sk-ant-oat...` (OAuth, не работает для API).
+
+**Блокируется:** T2 (получили permanent Console key). **Важно:** `autowarm/.env` и `validator/backend/.env` — разные файлы; нужен один и тот же Console key либо два отдельных.
+
+**Вопрос к пользователю перед T3:** достаточно ли одного key на все сервисы, или нужен раздельный? Recommend: один key `sk-ant-api03-contenthunter-prod` на оба (проще rotate, общий budget).
+
+**План:**
+
+**Шаг 1 — подстановка в autowarm:**
+```bash
+cd /root/.openclaw/workspace-genri/autowarm
+cp .env .env.bak-2026-04-21
+# Если файл .env уже существует и там OAuth:
+grep ^ANTHROPIC .env
+# Подставить NEW_KEY (тот же или новый):
+sed -i 's|^ANTHROPIC_API_KEY=.*|ANTHROPIC_API_KEY=<NEW_KEY>|' .env
+```
+
+**Шаг 2 — verify import + connection:**
+```bash
+cd /root/.openclaw/workspace-genri/autowarm
+python3 -c "
+from dotenv import load_dotenv; load_dotenv()
+import os
+from screen_recovery import ScreenRecoveryLLM
+r = ScreenRecoveryLLM()
+print('enabled:', r.enabled)
+# Test actual API connectivity:
+import anthropic
+c = anthropic.Anthropic(api_key=os.environ['ANTHROPIC_API_KEY'])
+m = c.messages.create(model='claude-sonnet-4-6', max_tokens=10, messages=[{'role':'user','content':'ping'}])
+print('api ok, tokens:', m.usage.input_tokens + m.usage.output_tokens)
+"
+```
+Должно напечатать `enabled: False` (флаг по умолчанию OFF) + `api ok`.
+
+**Шаг 3 — pm2 restart:**
+```bash
+sudo -n pm2 restart autowarm --update-env
+sleep 3
+pm2 logs autowarm --lines 30 --nostream | grep -iE 'import|error|traceback' | head -20
+```
+Ожидание: 0 новых import-errors / traceback.
+
+**Шаг 4 — pilot activation (требует approve пользователя):**
+- Выбрать pilot device: предложение `RF8YA0V7LEH` (активное IG-устройство из `tt_audit`).
+- **ПЕРЕД включением флага** — подтверждение у пользователя: «Включить LLM recovery глобально на всех IG задачах? Budget $5/day, instant rollback одним SQL».
+- После approve:
+  ```sql
+  PGPASSWORD=openclaw123 psql -h localhost -U openclaw -d openclaw \
+    -c "UPDATE autowarm_settings SET value='true' WHERE key='screen_recovery_llm_enabled';"
   ```
-  (сортировка — чтобы порядок был стабильный; имена полей подтвердить после Task 1).
-- В `list_content` — тоже `selectinload(carousel_images)`, чтобы списковый эндпоинт тоже был честным (на случай если где-то нужен preview).
-- `log.debug("[content GET] id=%s type=%s images=%s title=%r", c.id, c.content_type.value if c.content_type else None, len(c.carousel_images or []), c.title)` перед `return` в `_content_to_dict`.
 
-**Acceptance:** `curl -s -H "Authorization: Bearer <jwt>" http://localhost:8000/api/content/1877 | jq '.content_type, (.carousel_images|length)'` → `"carousel"` + ненулевое число.
-
-### Task 3 — [x] frontend: `ContentDetail.vue` — рендер карусели по `content_type`
-**File:** `/root/.openclaw/workspace-genri/validator/frontend/src/pages/client/ContentDetail.vue`.
-
-**Изменения в правой колонке (шаблон, стр. 317-365):**
-- Обернуть текущий `<video>` в `<template v-if="content.content_type === 'video'">`.
-- Для `content.content_type === 'carousel'`: рендерить слайдер:
-  - Контейнер тех же размеров (`height: 65vh`, `width: calc(65vh * 9/16)` для 9:16 и `calc(65vh)` для 1:1 — определяем по `width === height` первой картинки).
-  - Активная картинка `<img :src="activeImage.s3_url" class="w-full h-full object-contain" style="background:#000" />`.
-  - Миниатюры под блоком: `<button v-for="(img, i) in content.carousel_images" @click="activeIndex = i" :class="{ 'ring-2 ring-indigo-500': i === activeIndex }"><img :src="img.s3_url" class="h-14 w-14 object-cover rounded" /></button>`.
-  - Стрелки «◀ ▶» для навигации по клавишам/кликам.
-  - Счётчик `{{ activeIndex + 1 }} / {{ content.carousel_images.length }}`.
-- Для `content.content_type === 'post'`: fallback-заглушка «Текстовый пост» (без визуала) — чтобы тоже не падало на `<video>`.
-- «⬇️ Скачать видео» (стр. 361-364) переименовать в `⬇️ Скачать {{ contentTypeLabel }}` и подменить `href`: для карусели — на текущую активную картинку.
-
-**Изменения в левой колонке:**
-- «🔄 Заменить видео» (стр. 100-112): `accept="video/mp4,..."` → для карусели скрыть кнопку (или показать «Замена недоступна для карусели») — не расширяем скоуп, замена для carousel — отдельная история.
-- «Метаданные файла» (стр. 201-211): `duration_seconds` скрыть для carousel; вместо этого строка «Картинок: {{ count }}».
-- «Файл» (стр. 97-115): `content.original_filename` для карусели скорее всего NULL → показать «Карусель из N картинок».
-- «Технические требования» (стр. 213-222): для carousel — другой набор (размер ≤ 30 МБ/картинка, формат JPG/PNG, разрешение 1080×1920 или 1080×1080). Добавить computed `techRequirements(content_type)` вместо хардкода.
-
-**Script:**
-- `const activeIndex = ref(0)` + `const activeImage = computed(() => content.value?.carousel_images?.[activeIndex.value])`.
-- `const contentTypeLabel = computed(() => { const m = {video: 'видео', carousel: 'карусель', post: 'пост'}; return m[content.value?.content_type] ?? 'контент' })`.
-- `onMounted`: если `content_type === 'carousel'` и `carousel_images?.length === 0` — `console.warn("[ContentDetail] carousel without images", content.value.id)` + показать в UI предупреждение «Картинки не найдены».
-
-**Логирование:**
-- `console.debug("[ContentDetail] mounted", { id, content_type, images: content.carousel_images?.length, title })` в `onMounted` сразу после `content.value = res.data`.
-
-**Acceptance:** открыть `https://client.contenthunter.ru/content/1877` под клиентом Эль-косметик → видна карусель с навигацией, миниатюрами, счётчиком.
-
-### Task 4 — [x] card title: `[проект] + [тип]` в слотах планировщика
-**File:** `/root/.openclaw/workspace-genri/validator/frontend/src/pages/client/ClientDashboard.vue` (основное место) + проверить другие места где виден `slot.content_title` (grep по repo).
-
-**Деливери в `ClientDashboard.vue:122-164`:**
-- Убрать ветку `v-if="viewMode === 'all'"` у бейджа проекта (:149) — показывать его **всегда**, если `slot.project_name` не пустой. В client-режиме проект один → бейдж будет всегда с одним названием; это ок, клиент лишний раз видит «в каком проекте я» — не вредит.
-- Заменить основной текст:
-  ```html
-  <div class="text-xs font-medium text-gray-900 truncate">
-    {{ (slot.project_name || 'Проект') }} · {{ contentTypeLabel(slot.content_type) }}
-  </div>
-  <div v-if="slot.content_title" class="text-[11px] text-gray-500 truncate" :title="slot.content_title">
-    {{ slot.content_title }}
-  </div>
-  ```
-- `contentTypeLabel` уже есть в файле (стр. 434-439) — переиспользовать.
-- То же самое внести в `TransferTray.vue` / `SlotCard.vue` / `WeeklyGrid.vue`, если там рисуется отдельный компонент карточки слота. Grep `slot.content_title` по `frontend/src` — пройти по всем хитам и привести к единой форме «проект · тип / [title мелким]».
-
-**Бэк-требование:** в `GET /api/schedule/slots` (или что даёт `slot`-массив дашборда) уже есть `project_name` и `content_type` (видно из существующего шаблона). Проверить, что endpoint действительно их отдаёт — если в `viewMode='my'` их не возвращает, добавить. Быстрый grep: `grep -rn "content_type\|project_name" backend/src/routers/schedule.py`.
-
-**Логирование:**
-- `console.debug("[ClientDashboard] cards", slots.value.slice(0,3).map(s => ({ project: s.project_name, type: s.content_type, title: s.content_title })))` после загрузки слотов — разово, чтобы по DevTools увидеть, что прилетает с бэка.
-
-**Acceptance:** клиент Эль-косметик видит в каждой ячейке планировщика строку вида «Эль-косметик · Карусель» (или «Эль-косметик · Видео»), а `slot.content_title` — второй строкой мелким серым.
-
-### Task 5 — [x] сборка + деплой фронта + рестарт бэка
-**Команды (все в `/root/.openclaw/workspace-genri/validator`):**
-1. Бэк: `sudo -n pm2 restart validator` (после Task 2). Дождаться `Application startup complete`.
-2. Smoke бэка:
-   ```
-   curl -s -X POST http://localhost:8000/api/auth/login -d '{"login":"client_el_kosmetik_content_hunter","password":"<...>"}' -H 'Content-Type: application/json'
-   curl -s -H "Authorization: Bearer <jwt>" http://localhost:8000/api/content/1877 | jq '.content_type, .carousel_images | length'
-   ```
-3. Фронт: `cd frontend && npm run build` (postbuild уже копирует `dist/*` в `/var/www/validator/`).
-4. Если postbuild не скопировал или прав не хватило: `sudo -n cp -r dist/* /var/www/validator/`.
-5. Live-проверка: `https://client.contenthunter.ru/content/1877` под клиентом.
-
-**Логирование:** `tail -f /root/.pm2/logs/validator-out.log` на время smoke — убедиться что есть `[content GET] id=1877 type=carousel images=N`.
-
-### Task 6 — [ ] закрыть bug-тикет + обновить memory
-**Шаги:**
-1. Переместить `sources/bugs/inbox/2026-04-20T130857Z-Danil_Pavlov_123-почему-то-у-меня-не-.md` в `sources/bugs/resolved/` с добавкой секции `## Resolution` (git-sha коммита + скриншот «до/после»).
-2. Memory update: `project_publish_followups.md` не трогаем (это про autowarm publishing, не про UI карусели). Новая memory `feedback_validator_ui.md` — короткая запись «UI всегда рендерит по `content_type`; при добавлении нового типа — обновить `ContentDetail.vue` + `contentTypeLabel` + preview в `ClientDashboard`».
-
-## Dependencies
-
-- **Task 1** — первый, независим. Без evidence идти дальше рискованно (возможно у 1877 carousel_images = 0 и надо сначала понять, почему).
-- **Task 2** — после Task 1 (подтверждаем точные поля FK). Независим от Task 3/4.
-- **Task 3** — после Task 2 (фронт использует новое поле `carousel_images`).
-- **Task 4** — независим от Task 2/3; можно делать параллельно с Task 3 (обе — фронт, в разных файлах).
-- **Task 5** — после Task 2/3/4 (общий билд + restart).
-- **Task 6** — после Task 5.
-
-## Commit Plan
-
-**Checkpoint 1 — backend projection:**
+**Шаг 5 — live observe (1-2h):**
+```bash
+watch -n 60 'PGPASSWORD=openclaw123 psql -h localhost -U openclaw -d openclaw \
+  -f /root/.openclaw/workspace-genri/autowarm/scripts/llm_recovery_48h.sql | head -40'
 ```
-fix(validator): expose carousel_images in GET /content/{id}
+Ждём первого `llm_recovery_attempt` event в `publish_tasks.events`.
 
-- _content_to_dict возвращает массив {s3_url, order_index, width, height} для content_type=carousel
-- selectinload на relationship чтобы не было N+1
-- debug-лог "[content GET] id=... type=... images=..."
+**Rollback (при любом red flag):**
+```sql
+UPDATE autowarm_settings SET value='false' WHERE key='screen_recovery_llm_enabled';
 ```
-Tasks: 2. Деплой: `sudo -n pm2 restart validator`.
+Эффект мгновенный (следующий task не идёт в LLM).
 
-**Checkpoint 2 — frontend carousel render + card title:**
+**Acceptance:**
+1. `python3 -c "from screen_recovery import ...; ..."` — 0 exceptions, `enabled: True` после Шага 4.
+2. 0 новых `Traceback` в `pm2 logs autowarm` в течение 30 мин после restart.
+3. Первый `llm_recovery_result` event в `publish_tasks.events` (в пределах 1-2h IG активности, либо 0 если не было задач с attempt==3).
+4. `autowarm_llm_spend.spend_date=CURRENT_DATE` — либо пусто, либо несколько rows с `cost_usd < $0.05` каждый.
+
+**Коммит:** нет (только SQL UPDATE + env). Evidence — в `contenthunter/.ai-factory/evidence/llm-recovery-deploy-20260421.md`.
+
+**Оценка:** 15 мин подстановка + restart + smoke + monitoring первого часа.
+
+**Блокируется:** T2.
+
+---
+
+### T4 — `feature/aif-global-reinstall` → main: разобрать push на origin
+
+**Цель:** закрыть долг по `aif-global-reinstall.md` (все T1-T7 ✅), локальный merge готов, но push на origin был заблокирован «unrelated histories». Пользователь approve'нул force-with-lease.
+
+**Файлы:** только git metadata в `/home/claude-user/contenthunter/.git/`.
+
+**План:**
+
+**Шаг 1 — расследование причины:**
+```bash
+cd /home/claude-user/contenthunter
+git fetch origin
+git log --oneline origin/main..HEAD | head -20
+git log --oneline HEAD..origin/main | head -20
+# Если origin/main ушёл вперёд — merge blocked = divergence, не unrelated.
+# Если действительно unrelated (никакого LCA):
+git merge-base origin/main HEAD && echo "has common base" || echo "NO common base — unrelated"
 ```
+<<<<<<< HEAD
 <<<<<<< HEAD
 <<<<<<< HEAD
 >>>>>>> 9cf184661 (docs(evidence): round-6 seed (17 devices) + post-deploy analysis)
@@ -357,27 +492,46 @@ Tasks: 2. Деплой: `sudo -n pm2 restart validator`.
 =======
 fix(validator): carousel preview вместо видео-плеера в ContentDetail; card title = [проект] · [тип]
 >>>>>>> 91d2f733e (docs(plans): carousel rendering fix + content-card title — executed 2026-04-20)
+=======
+>>>>>>> 3dccb2b0e (docs(plans): бэклог 2026-04-21 + T1 drag + T2 key ротация)
 
-- ContentDetail.vue: ветвление <video|slider|post-stub> по content_type
-- слайдер с миниатюрами/стрелками/счётчиком для carousel
-- метаданные/тех.требования по типу контента
-- ClientDashboard.vue: заголовок карточки = {project} · {type}, content_title во второй строке
-- console.debug для диагностики
+**Шаг 2 — выбор стратегии** по результату Шага 1:
+
+**Вариант A (есть common base, но divergence):**
+```bash
+git checkout feature/aif-global-reinstall
+git rebase origin/main
+# resolve conflicts if any (показать user-у `git status` + конфликтные файлы)
+git checkout main
+git merge --ff-only feature/aif-global-reinstall
+git push origin main
+git branch -d feature/aif-global-reinstall
+git push origin --delete feature/aif-global-reinstall 2>/dev/null || true
 ```
-Tasks: 3, 4. Деплой: `npm run build` → `/var/www/validator/`.
 
-**Out-of-commit:** Task 1 (evidence в `contenthunter`), Task 6 (knowledge-repo git push — отдельный репозиторий).
+**Вариант B (реально unrelated histories — `git push --force-with-lease`):**
+- **ОБЯЗАТЕЛЬНЫЙ финальный approve пользователя** перед force-push на main.
+- Показать `git log --graph --oneline --all | head -30` для наглядности.
+```bash
+git checkout main
+git reset --hard feature/aif-global-reinstall  # локально перестраиваем main на ветку
+git push --force-with-lease origin main        # force-with-lease страхует от race
+```
 
-## Acceptance (после деплоя)
+**Вариант C (sync auto-update branch «мусорит» историю — уже видно в `git log`):**
+- Если на origin/main сейчас 100+ sync-commits (`sync: auto-update ...`), возможно имеет смысл: squash локальную ветку в один commit → cherry-pick поверх origin/main → push обычным не-force способом.
+- Это безопаснее force-with-lease, но сложнее; оставить fallback если A/B оба неприменимы.
 
-1. `https://client.contenthunter.ru/content/1877` под клиентом Эль-косметик → слайдер картинок (не видео-плеер), видны миниатюры, стрелки работают.
-2. Планировщик (dashboard) → в каждой filled-карточке слота заголовок вида «Эль-косметик · Карусель» / «Эль-косметик · Видео», content_title — серым мельче.
-3. `curl /api/content/1877` возвращает `carousel_images: [...]` с непустым массивом.
-4. В логах есть `[content GET] id=1877 type=carousel images=N`.
-5. Bug-тикет в knowledge-repo перемещён в `resolved/` с SHA коммита.
+**Шаг 3 — verify:**
+```bash
+git status
+git log --oneline -5
+ls .claude/skills/ | grep aif | wc -l   # should be 23
+```
 
-## Follow-up (вне этого плана, но зафиксировать)
+**Логирование:** стандартный git output. Evidence в evidence/aif-reinstall-merge-20260421.md (краткий: какая стратегия выбрана + SHA final commit).
 
+<<<<<<< HEAD
 <<<<<<< HEAD
 ## Next step
 
@@ -388,3 +542,99 @@ Tasks: 3, 4. Деплой: `npm run build` → `/var/www/validator/`.
 - Пока **не делаем:** preview карусели в списочных карточках слотов (сейчас только иконка 🖼️ + заголовок — достаточно).
 - Если выяснится, что `content_type = 'post'` где-то в продакшене — сделать отдельный шаблон (сейчас — fallback-заглушка).
 >>>>>>> 91d2f733e (docs(plans): carousel rendering fix + content-card title — executed 2026-04-20)
+=======
+**Acceptance:**
+1. `git log --oneline origin/main | head -3` — последний commit = наш aif-reinstall (squash или FF).
+2. `feature/aif-global-reinstall` удалена локально и на origin.
+3. Память не меняется (план `aif-global-reinstall.md` уже ✅).
+
+**Риски:**
+- **Force-push на main** — destructive. Перед Шагом 2B обязательный явный approve + показать пользователю `git log origin/main..HEAD` (что мы принципиально добавляем) и `git log HEAD..origin/main` (что потеряем, если там что-то есть).
+- Если 100+ sync-commits на origin/main и ветка их НЕ содержит — force-with-lease их снесёт. Это потенциально недопустимо → используем Вариант C (cherry-pick) в этом случае.
+
+**Оценка:** 10 мин исследование + 5 мин merge + 5 мин verify (при благоприятном сценарии).
+
+---
+
+### T5 — LLM-recovery T11: pilot week-1 review (passive)
+
+**Цель:** через 7 дней после включения флага T3 (ориентировочно 2026-04-28) прогнать `scripts/llm_recovery_48h.sql` на 7-дневном окне и принять решение continue / expand / rollback.
+
+**Блокируется:** T3 (должен быть enabled ≥7 дней для осмысленного sample).
+
+**Что проверить (из `feat-screen-recovery-llm-ig-mvp-20260420.md` T11):**
+- `calls_total`, `total_cost_usd` — в пределах ли $5/day budget'а.
+- `llm_success_rate_pct` — target ≥30%.
+- Сравнение `ig_camera_open_failed` / day до и после включения.
+- Red flags: `exception_count > tap_count`, `timeout_count > 30%`, `cost_usd > $5/day`.
+
+**Deliverable:** `contenthunter/.ai-factory/evidence/llm-recovery-pilot-week1-20260428.md`.
+
+**Действия:** нет — passive wait. Задача существует только чтобы не забыть. Можно поставить `ScheduleWakeup` или cron в будущей сессии (не в скоупе T5 сейчас).
+
+**Оценка:** 30 мин evidence через 7 дней.
+
+---
+
+## Commit plan
+
+Большая часть плана — 0 новых коммитов в contenthunter (правки кода в validator/autowarm).
+
+### Commit 1 — validator repo (после T1)
+```
+fix(validator): carousel storyboard drag reorder working
+
+- <root cause based on DevTools findings>
+- console.debug на drag start/end для diagnosis
+```
+
+### Commit 2 — contenthunter (после T2 + T3)
+```
+docs(memory+evidence): ротация Anthropic key + LLM-recovery T10 pilot enabled
+
+- memory/project_validator_anthropic_key.md: permanent Console key, rotation workflow
+- evidence/llm-recovery-deploy-20260421.md: T10 deployment notes + first hour observation
+```
+
+### Commit 3 — contenthunter (после T4)
+```
+chore: merge feature/aif-global-reinstall into main
+
+<details of chosen strategy (rebase/force-with-lease/cherry-pick)>
+```
+
+### Commit 4 — contenthunter (после T5, ~2026-04-28)
+```
+docs(evidence): LLM-recovery pilot week-1 review + decision
+
+- continue / expand / rollback verdict
+```
+
+## Риски и контрмеры
+
+| # | Риск | Мит. |
+|---|---|---|
+| R1 | T1 drag — 5-я попытка тоже не помогает | Fallback: HTML5 native drag как в SlotCard.vue. Не уходить в 6-ю гипотезу без DevTools-логов. |
+| R2 | T2 — пользователь не готов создать permanent key сейчас | Честно сказать: временный OAuth даст 4h окно → 502 вернётся. Prefer wait до ключа. |
+| R3 | T3 — после flag ON cost-спайк или exceptions | Instant rollback через SQL UPDATE. Budget-guard в коде уже страхует на $5/day. |
+| R4 | T4 — force-with-lease снесёт sync-commits на origin/main | Перед force всегда показать `git log HEAD..origin/main` пользователю. Если там что-то важное — Вариант C (cherry-pick). |
+| R5 | Параллелизм T1+T2 — конфликт CWD/контекста | T1 работает в browser (клиент), T2 — локальные .env + curl. Реально параллельны. |
+
+## Что намеренно НЕ делаем
+
+- **НЕ** создаём ветку в `contenthunter` — план живёт на `feature/aif-global-reinstall` (до T4 merge).
+- **НЕ** копаем ADB packet loss (user-owned трек в TimeWeb).
+- **НЕ** расширяем LLM-recovery на TT/YT (MVP = только IG).
+- **НЕ** трогаем validator/backend/analytics / auth (R3/R4 из `el-kosmetik-upload-2026-04-20.md` уже закрыты commit `3ac979f`).
+- **НЕ** делаем новые продуктовые фичи.
+
+## Next step
+
+После approve плана — `/aif-implement` пойдёт параллельно T1 + T2 (user prefer), затем T3 (при готовности permanent key), затем T4 (по явному approve force-push или rebase). T5 — отдельная сессия через неделю.
+
+Оптимальный порядок:
+1. **Сейчас:** T1 диагностика (Шаг 1 — DevTools-логи от пользователя) + T2 верификация 502 (curl).
+2. **После получения ключа от пользователя:** T2 подстановка → T3 подстановка autowarm/.env → T3 pilot activation.
+3. **По согласию:** T4 merge (с явным approve force-стратегии).
+4. **Через 7 дней:** T5.
+>>>>>>> 3dccb2b0e (docs(plans): бэклог 2026-04-21 + T1 drag + T2 key ротация)
