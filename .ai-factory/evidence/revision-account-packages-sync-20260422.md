@@ -14,7 +14,8 @@
 | C3 | `0b1932e` | autowarm-testbench | feat(revision/apply): enforce one-per-platform pack rule + account_packages mirror |
 | C4 | `8ef72f9` | autowarm-testbench | chore(migrate): split phone #19 legacy pack into 19a/19b |
 | C5 | `a84ecf0` | autowarm-testbench | chore(audit): backfill account_packages from factory for all active accounts |
-| C6 | (этот) | contenthunter | docs(plans): revision-account-packages-sync + evidence |
+| C6 | `ba91401` | contenthunter | docs(plans): revision-account-packages-sync + evidence |
+| C7 | `ca1bb8c` | autowarm-testbench | fix(packages): JOIN account_packages by pack_name, not by numeric id |
 
 ## Phone #19 — до/после
 
@@ -132,6 +133,12 @@ Guard: `OK YouTube/ivana`, `OK YouTube/google`.
 3. **Auto-sync factory → account_packages** по `pack_name` внутри транзакции `revision/apply`. Publisher guard сразу видит свежий whitelist.
 4. **Идемпотентные миграции** phone #19 и #171 — с DO-блоком, проверяющим текущее имя пака; rollback-скрипт для #19 (для #171 — аналогичный паттерн при необходимости).
 5. **Audit/backfill CLI** `audit_sync_account_packages.py` — dry-run + `--apply` + `--device-serial`/`--project-id` scope, exit codes для CI.
+
+## Bug fix post-apply: JOIN by pack_name
+
+Сразу после apply пользователь заметил, что UI `/api/packages` для новых паков 19b / 171a / 171b показывал `project='manual-seed-round-6-20260418'` вместо `Тестовый проект`. **Root cause:** два эндпоинта (`server.js:2394` GET `/api/packages` и `server.js:5340` getSocialAccounts) JOIN'или `account_packages` по **числовому id** (`ON ap.id = fpa.id` / `ON ap.id = fi.pack_id`) — а ID в factory и ap независимы и случайно совпали со строками seed'а round-6 (которые имели pack_name="round-6-null-seed").
+
+**Fix (C7):** оба JOIN переписаны на `LEFT JOIN LATERAL` по `ap.pack_name = fpa.pack_name` с `ORDER BY updated_at DESC NULLS LAST, id DESC LIMIT 1`. После фикса все 4 новых пака корректно рендерятся как "Тестовый проект". Regression 206 py + 22 js.
 
 ## Остающиеся задачи (Шаг 2)
 
