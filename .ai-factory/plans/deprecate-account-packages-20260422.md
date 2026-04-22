@@ -483,7 +483,7 @@ Research path не ведётся. Источники:
 
 ### Phase 7 — Commit + evidence + memory + Шаг 3 brief (T14, T15)
 
-**T14. Коммиты + push**  (blocked by T13; blocks T15)
+**T14. ✅ Коммиты + push**  (blocked by T13; blocks T15) — 4 коммита в autowarm-testbench/testbench (2ebde95 dedupe, 08082af batch_split, c089fff guard, 736d37f server) + 1 коммит в contenthunter/main (docs plan+evidence). Pushed. Прокомбинировал commits 3+5 (guard+server) — комбинированный server.js коммит с reads+admin CRUD вместе.
 
 - autowarm-testbench (ветка `testbench`, `git push origin testbench`):
   - Commit 1 (после T2): `chore(dedupe): rename Content hunter_84/105 duplicate packs to _a/_b`
@@ -495,7 +495,7 @@ Research path не ведётся. Источники:
 - contenthunter (`main`, `git push origin main`):
   - Commit 7 (после T15): `docs(plans): deprecate-account-packages + evidence`
 
-**T15. Evidence + memory + Шаг 3 brief**  (blocked by T14)
+**T15. ✅ Evidence + memory + Шаг 3 brief**  (blocked by T14) — evidence/deprecate-account-packages-20260422.md написан. Memory updates: project_account_packages_deprecation (Шаг 2 закрыт), project_publish_guard_schema (factory source, новая схема), new project_account_packages_step3 (Шаг 3 brief). MEMORY.md обновлён (2 строки). Committed + pushed.
 
 - Evidence: `/home/claude-user/contenthunter/.ai-factory/evidence/deprecate-account-packages-20260422.md`
   - **Dedupe (T1-T2):** до/после состояния packs 7/225/227/229, rollback-скрипты.
