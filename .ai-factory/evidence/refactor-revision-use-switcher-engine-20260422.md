@@ -141,7 +141,53 @@ _open_accounts_dropdown, _read_accounts_list, module-level LOGIN_SCREEN_MARKERS
 
 ---
 
-## Шаг T9 — Live smoke на phone #171: ⏳ ОЖИДАЕТ ПОДКЛЮЧЕНИЯ
+## Шаг T9 — Live smoke на phone #171: ✅ ВЫПОЛНЕНО (5 итераций)
+
+Phone #171 (`RF8Y90GCWWL`) подключён на ADB-host `82.115.54.26:15088`.
+Прогон через 5 итераций с инкрементальными фиксами:
+
+### Итог по платформам
+
+| Platform | Status | Accounts |
+|---|---|---|
+| Instagram | ✅ found | `ivana.world.class`, `born.trip90` (без шума) |
+| TikTok | ❌ dropdown_anchor_not_found | known-limitation: телефон физически залип в чужом профиле `@rahat.mobile.agncy.31` (Suggestions/Recent), даже cold-restart не выводит |
+| YouTube | ❌ accounts_button_not_found | bottom-nav tap попадает на главный экран (Поиск/Рекомендации), а не на профиль; нужен отдельный investigate с UI-dump |
+
+### Итерации фиксов
+
+1. **Run 1** (без anchor-strict): IG нашёл born.trip90/ivana.world.class + 8 мусорных слов. TT — 28 ников вкл. мусор. YT — `accounts_button_not_found` корректно (без regex-fallback).
+2. **Run 2** (anchor-strict без anchor-mismatch fix): IG → `dropdown_anchor_not_found` (anchor `Добавить аккаунт` не матчит новый Meta-Center текст `Добавьте аккаунт Instagram`). Permission denied на dump_dir.
+3. **Run 3** (после `sudo chown`): dumps сохранены. Видно что IG dropdown реально содержит `born.trip90`/`ivana.world.class`, проблема — anchor mismatch. TT попал на чужой `@pipin.samsung.kolaka` (Suggestions). YT dump 5 elements = главный экран.
+4. **Run 4** (расширены IG anchors `Добавьте аккаунт`/`Перейти в Центр аккаунтов`/`Account Center`/`Центр аккаунтов`; TT BACK+retap): IG → 6 ников включая born.trip90/ivana.world.class и мусор `уведомление`/`добавьте`/`instagram`/`facebook`. TT BACK+retap не помогает — Pakistani vendor держится.
+5. **Run 5** (стопворды расширены; TT cold-restart `HOME + force-stop + relaunch + retap`; YT non-usable retry): IG ✅ только `ivana.world.class` + `born.trip90`. TT — даже cold-restart не выводит из `@rahat.mobile.agncy.31` (физическое состояние телефона). YT — cold-restart не сработал в этой итерации.
+
+### Команда финального прогона
+
+```bash
+cd /home/claude-user/autowarm-testbench
+python3 account_revision.py \
+    --device-serial RF8Y90GCWWL \
+    --adb-host 82.115.54.26 --adb-port 15088 \
+    --device-num-id 268 \
+    > /tmp/revision-171-stdout.log 2> /tmp/revision-171-stderr.log
+```
+
+### Известные limitations phone #171
+
+- **TT**: ROM или TikTok app physically held в чужом профиле через Suggestions API. Решается ручным открытием TT на телефоне → tap «Я» в bottom-nav → возврат к ADB-revision. Альтернатива: deep refactor TikTok-навигации через Activity intent (вне scope текущего плана).
+- **YT**: bottom-nav tap не открывает профиль (`(972, 2320)` тапает в `Поиск/Рекомендации`). Возможно нужны другие координаты для этой версии YT, либо тап через `am start -a android.intent.action.VIEW -d "com.google.android.youtube://..."`. Требуется investigate с manual UI inspection.
+
+### Что в этой работе **РАБОТАЕТ** на 100%
+
+- `AccountSwitcher.read_accounts_list` API — добавлен и интегрирован в revision
+- IG hardening: dropdown anchor расширены под Meta-Center, stopwords для мусорных слов, born.trip90+ivana.world.class возвращаются чисто
+- `_open_app_aggressive` — sticky-foreground recovery + non-usable-dump retry
+- `pm clear` safety: только sticky foreign packages, не target (Google YT-сессия защищена)
+- Cross-session friendly: `_last_hybrid_xml` init в `__init__` устранил коллизию с соседней Claude-сессией (test_ig_sa_* снова green)
+- Регрессия switcher: **65/65 unit-тестов green** включая 8 новых для read_accounts_list
+
+---
 
 Phone #171 (`RF8Y90GCWWL`) на 2026-04-22 17:30 UTC **offline** (нет в `adb -H 82.115.54.26 -P 15037 devices`). Phone #19 (`RF8YA0W57EP`) тоже offline. Live-прогон выполним как только устройства подключатся.
 

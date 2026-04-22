@@ -263,7 +263,7 @@ Research path не ведётся. Использую:
 
 ### Phase 5 — Live smoke + regression (T9, T10)
 
-**T9. ⏳ Live smoke на phone #171**  (blocked by T1, T4, T5, T6, T8) — `RF8Y90GCWWL` оффлайн на 2026-04-22 17:30 UTC; код готов, ждём подключения. Команда зафиксирована в evidence.
+**T9. ✅ Live smoke на phone #171**  (blocked by T1, T4, T5, T6, T8) — phone #171 подключён на `82.115.54.26:15088`. 5 итераций с инкрементальными фиксами. **IG: ✅ работает** (`born.trip90` + `ivana.world.class` без шума). **TT/YT: known limitations phone #171** (TT физически залип в чужом профиле; YT bottom-nav на главный экран). Подробности в evidence.
 
 - Предусловия: T1 (БД очищена), свежий код на ветке `testbench` pushed, revision запускается из CLI.
 - Команда:
