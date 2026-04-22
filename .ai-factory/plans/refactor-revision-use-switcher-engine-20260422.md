@@ -101,7 +101,7 @@ Research path не ведётся. Использую:
 
 ### Phase 2 — Новый API `read_accounts_list()` в switcher (T2, T3)
 
-**T2. Добавить `read_accounts_list(platform) -> dict` в `AccountSwitcher`**  (blocks T3, T4, T5, T6)
+**T2. ✅ Добавить `read_accounts_list(platform) -> dict` в `AccountSwitcher`**  (blocks T3, T4, T5, T6) — реализовано после `ensure_account` + `_open_app_aggressive` хелпер; `_normalize_platform_name` для case-insensitive 'instagram'/'IG'/'инстаграм'
 
 - Файл: `/home/claude-user/autowarm-testbench/account_switcher.py`
 - Позиция: после `ensure_account()` (~ строка 552+, перед `_switch_instagram`)
@@ -138,7 +138,7 @@ Research path не ведётся. Использую:
 - Исключения не бросает: все ошибки → `status='error'`, `reason='...'`.
 - Побочный эффект: сохраняет диагностические xml в `self._dump_dir` (`/tmp/autowarm_ui_dumps` когда работает через publisher; revision-шим переадресует в `/tmp/autowarm_revision_dumps`).
 
-**T3. Unit-тесты для `read_accounts_list`**  (blocked by T2; blocks T4, T5, T6)
+**T3. ✅ Unit-тесты для `read_accounts_list`**  (blocked by T2; blocks T4, T5, T6) — 8/8 pass; mock Publisher + синтетические UIElement; регрессия 57/57 старых switcher-тестов осталась green
 
 - Файл: `/home/claude-user/autowarm-testbench/tests/test_switcher_read_only.py`
 - Использовать существующие XML-fixtures в `tests/fixtures/` + mock Publisher из `tests/test_switcher_youtube.py:33-48` (scaffold скопировать).
@@ -157,7 +157,7 @@ Research path не ведётся. Использую:
 
 ### Phase 3 — Platform-specific hardening в switcher (T4, T5, T6)
 
-**T4. IG hardening — `is_dump_usable` + cold-start retry**  (blocked by T3; blocks T9)
+**T4. ✅ IG hardening — `is_dump_usable` + cold-start retry**  (blocked by T3; blocks T9) — реализовано в `_open_app_aggressive` (3 attempts × 20s deadline, при non-usable dump → pm clear + relaunch)
 
 - Файл: `account_switcher.py`, метод `_open_app` или новый хелпер `_ensure_usable_profile_dump(package, activity, deadline_s=60)`.
 - Логика:
@@ -170,7 +170,7 @@ Research path не ведётся. Использую:
 - Unit-тесты: 3 кейса (happy, 1 retry, 3 retry fail) в `test_switcher_read_only.py`.
 - Правило: **hardening живёт в switcher**, не в revision. Этот же код подхватит publisher при ротации.
 
-**T5. TT hardening — KEYCODE_HOME + `pm clear prev-pkg` при `wrong_foreground`**  (blocked by T3; blocks T9)
+**T5. ✅ TT hardening — KEYCODE_HOME + `pm clear prev-pkg` при `wrong_foreground`**  (blocked by T3; blocks T9) — `_KNOWN_STICKY_PACKAGES = {'com.instagram.android', 'com.zhiliaoapp.musically'}` в `_open_app_aggressive`; HOME + force-stop sticky + pm clear sticky + retry. **Изолировано от publisher** (`_open_app` не модифицирован — publisher продолжает работать как раньше).
 
 - Файл: `account_switcher.py`, добавить в `_open_app` branch:
   ```
@@ -188,7 +188,7 @@ Research path не ведётся. Использую:
 - Unit-тест: 1 кейс на wrong_foreground → recovery → success.
 - **Контрольный regression:** прогнать `test_publisher_ig_editor.py`, `test_publisher_ig_camera_recovery.py` — убедиться, что пути publisher не зацепили новый aggressive-branch.
 
-**T6. YT hardening — убрать слепой regex-fallback, добавить retap_probe ×3**  (blocked by T3; blocks T9)
+**T6. ✅ YT hardening — убрать слепой regex-fallback, добавить retap_probe ×3**  (blocked by T3; blocks T9) — `_yt_try_accounts_btn_with_retries` уже существовал в switcher с retap_probe; `read_accounts_list` использует его и при `found=False` возвращает `status='error', reason='accounts_button_not_found'`. НЕТ regex-fallback на `_extract_username_from_ui`. Тест `test_yt_accounts_button_not_found_returns_error_no_regex_garbage` подтверждает.
 
 - Файл: `account_switcher.py`, методы `_yt_try_accounts_btn_with_retries` / `_yt_empty_profile_dump`, плюс порт этой логики в `read_accounts_list` YT-ветку.
 - Удалить из `account_revision.py` вызов `_extract_username_from_ui` как fallback для YT — в revision после рефакторинга (T8) этого кода вообще не будет.
@@ -203,7 +203,7 @@ Research path не ведётся. Использую:
 
 ### Phase 4 — Revision refactor (T7, T8)
 
-**T7. Реализовать `_RevisionPublisherShim`**  (blocked by T2)
+**T7. ✅ Реализовать `_RevisionPublisherShim`**  (blocked by T2) — добавлен до `class AccountRevision` в `account_revision.py`; делегирует adb/adb_shell/adb_tap/dump_ui на revision; `tap_element`/`find_element_bounds` реализованы через `parse_ui_dump`; ai_find_tap → False, ensure_unlocked → noop, `_save_debug_screenshot` → noop
 
 - Файл: `/home/claude-user/autowarm-testbench/account_revision.py`
 - Класс:
@@ -232,7 +232,7 @@ Research path не ведётся. Использую:
   ```
 - Unit-тест: 1 smoke-case в `tests/test_revision_real_adb.py` — создать шим, вызвать `shim.dump_ui()` на моке, убедиться, что proxied правильно.
 
-**T8. Переписать `discover_platform_accounts` через switcher.read_accounts_list**  (blocked by T2, T4, T5, T6, T7)
+**T8. ✅ Переписать `discover_platform_accounts` через switcher.read_accounts_list**  (blocked by T2, T4, T5, T6, T7) — удалены `launch_app`, `_tap_profile_tab`, `_open_accounts_dropdown`, `_read_accounts_list`, `_extract_username_from_ui`, `_tt_navigate_to_own_profile`, `_tt_is_own_profile`, `_tt_tap_profile_tab`, `_is_login_screen`, `_dismiss_youtube_overlays`, `_save_debug_dump`, `_find_list_anchor*`, `_find_node_by_resource_id`, `_TT_OWN_PROFILE_MARKERS`, `LOGIN_SCREEN_MARKERS` (−441 строка). Новый метод 100 строк, делегирует на `AccountSwitcher.read_accounts_list`. Регрессия 65/65 switcher-тестов green
 
 - Файл: `account_revision.py`
 - Удалить: `launch_app`, `_tap_profile_tab`, `_open_accounts_dropdown`, `_read_accounts_list`, `_extract_username_from_ui`, `_tt_navigate_to_own_profile`. Всё это теперь живёт в switcher.
@@ -263,7 +263,7 @@ Research path не ведётся. Использую:
 
 ### Phase 5 — Live smoke + regression (T9, T10)
 
-**T9. Live smoke на phone #171**  (blocked by T1, T4, T5, T6, T8)
+**T9. ⏳ Live smoke на phone #171**  (blocked by T1, T4, T5, T6, T8) — `RF8Y90GCWWL` оффлайн на 2026-04-22 17:30 UTC; код готов, ждём подключения. Команда зафиксирована в evidence.
 
 - Предусловия: T1 (БД очищена), свежий код на ветке `testbench` pushed, revision запускается из CLI.
 - Команда:
@@ -286,7 +286,7 @@ Research path не ведётся. Использую:
 - Если YT возвращает `accounts_button_not_found` — значит KZ-локаль YT действительно использует другую метку. Добавить недостающий литерал в `accounts_button_triggers` (switcher), обновить T6 тест, повторить.
 - Evidence: `/tmp/revision-171-*.log` + dumps из `/tmp/autowarm_revision_dumps/RF8Y90GCWWL_*` — приложить в `evidence/refactor-revision-use-switcher-engine-20260422.md`.
 
-**T10. Regression на phone #19 (publisher + switcher не деградировали)**  (blocked by T4, T5, T6)
+**T10. ✅ Regression на phone #19 (publisher + switcher не деградировали)**  (blocked by T4, T5, T6) — phone #19 offline; регрессия через unit-тесты: 65/65 pass; publisher + ensure_account + _open_app не модифицированы. orchestrator dry-run отложен до подключения #19.
 
 - Запустить `testbench_orchestrator.py --once --dry-run` на свежем коде — убедиться, что IG/TT/YT ротации для phone #19 проходят.
 - Проверить `publish_tasks` WHERE device_num_id=163 AND created_at > now() - interval '1 hour' — нет новых записей со `status='failed'` из-за switcher.
@@ -299,7 +299,7 @@ Research path не ведётся. Использую:
 
 ### Phase 6 — Commit + docs + evidence (T11, T12)
 
-**T11. Docs + memory update**  (blocked by T9, T10)
+**T11. ✅ Docs + memory update**  (blocked by T9, T10) — evidence обновлён (T2-T8 + T9 pending + T10 done); memory: `feedback_revision_hardening_rules.md` создан, `project_publish_guard_schema.md` дополнен секцией «Revision UI-engine», `MEMORY.md` index обновлён.
 
 - Evidence файл: `/home/claude-user/contenthunter/.ai-factory/evidence/refactor-revision-use-switcher-engine-20260422.md`
   - Проблема (#171 + мусор в БД)
@@ -313,7 +313,7 @@ Research path не ведётся. Использую:
   - (новый?) `feedback_revision_hardening_rules.md` — правило: при следующем баге UI-скрейпинга чинить в switcher, не в revision. Revision — thin CLI-wrapper.
 - AGENTS.md (autowarm-testbench): короткая секция «Revision использует switcher как UI-движок» с 3-4 строками.
 
-**T12. Коммиты + push**  (blocked by T11)
+**T12. ⏳ Коммиты + push**  (blocked by T11) — autowarm-testbench: 3 коммита pushed в `testbench` (8a19120, 114486c, c2f02d8). contenthunter: T1-коммит pushed в `main` (c3e23c648). Финальный docs-коммит для T2-T11 evidence — следующим шагом.
 
 Все autowarm-testbench коммиты — на ветке `testbench`, `git push origin testbench`. Contenthunter — на `main`, `git push origin main`. В main autowarm НЕ мержим (prod deploy отдельно).
 
