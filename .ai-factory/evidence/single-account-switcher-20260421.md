@@ -80,6 +80,38 @@ Events (`account_switch.meta.category`):
 
 → switcher завершился успехом, несмотря на полный провал чтения current (все UI dumps `usable=false`). Последующий `ig_camera_open_failed` — уже пост-switcher регрессия камеры (известный отдельный кейс, в других задачах тоже есть).
 
+### TT — task #560 (success SA-DEGRADED FALLBACK, `final_step=tt_sa_degraded`) ★
+
+Полное end-to-end доказательство T4-degraded-fallback для TikTok:
+
+```
+15:45:20 [SA-preflight] task=#560 serial=RF8YA0W57EP platform=TikTok
+         target='user70415121188138' known=['user70415121188138'] single_account=True
+15:45:20 [switcher] SA-hint: platform=TikTok target='user70415121188138' enabled=True
+... (TT retap-loop 3x: _tt_is_own_profile=False) ...
+15:47:52 [WARNING] [switcher] TT SA-degraded: retap-loop exhausted но SA-mode включён
+         → fallback на tap+verify (собираем финальный dump)
+15:47:52 [account_switch] sa_degraded_fallback step=tt_2_not_own_profile platform=TikTok
+15:48:10 [WARNING] [switcher] tt_sa_degraded: no expected triggers — continuing
+         (FLAG_SECURE/unknown layout)
+15:48:10 [account_switch] ok step=tt_sa_degraded matched=True
+15:48:10 ✅ account OK: user70415121188138 (matched=True, final=tt_sa_degraded, shots=8, dumps=11)
+15:48:10 [account_switch] done matched=True final=tt_sa_degraded dumps=11
+```
+
+До фикса этот же сценарий гарантированно падал с `tt_profile_tab_broken` (см. #551 в before-окне, 14:14 UTC). Сейчас задача в `running` (см. DB-снимок ниже) — switcher отдал управление дальше publisher'у.
+
+### Контроль race (#557, между Edit'ами)
+
+```
+15:15:26 [SA-preflight] task=#557 ... single_account=True
+15:15:26 [WARNING] [SA-preflight] ошибка, продолжаем без hint:
+         'AccountSwitcher' object has no attribute 'set_single_account_hint'
+15:17:41 ✅ account OK: user70415121188138 (matched=False, final=tt_5_editor, shots=9, dumps=8)
+```
+
+Перед 15:30 restart'ом publisher.py уже содержал SA-preflight call, но account_switcher.py ещё без `set_single_account_hint`. Try/except в `_ensure_correct_account` корректно поймал `AttributeError`, switcher продолжил работу по старому flow → задача дошла до `tt_5_editor` нормально. Hot-reload safe.
+
 ### YT — task #558 (SA-preflight сработал; switcher не вызывался — app не запустился)
 
 Events:
@@ -136,9 +168,20 @@ Pre-fix: `_looks_like_username('Инакент-т2щ')` → False (ASCII-only re
 | `ig_camera_open_failed` | 1/24h | без изменений (возможен рост visibility) | пост-switcher регрессия |
 | `yt_app_launch_failed` | 2/24h | без изменений | до switcher'а |
 
+## DB-снимок задач после фикса (15:48 UTC)
+
+```
+ id  | platform  |      account       | status  |      error_code
+-----+-----------+--------------------+---------+-----------------------
+ 557 | TikTok    | user70415121188138 | failed  | unknown                ← pre-restart
+ 558 | YouTube   | Инакент-т2щ        | failed  | yt_app_launch_failed   ← infra (вне скоупа)
+ 559 | Instagram | inakent06          | failed  | ig_camera_open_failed  ← downstream (вне скоупа)
+ 560 | TikTok    | user70415121188138 | running |                        ← SA-degraded спасла
+```
+
 ## Rollback-критерий
 
-Не сработал. Из 2-х post-deploy задач (#558, #559) — 0 регрессий switcher'а: обе корректно выполнили preflight, #559 дошла до SA-fastpath success. `tt_bottomsheet_closed` / `yt_accounts_btn_missing` / `tt_profile_tab_broken` в post-deploy окне не наблюдались (но sample слишком мал — 2 задачи). Продолжить наблюдение 1-2 часа; если пик, откатить:
+Не сработал. Из 3-х post-deploy switcher-runs (#558 SA-preflight only до app-launch фейла, #559 IG SA-fastpath success, #560 TT SA-degraded success) — 0 регрессий switcher-логики. Все три SA-механики (preflight, fastpath, degraded fallback) подтверждены живым трафиком. Если пик target-кодов вернётся — откатить:
 
 ```bash
 cd /home/claude-user/autowarm-testbench

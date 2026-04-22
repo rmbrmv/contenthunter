@@ -26,7 +26,9 @@
 | T4 | `feature/aif-global-reinstall` → main: push на origin | ✅ 2026-04-21 (cherry-pick 13 commits → rebase → push без force → ветка удалена) | contenthunter | P3 — housekeeping |
 | T5 | LLM-recovery T11 — pilot week-1 review | ⏳ pending (~2026-04-28 при T3-approve) | contenthunter | passive wait |
 | T7 | Publish testbench + agent fix-loop — 24/7 контур автоисправления publisher'а | ✅ 2026-04-21 18/19 tasks (plan: `publish-testbench-agent-20260421.md`, evidence: `evidence/publish-testbench-20260421.md`). T16 CI-gate отложен — нужен XML-replay harness | autowarm+delivery | **P1 — done** (полный контур на VPS, autofix enabled) |
-| T8 | Single-account switcher short-circuit (phone #19) — SA-fastpath + Cyrillic regex | ✅ 2026-04-21 commit `6eb806a` на testbench (plan: `single-account-switcher-shortcircuit-20260421.md`, evidence: `evidence/single-account-switcher-20260421.md`). Post-deploy smoke: task #559 IG SA-fastpath success, #558 YT SA-preflight с Cyrillic. 157 tests passed. | autowarm-testbench | **P1 — done** (ждёт пассивной verify 1-2h 10 задач) |
+| T8 | Single-account switcher short-circuit (phone #19) — SA-fastpath + Cyrillic regex | ✅ 2026-04-21 8/8 tasks, commit `6eb806a` на testbench (plan: `single-account-switcher-shortcircuit-20260421.md`, evidence: `evidence/single-account-switcher-20260421.md`). Подтверждено живым трафиком: #559 IG `final=ig_sa_fastpath, matched=True`; #560 TT `final=tt_sa_degraded, matched=True` (retap-loop exhausted, fallback спас); #558 YT SA-preflight с Cyrillic OK (далее YT app не запустился — отдельный pre-existing). 157 tests passed. | autowarm-testbench | **P1 — done** |
+| T10 | Publish launch failures fix (YT sbrowser CustomTab / TT launcher-stale / IG Об-аккаунте + draft-dialog) | ✅ 2026-04-22 9/9 tasks, commit `e2cd9e2` на testbench (plan: `publish-launch-failures-fix-20260422.md`, evidence: `evidence/publish-launch-failures-20260422.md`, fixture-triage: `evidence/launch-failures-fixture-triage-20260422.md`). Smoke 06:53-07:15 UTC: #711 YT done (launch_env_cleanup launcher_stale + sbrowser_customtab), #712 IG failed на другом root cause (draft-continuation dialog — follow-up), #713 TT passing tt_1_feed via launcher_stale force-stop. 171 tests passed (+14 новых). | autowarm-testbench | **P1 — done** |
+| T9 | Kira credential-issuance workflow — восстановить создание доступов клиентам на платформе + выдачу login/password в TG-чате | ⏳ **queued 2026-04-22** — после миграции OpenClaw → Claude CLI (Phase 6, 2026-04-21) нужно убедиться, что Kira снова умеет: (1) создавать клиентские аккаунты в платформе, (2) отдавать логин/пароль в TG-диалоге | kira-cli + platform | **P1 — на завтра** |
 
 **Закрыто за прошлые сессии и не входит в этот план:**
 - Carousel rendering (ContentDetail.vue + ClientDashboard.vue) — ✅ commit `674818a`, `e93082e`.
@@ -98,6 +100,23 @@ The token provided ('ring-2 ring-indigo-400') contains HTML space characters
 
 Блокируется T3. Passive wait ~2026-04-28 (через 7 дней после enable).
 
+### T9 — Kira credential-issuance после CLI-миграции — НА 2026-04-22
+
+**Контекст:** 2026-04-21 Киру мигрировали с OpenClaw на Claude CLI (Phase 6 плана `kira-widget-recovery-20260421.md`). TG работает через `kira-cli.service` (tmux session, workspace `/home/claude-user/kira/`), widget — через `anthropic.AsyncAnthropic` в validator backend. В evidence `kira-cli-migration-20260421.md` заявлено: «TG-функционал из SOUL.md (создание доступов клиентам и т.д.) сохранён» — но это декларативно, фактический end-to-end не проверен.
+
+**Что нужно:**
+1. Проверить, умеет ли Кирa сейчас в TG-чате создавать клиентский аккаунт на платформе (видимо раньше дёргалось через OpenClaw tool-calls или MCP — после миграции могли потеряться tool definitions).
+2. Восстановить workflow выдачи логина/пароля клиенту в TG-диалоге (возможно нужен MCP-tool или прямой SQL-доступ к `users`-таблице платформы из Kira CLI workspace).
+3. Smoke: реальный pairing → запрос клиента на доступ → Кира создаёт аккаунт → возвращает login/password в TG.
+
+**Точки входа для расследования (tomorrow):**
+- `/home/claude-user/kira/system-prompt.txt` (SOUL.md content) — есть ли инструкции про credential-issuance?
+- `/home/claude-user/kira/start-kira-loop.sh` — какие MCP/tools подключены? (сейчас видно только `--append-system-prompt-file`, без MCP флагов)
+- Что использовалось в OpenClaw Kira workspace до миграции (`/root/.openclaw/workspace-kira-pomoschnitsa-km/`) — какой механизм создания клиентов?
+- Platform API для создания клиента — где backend-эндпоинт? (validator? отдельный admin-API?)
+
+**Приёмка:** от лица Kira в TG-чате выдан рабочий логин/пароль новому клиенту, он логинится в `client.contenthunter.ru` и видит свой dashboard.
+
 ## Риски и контрмеры (обновлено)
 
 | # | Риск | Статус/контрмера |
@@ -114,3 +133,4 @@ The token provided ('ring-2 ring-indigo-400') contains HTML space characters
 2. **Пользователь:** создать permanent `sk-ant-api03-...` Console key (https://console.anthropic.com/settings/keys) до 2026-04-21 14:09 UTC чтобы избежать повторной ротации OAuth.
 3. **После ключа:** `/aif-implement` для T3 (LLM-recovery T10 pilot activation).
 4. **Через 7 дней после T3:** T5 pilot review.
+5. **2026-04-22 (на завтра):** T9 — восстановить у Киры workflow выдачи клиентских доступов (создание аккаунта + login/password в TG).

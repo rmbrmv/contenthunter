@@ -286,7 +286,7 @@ Safety net: если `_tap_plus_and_verify` сам упадёт на verify-ша
 - Проверить `analytics_collector_v2.py` / dashboard `testbench.html`: добавить фильтр/бейдж для events с `meta.category='sa_fastpath'` чтобы отличать от обычных `account_switch ok`.
 - Комментарии в `triage_classifier.py` возле правил для `tt_bottomsheet_closed` / `yt_accounts_btn_missing`: «При SA-mode часть случаев отфильтровывается upstream в switcher'е; если код всё-таки залетает — это реальный logout/switcher-break, приоритет выше».
 
-**T7 — Evidence + smoke на phone #19** (blocked by T5, T6; blocks T8)
+**T7 ✅ Evidence + smoke на phone #19** (blocked by T5, T6; blocks T8)
 
 1. Коммит + push (ТОЛЬКО `testbench` branch):
    ```bash
@@ -338,7 +338,7 @@ sudo -n pm2 restart autowarm-testbench
 
 ### Phase 5 — Housekeeping (T8)
 
-**T8 — Обновить memory + PLAN.md** (blocked by T7)
+**T8 ✅ Обновить memory + PLAN.md** (blocked by T7)
 
 - `memory/project_publish_testbench.md`: добавить запись «Single-account short-circuit внедрён 2026-04-21: switcher читает account_packages на pre-flight, при `single_account_mode=True` пропускает list-open-branch (IG/TT/YT) и делает tap+verify сразу. Cyrillic username regex расширен до `\w.\-` + UNICODE. Phone #19 стабильно публикуется без switch-failures».
 - `.ai-factory/PLAN.md` (umbrella): дополнить строкой T8 про этот план (статус на момент закрытия).
