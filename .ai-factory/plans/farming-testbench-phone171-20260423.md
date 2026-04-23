@@ -80,7 +80,9 @@
 
 ### Phase 1 — Farming taxonomy + investigation schema
 
-#### T4. Миграция: таблицы `farming_error_codes` + `farming_investigations`
+#### T4. ✅ Миграция: таблицы `farming_error_codes` + `farming_investigations`
+- **Status:** DONE 2026-04-23
+- **Applied:** migrations/20260423_farming_taxonomy.sql + rollback. Обе таблицы + 2 индекса (last_seen × status, UNIQUE error_code WHERE status='open') созданы. Схема 1-в-1 с publish_error_codes/publish_investigations.
 - **Deliverable:** SQL-миграция (reverse-engineer схему из `publish_error_codes` / `publish_investigations`, один-в-один адаптировать под фарминг)
 - **Contents:**
   ```sql
@@ -110,7 +112,13 @@
 - **Files:** `migrations/20260423_farming_taxonomy.sql` + rollback
 - **Log:** verbose на применение миграции
 
-#### T5. Seed начального набора известных error codes
+#### T5. ✅ Seed начального набора известных error codes
+- **Status:** DONE 2026-04-23
+- **Applied:** 23 кода засеяны (2 critical / 14 error / 5 warn / 2 info). Покрывают BanDetected, infrastructure (ADB), platform-specific bugs (tt_foreign_profile_stuck, yt_bottom_nav_unresponsive, yt_anchor_suspicious_position, yt_no_channel), и state-management codes.
+- **Migration:** migrations/20260423_farming_error_codes_seed.sql + rollback
+- **Known #171 bugs все учтены** — станут auto-fix кандидатами.
+
+#### T5_original. (legacy description, заархивировано)
 - **Deliverable:** SQL-insert с ~15-20 известными кодами (выжатыми из warmer.py `BanDetectedException` + status enum в `autowarm_tasks`)
 - **Codes (draft):**
   - `ban_detected` (critical, skip_platform, auto_fixable=false)
@@ -128,7 +136,14 @@
 - **Files:** `migrations/20260423_farming_error_codes_seed.sql` + rollback
 - **Log:** verbose, counts inserted
 
-#### T6. Extend warmer.py — emit типизированные error codes
+#### T6. ✅ farming_errors.py + патчи warmer.py
+- **Status:** DONE 2026-04-23
+- **Deliverables:**
+  - `farming_errors.py` — emit_farming_error(task_id, code, context) + close_investigation(code, resolution). Upsert-семантика (existing open investigation → ++occurrences_count + dedup fixture_task_ids; new code → INSERT). Smoke-test ✅ с 2 emit'ами + cleanup.
+  - warmer.py patches в 3 критичных местах: `handle_ban` (→ ban_detected), `preflight_check` failure block (→ farming_preflight_failed), `run_task` Exception catchall (→ warmer_exception_uncaught).
+- **Note:** остальная классификация событий пойдёт через triage_classifier (T13) — LLM пост-фактум классифицирует generic events JSONB в farming_error_codes. Hardcoded сайты в warmer.py покрывают ТОЛЬКО детерминированные критичные случаи.
+
+#### T6_original. Extend warmer.py — emit типизированные error codes
 - **Deliverable:** в `warmer.py` и связанных модулях все места, где сейчас пишется inline-string в events/log, получить явный `error_code` из `farming_error_codes`
 - **Action:** добавить helper `emit_farming_error(task_id, code, context_dict)` → INSERT в events + UPDATE last_seen_at в investigations + INSERT/UPDATE investigations (increment occurrences_count, update fixture_task_ids)
 - **Files:** `/root/.openclaw/workspace-genri/autowarm/farming_errors.py` (новый), патчи в `warmer.py` (~10-15 мест вызовов)
