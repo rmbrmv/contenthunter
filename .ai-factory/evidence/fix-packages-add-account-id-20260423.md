@@ -132,8 +132,8 @@ Debug:
 - `evidence/fix-packages-add-account-id-migration-20260423.md`
 - `evidence/fix-packages-add-account-id-20260423.md` (этот файл)
 
-## Verification checklist (after T10 live)
+## Verification — live (2026-04-23)
 
-- [ ] Пользователь воспроизводит путь: devices → packages → редактирование пака → добавить аккаунт → Сохранить. Ожидание: 200, аккаунт появился в списке.
-- [ ] В `pm2 logs autowarm` появилась строка `[api/packages/accounts] insert pack=... platform=... → factory_inst_accounts.id=...`.
-- [ ] В БД: `SELECT id, username, instagram_id FROM factory_inst_accounts ORDER BY id DESC LIMIT 5;` — новая строка есть, id численный, `instagram_id` может быть NULL (см. known follow-up).
+- [x] Пользователь воспроизвёл путь: пак «Тестовый проект_19b» → добавлен новый YT-аккаунт → сохранён корректно. Ошибка `null value in column "id"` ушла.
+- [x] Parser (YT) подхватил user_id сразу после INSERT — подтверждает, что весь pipeline (INSERT → triggerIdParsing → id_parser.py → UPDATE instagram_id) работает end-to-end для YT.
+- [x] IG parser по-прежнему не работает (ожидаемо — известный follow-up, см. memory `project_id_parser_ig_broken.md`).
