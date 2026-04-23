@@ -344,7 +344,21 @@
 
 ### Phase 6 — Tests + integration verification
 
-#### T20. Unit-тесты scheduler + farming_errors helper
+#### T20. ✅ Unit-тесты farming_errors + JS lint
+- tests/test_farming_errors.py — 8/8 passed: insert new investigation, dedup occurrences_count, different codes → different investigations, unknown task_id → False, unknown code → False (FK failure graceful), close flips status, close non-existent → False, invalid resolution → False.
+- Scheduler JS: `node --check` passed (без test runner в проекте).
+- **Итого 19/19 unit-тестов** (11 orchestrator + 8 errors).
+
+#### T21. ✅ Integration dry-run evidence
+- Evidence: `.ai-factory/evidence/farming-testbench-t21-integration-dryrun-20260423.md`
+- Orchestrator 4 rotations подтвердили: platform cursor 0→1→2→0, account cursor per-platform независим (171a ↔ 171b).
+- triage_classifier scan-recent, auto_rollback alert-only — оба запускаются чисто на empty state.
+- Schema integrity: все 4 миграции применены; farming_error_codes=23 строки.
+
+#### T22. ✅ Документация docs/farming-testbench.md
+- Standalone doc-page (256 строк): архитектура, компоненты (Python modules + systemd + PM2 + DB), system_flags reference, runbook (start/stop/status/cadence/add error_code/close investigation/activate fix/recovery reset), логи, known issues phone #171, ссылки.
+
+#### T20_orig. Unit-тесты scheduler + farming_errors helper
 - **Deliverable:** `tests/test_farming_testbench_scheduler.py` (минимум smoke — проверка lock, skip при paused, stuck cleanup), `tests/test_farming_errors.py` (emit helper, investigation dedup/upsert)
 - **Files:** два файла в `tests/`
 
