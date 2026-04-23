@@ -210,7 +210,20 @@
 
 ### Phase 3 — Scheduler + process management
 
-#### T9. Новый `farming_testbench_scheduler.js`
+#### T9. ✅ farming_testbench_scheduler.js — Node.js dispatcher
+- **Status:** DONE 2026-04-23 · syntax OK
+- **Deliverable:** `farming_testbench_scheduler.js` (271 строка). Poll autowarm_tasks WHERE testbench=TRUE + tick 15s + flock lock + stuck cleanup (2h timeout → failed + farming_stuck_timeout investigation upsert).
+
+#### T10. ✅ ecosystem.farming-testbench.config.js — PM2 app `autowarm-farming-testbench`
+
+#### T11. ✅ Systemd unit autowarm-farming-orchestrator.service (в autowarm/systemd/)
+- User=claude-user, WorkingDirectory=/home/claude-user/autowarm-testbench
+- MemoryMax=200M CPUQuota=30%
+
+#### T12. ✅ Shell-скрипты farming-testbench-{start,stop,status}.sh в scripts/farming-testbench/
+- Все три следуют паттерну публикационных (step_systemctl_{start,stop} helper, pipefail-safe `systemctl cat` вместо `list-unit-files | grep`, PGPASSWORD env для psql, --force для stop, цветной status с isolation-check prod+publish-testbench).
+
+#### T9_orig. Новый `farming_testbench_scheduler.js`
 - **Deliverable:** Node.js scheduler, polls `autowarm_tasks WHERE testbench=TRUE AND status='pending'`
 - **Behavior:**
   - Tick interval: 15 sec (быстрее прода, медленнее publish testbench 10s — фарминг-run длинный)
