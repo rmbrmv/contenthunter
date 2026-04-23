@@ -155,7 +155,18 @@
 
 ### Phase 2 — Farming orchestrator (core loop)
 
-#### T7. Новый модуль `farming_orchestrator.py`
+#### T7. ✅ Новый модуль `farming_orchestrator.py`
+- **Status:** DONE 2026-04-23
+- **Deliverable:** `/root/.openclaw/workspace-genri/autowarm/farming_orchestrator.py` (355 строк)
+- **Verified dry-runs:**
+  - Tick 1: IG → ivana.world.class@171a · ADB 82.115.54.26:15088 · protocol=1
+  - Tick 2: TT → user899847418@171a · protocol=2
+  - Tick 3: YT → Ivana-o3j@171a · protocol=3
+  - Cursor rotation работает: платформа+аккаунт через DB-persistent курсоры в system_flags
+- **Kill-switches:** farming_testbench_paused + check_ban_open (auto-pause + TG-эскалация при open ban_detected investigation)
+- **Cadence:** динамическое чтение из system_flags.farming_orchestrator_cadence_min (default 240)
+
+#### T7_orig. Новый модуль `farming_orchestrator.py`
 - **Deliverable:** Python-модуль, запускаемый как systemd service, аналог `testbench_orchestrator.py`
 - **Constants:**
   - `PROJECT_NAME = 'Тестовый проект_171a'` + `'Тестовый проект_171b'` (round-robin между паками)
@@ -176,7 +187,19 @@
 - **Logging:** stdout (→ systemd journal), format `%(asctime)s [%(levelname)s] [orchestrator] %(message)s`, verbose DEBUG
 - **Files:** `/root/.openclaw/workspace-genri/autowarm/farming_orchestrator.py`
 
-#### T8. Unit-тесты orchestrator round-robin
+#### T8. ✅ Unit-тесты orchestrator round-robin
+- **Status:** DONE 2026-04-23
+- **Deliverable:** `tests/test_farming_orchestrator.py` (11 тестов, все зелёные)
+- **Coverage:**
+  - Round-robin visits both accounts [A,B,A,B]
+  - Cursor persists в system_flags (2 calls → wrap-around)
+  - All blocked returns None (factory_reg_accounts.ig_block)
+  - is_paused true/false/missing (3 теста)
+  - cadence_min default + read from flag
+  - check_ban_open: none/open/only-closed (3 теста)
+- **Изоляция:** autocommit=False + ROLLBACK в teardown, fake id 99980+, fake платформы `_test_farming_rr_*`
+
+#### T8_orig. Unit-тесты orchestrator round-robin
 - **Deliverable:** `tests/test_farming_orchestrator.py` (по образу `test_testbench_orchestrator.py`)
 - **Coverage:** round-robin cursor read/write, account filter по blocks, auto-pause логика, kill-switch, протокол выбор
 - **Fixtures:** реальный DB с ROLLBACK isolation, фейковые аккаунты id=99990+, PACK_ID_PHONE_171A=308, PACK_ID_PHONE_171B=309
