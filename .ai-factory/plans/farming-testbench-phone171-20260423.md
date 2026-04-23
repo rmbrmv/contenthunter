@@ -293,7 +293,24 @@
 
 ### Phase 5 — Frontend (farming-testbench.html + backend routes)
 
-#### T17. Backend routes в `server.js`
+#### T17. ✅ Backend routes /api/farming/testbench/{dashboard,report,start,stop}
+- 4 endpoint'а под requireAuth middleware. Параллельно /api/publish/testbench/*.
+- dashboard возвращает 8 полей: flags, recent_tasks (30), hourly_rates, open_investigations, error_codes, categories (aggregated), agent_stats_7d, farming_fixes.
+- report whitelist: 2 allowed roots (testbench-home + workspace-genri).
+- start/stop: execFile shell-скрипты с timeout 60s.
+
+#### T18. ✅ public/farming-testbench.html — standalone страница
+- 445 строк, синяя палитра (отличить от публикации).
+- 6 секций: Kill-switches + agent stats, Error Categories (aggregated table), Open investigations, Hourly rates, Farming fixes (review mode), Recent 30 tasks.
+- Report viewer modal с markdown render.
+- Auto-refresh 30s.
+- Start/Stop кнопки с confirm-диалогом.
+
+#### T19. ✅ SPA-ссылка на Testbench из index.html
+- Добавлена в sidebar-farming после "Прогрев телефонов".
+- `<a href="/farming-testbench.html" target="_blank">` — открывается в новом табе, не ломает SPA hash-routing.
+
+#### T17_orig. Backend routes в `server.js`
 - **Deliverable:** 4 новых endpoint'а, параллельных публикационным
 - **Routes:**
   - `GET /api/farming/testbench/dashboard` — агрегация (`system_flags` с farming_* ключами; последние 30 `autowarm_tasks WHERE testbench=TRUE` с join на `farming_error_codes` через events/error_code; hourly success rates; open `farming_investigations`; agent runs 7d; error codes taxonomy)
