@@ -271,32 +271,21 @@
 
 ### Phase 4 — Auto-fix loop (triage + diagnose + apply + rollback)
 
-#### T13. Triage classifier — ветка для фарминга
-- **Deliverable:** расширить `triage_classifier.py` (или создать `farming_triage_classifier.py` если публикационный тесно связан с publish_error_codes)
-- **Action:** читать последние N fail'ов из `autowarm_tasks WHERE testbench=TRUE AND status IN ('failed','error','offline')` за окно 1h → классифицировать в `farming_error_codes` через LLM (Groq `llama-3.3-70b-versatile` с User-Agent fix per memory) → INSERT/UPDATE `farming_investigations`
-- **Schedule:** запускается systemd timer `autowarm-farming-triage.timer` раз в 15 мин (или встроен в orchestrator tick)
-- **Log:** verbose — каждая классификация с task_id + input_snippet + resolved_code + confidence
-- **Files:** либо патч в `triage_classifier.py` с новым параметром `domain='farming'`, либо новый `farming_triage_classifier.py` — решается в момент чтения кода
+#### T13. ✅ farming_triage_classifier.py (new module, regex-fallback classifier)
+- Deliverable: `/root/.openclaw/workspace-genri/autowarm/farming_triage_classifier.py` (211 строк). 19 regex-правил для known farming-паттернов (splash hang, TT foreign stuck, YT anchor suspicious, ADB disconnect, ban, no_channel, etc.). CLI: --task-id + --scan-recent. Внутренние 4/4 unit-теста зелёные.
 
-#### T14. Agent diagnose — farming domain
-- **Deliverable:** LLM-агент, берёт open investigation → загружает реальный failed task (events, log, screen_record_url) → предлагает hypothesis + предполагает minimal patch (shell diff или python snippet)
-- **Action:** по образу `agent_diagnose.py` — адаптировать промпт под фарминг-специфику (knowledge base: warmer.py, ALGORITHM.md, известные bugs phone #171 из памяти)
-- **Output:** markdown-отчёт в `/home/claude-user/autowarm-farming-testbench/evidence/farming-triage/<investigation_id>.md` + запись `farming_investigations.report_path`
-- **Files:** патч в `agent_diagnose.py` с domain-switch, либо `agent_diagnose_farming.py`
-- **Log:** verbose
+#### T14. ✅ farming_agent_diagnose.py (new module, LLM-диагност)
+- Deliverable: `/root/.openclaw/workspace-genri/autowarm/farming_agent_diagnose.py` (275 строк). Переиспользует `agent_diagnose.call_llm` + `MODEL_PRICES`. Farming-specific SYSTEM_PROMPT (warmer.py knowledge, known #171 bugs). Reports в evidence/farming-triage/. UPDATE farming_investigations.report_path + INSERT agent_runs.
 
-#### T15. Agent apply + auto-rollback
-- **Deliverable:** переиспользовать `agent_apply.py` (он не привязан к публикации — применяет любые diff'ы) + `auto_rollback.py` расширить для работы с `autowarm_tasks` (сейчас он на `publish_tasks`)
-- **Action:**
-  - `agent_apply.py`: проверить что принимает path к diff из любого домена — если нет, добавить param
-  - `auto_rollback.py`: добавить domain-switch `domain='farming'` → мониторит `autowarm_tasks WHERE testbench=TRUE` success_rate за окно after-apply, при падении rate > N% откатывает через `git revert`
-- **Safeguards:** auto_rollback может остановить farming-testbench через `farming_testbench_paused=true` при катастрофической деградации
-- **Files:** патчи в `agent_apply.py`, `auto_rollback.py`
-- **Log:** verbose — apply result, rollback trigger rationale
+#### T15. ✅ farming_agent_apply.py + farming_auto_rollback.py + farming_fixes table (REVIEW-MVP)
+- Migration `20260423_farming_fixes.sql` applied (mirror publisher_fixes).
+- `farming_agent_apply.py` — REVIEW-MODE: stages proposal в farming_fixes.enabled=FALSE с confidence≥7 guard. Kill-switch `system_flags.farming_auto_apply_enabled`. Реальный file_edit + git commit — upgrade в следующей итерации (безопасность phone #171 с частично сломанными TT/YT).
+- `farming_auto_rollback.py` — ALERT-ONLY: пишет warning в notes при success_rate deg ≥30pp. Не revert'ит автоматически.
 
-#### T16. Triage dispatcher (systemd)
-- **Deliverable:** unit `autowarm-farming-triage-dispatcher.service` — запускает triage+diagnose+apply+rollback в цепочку на регулярной основе
-- **Files:** `systemd/autowarm-farming-triage-dispatcher.service`
+#### T16. ✅ systemd autowarm-farming-triage-dispatcher.{service,timer}
+- Timer: OnBootSec=2min + каждые 15 мин.
+- Service: oneshot цепочка `farming_triage_classifier --scan-recent && farming_auto_rollback --dry-run`.
+- Depends on: autowarm-farming-orchestrator.service (After=).
 
 **→ Commit 5 после T16: `feat(farming): full auto-fix loop (triage+diagnose+apply+rollback)`**
 
