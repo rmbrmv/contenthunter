@@ -132,3 +132,65 @@ PM2 перезапущен: `autowarm` (PID 1645374 → new), `autowarm-farming-
 - **Phone #171 foreign sessions — систематическая проблема** на всех 3 платформах (TT — @rahat.mobile.agncy.31; IG — reels/store/google/dr.maratovna01; YT — возможно тот же паттерн). Root cause: устройство использовалось в прошлом для других проектов, accounts не выпилены. Решение: **single pm clear sweep** на всех трёх apps + fresh re-login factory accounts.
 - **Classifier self-reentry baseline check** должен быть базовым inv паттерном. Сохранил в тестах — если другая команда добавит новый regex без `already_emitted` pre-filter, тест `test_idempotent_rescan_does_not_repeat_already_emitted_code` отлично её поймает.
 - **Bonus gotcha**: старые events имеют `type=warning`, classifier смотрит только на `error`/`status`. Исторические фикстуры не retriage без manual backfill — ок для one-shot, но если BE хочет reclassify старые tasks после каждого regex update → нужна отдельная CLI `--force-rescan` flag + scan всех events.
+
+---
+
+## P2 ✅ re-login execution (2026-04-24 14:50-14:56)
+
+**ADB proxy recovery:** TCP handshake failed on `adb connect`-style — обнаружил что phone_warmer.py использует remote adb server mode: `adb -H 82.115.54.26 -P 15088 -s RF8Y90GCWWL`. С этим флагом связь прошла на первой попытке, 9 devices on raspberry 8 видны.
+
+**Cleanup выполнен:**
+```bash
+ADB="adb -H 82.115.54.26 -P 15088 -s RF8Y90GCWWL"
+$ADB shell pm clear com.zhiliaoapp.musically   # Success
+$ADB shell pm clear com.instagram.android      # Success
+```
+
+После релогина user'ом:
+- **IG ✅** активен `ivana.world.class` (верифицировано через UI dump профиля). Оба аккаунта залогинены — task #341 switcher вывел `['ivana.world.class', 'born.trip90']`.
+- **TT ⚠️** SplashActivity hang 2+ минуты после pm clear (без welcome screen, session есть, но splash не прогружается). Известный баг phone #171. Network ok (`ping 8.8.8.8 → 0% loss`). Memory `project_revision_phone171_backlog.md`.
+
+**Live verification — task #341 (IG born.trip90):**
+
+```
+14:53:43  Проверка активного аккаунта (Instagram): ожидаем @born.trip90
+14:54:05  ⚠️ Instagram: активен @ivana.world.class, нужен @born.trip90 — переключаем
+14:54:14  Instagram switcher: найдены аккаунты: ['ivana.world.class', 'born.trip90']
+14:54:14  Тапаем по аккаунту @born.trip90 в switcher: (540, 1308)
+14:54:25  ✅ Instagram аккаунт переключён на @born.trip90   ← 11 секунд total
+14:54:47  📱 Переходим в Instagram Reels...
+14:55:00  adb_text: ADBKeyBoard OK (9 chars) → "биохакинг"
+14:55:05  → Смотрим 6 видео по запросу "биохакинг"
+```
+
+**Проверило оба патча за один прогон:**
+1. Case B1 (target not in switcher) — больше не воспроизводится, dropdown содержит оба targets.
+2. Case B3 (post-tap verify None) — retry 3×2s: success на 1-й попытке (11s total включая tap+settle+read).
+
+**Investigation closed:**
+- `ig_target_not_in_switcher` → `closed_fixed` (5 fixtures resolved via re-login).
+
+**Остаются open:**
+- `tt_account_read_fail` (48 occ) — phone #171 TT splash hang, независимый баг.
+- `yt_account_read_fail` (51 occ) — phone #171 YT bottom-nav, independent.
+- `ig_switch_verify_failed` (2 fixtures — 262 old + 172 ещё старше) — мой patch предотвращает рост, task 341 не добавил.
+
+## Sequential orchestrator guard (user-reported follow-up)
+
+**Проблема:** orchestrator тикал по таймеру не проверяя queue depth. При cadence=15min (smoke), warmer ~3-5min/task — получалось что задачи накапливались быстрее чем scheduler (MAX_CONCURRENT=1) их выполнял. В БД копилось 40+ `scheduled`-tasks, в UI выглядело как параллель.
+
+**Фикс (af18a70):** orchestrator перед round-robin'ом считает `COUNT(*) WHERE status IN ('pending','scheduled','claimed','running')`. Если ≥1 — skip tick (лог `skip tick: N active testbench task(s) in queue (sequential mode)`). Предыдущие 11 регрессионных тестов зелёные.
+
+**Очередь почищена:** `UPDATE autowarm_tasks SET status='cancelled' WHERE testbench=TRUE AND status='scheduled'` → 41 строк cancelled. Теперь в queue: 1 running + 0 scheduled. Sequential guard защитит дальше.
+
+## Next for user
+
+1. **TT user899847418 на 171a** — проверь вручную, залогинен ли (мог не довести до конца). Splash hang может маскировать либо "не залогинен" либо реальный bug #171.
+2. **Когда надоест smoke** — верни cadence: `UPDATE system_flags SET value='240' WHERE key='farming_orchestrator_cadence_min'; sudo pm2 restart autowarm-farming-orchestrator`.
+3. **Второй момент по farming-testbench.html** — жду, что именно.
+
+**Commits (autowarm prod):**
+- `cdd0fba` PM2 triage loop
+- `77bc44c` IG switch split (B1/B3)
+- `527ee2e` classifier idempotency
+- `af18a70` sequential orchestrator guard
