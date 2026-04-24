@@ -382,9 +382,12 @@
 - **Verify:** выполнить `/usr/local/bin/farming-testbench-status.sh` — все зелёные; открыть `/farming-testbench` в браузере, start, ждать один tick, увидеть задачу, остановить
 - **Files:** evidence `.ai-factory/evidence/farming-testbench-deploy-20260423.md`
 
-#### T24. Live smoke-test (5 прогонов)
+#### T24. ✅ Live smoke-test (5 прогонов)
 - **Deliverable:** запустить стенд на 6-8 часов → зафиксировать первые ошибки (ожидаемые: TT foreign account stuck, YT bottom-nav unresponsive), убедиться что triage классифицирует, diagnose пишет отчёт, apply применяет (если auto_fixable=TRUE), metric в UI показывает изменения
-- **Files:** evidence `.ai-factory/evidence/farming-testbench-live-smoke-20260423.md`
+- **Actual (2026-04-23→2026-04-24):** стенд проработал ~14 часов с cadence 15 мин (smoke), накопилось 98 failed tasks. Две новых категории ошибок не покрывались triage regex — закрыто (см. ниже).
+- **Regex gap закрыт:** добавлено 4 кода в `farming_error_codes` (`tt/yt/ig_account_read_fail`, `account_mismatch_after_switch`) + regex-правила в `farming_triage_classifier.py::MSG_REGEX_RULES`. `--scan-recent --window-min 720` классифицировал накопленные tasks и создал 4 investigations (по одной на код, dedup).
+- **Cadence вернули на 240 мин** (prod default), orchestrator перезапущен, подхватил `next tick in 4800 sec`.
+- **Files:** evidence `.ai-factory/evidence/farming-testbench-live-smoke-20260423.md` + `farming-testbench-SESSION-RESUME-20260423.md` + `farming-testbench-triage-regex-closure-20260424.md` (this commit)
 
 **→ Commit 8 после T24: `docs(farming-testbench): prod deploy + live smoke evidence`**
 
