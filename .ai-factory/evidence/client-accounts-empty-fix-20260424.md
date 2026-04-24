@@ -74,6 +74,8 @@ ERROR:  relation "account_packages" does not exist
 
 Smoke-тест `tests/test_accounts_endpoint.py::test_accounts_endpoint_smoke_against_live_db` зелёный.
 
+**UI-подтверждение (Danil, 2026-04-24):** `https://client.contenthunter.ru/accounts` — аккаунты отображаются корректно по проектам.
+
 ## Follow-ups
 
 - LATERAL CROSS JOIN с regex-инференсом платформы (`acc.platform`) написан до того, как у `factory_inst_accounts.platform` появилась реальная колонка. Сейчас он делает round-about: COALESCE'ит `fia.platform` сам с собой через CASE по `instagram_id`. Это кандидат на упрощение в будущем (вне текущего scope, не блокер).

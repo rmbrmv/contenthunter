@@ -125,7 +125,7 @@ ERROR:  relation "account_packages" does not exist
 - [x] **#5 pm2 restart validator + manual verify** — pm2 id=24 рестартован (sudo pm2), uvicorn online. Verify: id=9→57 rows, id=16→47, id=12→43, id=999999→[] (+ warning лог).
 
 ### Phase 4 — Docs
-- [ ] **#6 Evidence doc** (blocked by #5) — `.ai-factory/evidence/client-accounts-empty-fix-20260424.md` + commit в contenthunter.
+- [x] **#6 Evidence doc** — evidence + plan committed (`9b5f45641`) on `feature/farming-testbench-phone171`.
 
 ## Commit Plan
 
