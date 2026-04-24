@@ -6,6 +6,7 @@
 **Phase 2 commit:** `d1a27c8` — feat(publisher): vision inline-recovery + post-mortem + success audit
 **Phase 3 commit:** `cd53c00` — fix(publisher): IG draft-continuation, YT settings-activity fallback, TT fg-check diagnostic
 **Phase 4 commit:** `0759762` — test+docs: vision tests, dashboard badge
+**Phase 5 commit:** `6f32745` — fix(vision): switch from Anthropic OAuth to Groq Llama 4 Scout (production-блокер)
 
 ## Сводка тройки 922/923/924 (исходный диагноз)
 
@@ -69,9 +70,20 @@ publisher.py (run_publish_task)
 - 11 fail (тот же baseline) / **304 pass** (+42 за счёт T11) / 3 skipped.
 - **Регрессий 0.**
 
-## Известные limits + риски
+## Production-блокер 2026-04-24 → переход на Groq
 
-1. **OAuth rate limits для Sonnet 4.6.** Текущий `sk-ant-oat01-...` может ограничивать ~5-10 RPM на vision-эндпоинте. Mitigation: cap 1 inline-recovery per stuck + `system_flags.vision_success_audit_daily_cap` (default 50). Если упрёмся — выписать `sk-ant-api03-...` из console.anthropic.com.
+При первом end-to-end smoke (`_run_vision_postmortem` на task 922) Anthropic вернул `401 invalid x-api-key`. Causa: токен `sk-ant-oat01-...` — это OAuth-proxy для Claude Code, не работает с прямым `api.anthropic.com/v1/messages` (проверено и `x-api-key`, и `Authorization: Bearer` с `anthropic-beta: oauth-2025-04-20`). Memory: `feedback_oauth_token_no_direct_api.md`.
+
+**Решение:** перешли на Groq `meta-llama/llama-4-scout-17b-16e-instruct` (commit `6f32745`):
+- paid Groq tier уже подключён (500K req/день, 300K tok/мин — проверено через rate-limit headers)
+- pricing: $0.11/M input, $0.34/M output (vs $3/$15 у Sonnet)
+- API: OpenAI-compatible chat completions, image content blocks через `image_url: data:image/jpeg;base64,...`
+- **Hard limit: 5 images per request** (обнаружено на live smoke). MAX_FRAMES_PER_CALL уменьшен с 20 до 5; `_select_frames_for_call` переделан: first + 3 evenly middle + last
+- Real cost на task 922: **$0.0015 за инцидент** (1.5с vision + 25.6с S3 upload 132 frames)
+
+**Quality-наблюдение:** на 5 frames из 132 unique Llama 4 Scout не разглядел известный «Продолжить редактирование черновика» modal в task 922 — общие фразы про «Экран Instagram». Это quality-limit модели + малой выборки frames. Pipeline работает end-to-end. Если quality в production окажется недостаточным — переключимся на Sonnet 4.6 при появлении Console API key (`sk-ant-api03-...`).
+
+## Известные limits + риски
 2. **Cost monitoring.** Все vision-вызовы пишутся в `agent_runs` с `agent='vision_*'`. Запрос `SELECT SUM(cost_usd) FROM agent_runs WHERE agent LIKE 'vision_%' AND finished_at >= NOW() - INTERVAL '24h'` даст daily spend. Auto-pause: env `VISION_RECOVERY_DISABLE=1` + `VISION_SUCCESS_AUDIT_DISABLE=1`.
 3. **TT fg-check root cause** (T10): шаг A (diagnostic) собирает evidence. Через несколько production-инцидентов будет видно какой источник (`topResumedActivity` vs `mCurrentFocus` vs `recents`) даёт правду — отдельным фиксом переключим primary.
 4. **Inline-recovery latency.** +5-10 сек на каждый stuck-инцидент. Для testbench (cadence 10 мин) приемлемо.
