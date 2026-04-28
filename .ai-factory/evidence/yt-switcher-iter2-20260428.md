@@ -128,6 +128,100 @@ y=254  text='Меню "Навигатор"' / 'Все' / 'Сейчас в эфи
 
 ---
 
+## T2 — Fix shipped ✅
+
+| Repo | Commit |
+|---|---|
+| `autowarm-testbench` (testbench tree) | `96c1c391` |
+| `/root/.openclaw/workspace-genri/autowarm/` (prod, auto-pushed → GenGo2/delivery-contenthunter) | `f04221a` |
+
+**T2_FINAL_TS (prod commit timestamp):** `2026-04-28 10:52:56 UTC`
+
+**Tests:** 3 новых в `tests/test_yt_post_switch_verify.py` (call ordering, success path, fallback path). Регрессия: 76 пройдённых тестов в 4 связанных suite'ах.
+
+**Spec compliance review:** ✅ все 10 точек verified.
+
+**Code quality review:** ✅ APPROVED. Nitpicks (не блокеры): magic number `time.sleep(2.0)` без константы, unused `call` import в тестах, test 2 weakly tests new XML-parsing path (over-mocked).
+
+**Cherry-pick path:** unified diff из testbench → `patch -p1` в prod tree → `git commit` → auto-push hook ✅.
+
+**pm2 restart:** оба сервиса (autowarm + autowarm-testbench) restartнуты, чистый старт без stack traces.
+
+---
+
+## T3 — Acceptance batch ✅ **PASS 10/10**
+
+**T_ANCHOR:** `2026-04-28 10:52:56 UTC` (T2_FINAL_TS)
+**Excluded ids:** none (`(-1)` placeholder)
+
+**Seeded tasks 1522-1531** (5 makiavelli + 5 Инакент, строго alternating I/M):
+
+| id | account | status | runtime |
+|---|---|---|---|
+| 1522 | Инакент-т2щ | ✅ done | 16м |
+| 1523 | makiavelli-o2u | ✅ done | 16м |
+| 1524 | Инакент-т2щ | ✅ done | 16м |
+| 1525 | makiavelli-o2u | ✅ done | 16м |
+| 1526 | Инакент-т2щ | ✅ done | 17м |
+| 1527 | makiavelli-o2u | ✅ done | 15м |
+| 1528 | Инакент-т2щ | ✅ done | 16м |
+| 1529 | makiavelli-o2u | ✅ done | 16м |
+| 1530 | Инакент-т2щ | ✅ done | 14м |
+| 1531 | makiavelli-o2u | ✅ done | 14м |
+
+**Acceptance SQL result:**
+
+```
+done=10, done_maki=5, done_inak=5, total=10
+```
+
+**Pass condition:** `done >= 8 AND done_maki >= 1 AND done_inak >= 1` → ✅✅✅
+
+**Verdict:** **PASS 10/10 (100%)** — превышает порог 8/10 с большим запасом. Sanity invariant выполнен.
+
+**Сравнение с T1 baseline (до T2 fix):**
+
+| Метрика | T1 (до fix) | T3 (после fix) | Δ |
+|---|---|---|---|
+| Total done | 9/10 (90%) | 10/10 (100%) | +1 |
+| makiavelli | 6/6 (100%) | 5/5 (100%) | — |
+| **Инакент** | **3/4 (75%, причём 3 luck-pass + 1 fail)** | **5/5 (100%, все verified-by-name)** | **+25%** |
+| `yt_post_switch_mismatch` events | 1 | 0 | -1 |
+
+Главный сигнал — Инакент: до фикса **0 verified-by-name pass'ов** (3 done = `current_post=None` soft-fall-through), после фикса **5/5 verified-by-name pass'ов**. T2 fix реально работает в проде.
+
+---
+
+## Iteration result — closed ✅
+
+**Acceptance gate ≥8/10 на phone #19 для `[makiavelli-o2u, Инакент-т2щ]` → достигнут (10/10).**
+
+**Что shipped в этой итерации:**
+1. `import random` в `publisher_base.py` — атомарный unblock 100% YT/IG/TT публикаций (`fcfa851` prod / `5a60b15` testbench).
+2. Forced profile-tab navigation перед post-switch verify в YT switcher — устраняет `yt_post_switch_mismatch` от feed-screen filter-chips (`f04221a` prod / `96c1c391` testbench).
+3. Read-only triage tool `.ai-factory/tools/yt_failure_triage.py` для будущих GATE-итераций.
+
+**Что НЕ запушено:**
+- `autowarm-testbench` ahead 7 (мои T0+T2 + 5 коммитов прошлой сессии).
+- `contenthunter` (knowledge) ahead 9 (spec/plan/evidence/triage/bookmark).
+Auto-push hook стоит только на prod tree.
+
+**Deferred follow-ups (для следующих итераций):**
+1. **Soft-fall-through в `else:` строки 2256** — когда `current_post=None`, текущий код просто warning'ит и продолжает. Стоит fail-fast'ить, чтобы избежать luck-pass случаев. Risk: больше fails при других edge cases.
+2. **`time.sleep(2.0)` magic number** в T2 fix — экстрагировать в `AFTER_PROFILE_NAV_SETTLE_S`.
+3. **AST-walker test** — code reviewer 04-28 предложил: walks `publisher_base.py` для каждого `<name>.<attr>` и asserts `<name>` is in module globals. Catches whole class of split-regression в 1 тесте. Кандидат для quick-win.
+4. **Test 2 в `test_yt_post_switch_verify.py`** — over-mocked, не проверяет реальный XML-parsing flow. Усилить до follow-up'а.
+5. **`else:` soft-fall-through** при `_go_to_profile_tab` returns False (T2 fallback) — runs sleep даже на failure. Минор.
+
+**Statistics:**
+- 4 commits в prod tree (auto-pushed → GenGo2/delivery-contenthunter): T0 + T2 (плюс 2 evidence-related).
+- 11 commits в knowledge репо (spec, plan, evidence по фазам, triage tool, bookmark).
+- 5 subagent dispatches: 2 implementers (T0, T2) + 2 spec-review + 2 code-quality + 0 (T0/T2 spec-review parallel + code-quality parallel) = 6 review subagents total.
+- Wall-clock: ~6 часов (T0 ~30 мин + T1 monitor ~2.25 ч + T2 ~30 мин + T3 monitor ~2.5 ч).
+- Phone #19 публикаций: 1 (T0.5 smoke) + 9 (T1 baseline) + 10 (T3 acceptance) = 20 живых задач за итерацию.
+
+---
+
 ## T0 deferred (in this iteration's backlog)
 
 - AST-walker test для валидации `<name>.<attr>` → module-level name (предотвращает split-regression class). Кандидат на отдельный мини-fix после T3.
