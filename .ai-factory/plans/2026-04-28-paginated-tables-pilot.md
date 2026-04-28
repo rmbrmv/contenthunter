@@ -66,7 +66,7 @@ git checkout -b feat/paginated-publish-tasks-20260428
 - [ ] **Step 3: Подтвердить, что pm2 запущен и сервер отвечает**
 
 ```bash
-pm2 status
+sudo pm2 status
 curl -sS -o /dev/null -w "%{http_code}\n" https://delivery.contenthunter.ru/api/publish/tasks
 ```
 
@@ -326,7 +326,7 @@ app.get('/api/publish/tasks', requireAuth, async (req, res) => {
 - [ ] **Step 3: pm2 reload и smoke (backwards-compat)**
 
 ```bash
-pm2 reload all
+sudo pm2 reload autowarm
 sleep 1
 # BC: запрос без новых параметров должен вернуть старый плоский массив
 curl -sS -b /tmp/dc-cookies.txt 'https://delivery.contenthunter.ru/api/publish/tasks' | jq 'type'
@@ -451,7 +451,7 @@ app.get('/api/publish/tasks/stats', requireAuth, async (req, res) => {
 - [ ] **Step 2: pm2 reload и smoke**
 
 ```bash
-pm2 reload all
+sudo pm2 reload autowarm
 sleep 1
 curl -sS -b /tmp/dc-cookies.txt 'https://delivery.contenthunter.ru/api/publish/tasks/stats' | jq
 ```
@@ -539,7 +539,7 @@ app.get('/api/publish/tasks/by-ids', requireAuth, async (req, res) => {
 - [ ] **Step 2: pm2 reload и smoke**
 
 ```bash
-pm2 reload all
+sudo pm2 reload autowarm
 sleep 1
 
 # Возьмём пару валидных ID из БД
@@ -1304,9 +1304,9 @@ git merge --no-ff feat/paginated-publish-tasks-20260428
 - [ ] **Step 3: pm2 restart**
 
 ```bash
-pm2 reload all
+sudo pm2 reload autowarm
 sleep 2
-pm2 status
+sudo pm2 status
 ```
 
 Все процессы должны быть `online`.
@@ -1318,7 +1318,7 @@ pm2 status
 Параллельно — мониторинг ошибок:
 
 ```bash
-pm2 logs --lines 100 | grep -iE 'error|publish/tasks'
+sudo pm2 logs autowarm --lines 100 | grep -iE 'error|publish/tasks'
 ```
 
 Не должно быть свежих ошибок, относящихся к нашим endpoint'ам.
@@ -1331,7 +1331,7 @@ pm2 logs --lines 100 | grep -iE 'error|publish/tasks'
 cd /root/.openclaw/workspace-genri/autowarm/
 git revert <merge-commit-sha>
 git push origin main
-pm2 reload all
+sudo pm2 reload autowarm
 ```
 
 Один revert — один restart — всё откачено.
