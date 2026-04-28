@@ -158,7 +158,7 @@ git commit -m "feat(server): add cursor encode/decode helpers for paginated endp
 - [ ] **Step 1: Зафиксировать baseline curl-ответ старого endpoint'а**
 
 ```bash
-curl -sS -b /tmp/dc-cookies.txt 'https://delivery.contenthunter.ru/api/publish/tasks' \
+curl -sS -b "$(sed 's/^Cookie: //' /tmp/dc-cookies.txt)" 'https://delivery.contenthunter.ru/api/publish/tasks' \
   | jq 'length, .[0] | keys' 2>&1 | head -20
 ```
 
@@ -329,7 +329,7 @@ app.get('/api/publish/tasks', requireAuth, async (req, res) => {
 sudo pm2 reload autowarm
 sleep 1
 # BC: запрос без новых параметров должен вернуть старый плоский массив
-curl -sS -b /tmp/dc-cookies.txt 'https://delivery.contenthunter.ru/api/publish/tasks' | jq 'type'
+curl -sS -b "$(sed 's/^Cookie: //' /tmp/dc-cookies.txt)" 'https://delivery.contenthunter.ru/api/publish/tasks' | jq 'type'
 ```
 
 Ожидаем: `"array"` (legacy shape сохранён). Если `"object"` — backwards-compat сломан, разобраться.
@@ -337,7 +337,7 @@ curl -sS -b /tmp/dc-cookies.txt 'https://delivery.contenthunter.ru/api/publish/t
 - [ ] **Step 3b: smoke с новыми параметрами**
 
 ```bash
-curl -sS -b /tmp/dc-cookies.txt 'https://delivery.contenthunter.ru/api/publish/tasks?limit=5' | jq
+curl -sS -b "$(sed 's/^Cookie: //' /tmp/dc-cookies.txt)" 'https://delivery.contenthunter.ru/api/publish/tasks?limit=5' | jq
 ```
 
 Ожидаем:
@@ -348,8 +348,8 @@ curl -sS -b /tmp/dc-cookies.txt 'https://delivery.contenthunter.ru/api/publish/t
 - [ ] **Step 4: Smoke с курсором (2-я страница)**
 
 ```bash
-CURSOR=$(curl -sS -b /tmp/dc-cookies.txt 'https://delivery.contenthunter.ru/api/publish/tasks?limit=5' | jq -r '.next_cursor')
-curl -sS -b /tmp/dc-cookies.txt "https://delivery.contenthunter.ru/api/publish/tasks?limit=5&cursor=$CURSOR" | jq '.rows | map(.id)'
+CURSOR=$(curl -sS -b "$(sed 's/^Cookie: //' /tmp/dc-cookies.txt)" 'https://delivery.contenthunter.ru/api/publish/tasks?limit=5' | jq -r '.next_cursor')
+curl -sS -b "$(sed 's/^Cookie: //' /tmp/dc-cookies.txt)" "https://delivery.contenthunter.ru/api/publish/tasks?limit=5&cursor=$CURSOR" | jq '.rows | map(.id)'
 ```
 
 Ожидаем: 5 ID, **отличных** от первой страницы (без пересечений), и каждый меньше last_id первой страницы (так как ORDER BY DESC).
@@ -357,7 +357,7 @@ curl -sS -b /tmp/dc-cookies.txt "https://delivery.contenthunter.ru/api/publish/t
 - [ ] **Step 5: Smoke с фильтром**
 
 ```bash
-curl -sS -b /tmp/dc-cookies.txt 'https://delivery.contenthunter.ru/api/publish/tasks?limit=10&status=done' | jq '.rows | map(.status) | unique'
+curl -sS -b "$(sed 's/^Cookie: //' /tmp/dc-cookies.txt)" 'https://delivery.contenthunter.ru/api/publish/tasks?limit=10&status=done' | jq '.rows | map(.status) | unique'
 ```
 
 Ожидаем: `["done"]`.
@@ -365,7 +365,7 @@ curl -sS -b /tmp/dc-cookies.txt 'https://delivery.contenthunter.ru/api/publish/t
 - [ ] **Step 6: Smoke с status_exclude**
 
 ```bash
-curl -sS -b /tmp/dc-cookies.txt 'https://delivery.contenthunter.ru/api/publish/tasks?limit=10&status_exclude=done,skipped' | jq '.rows | map(.status) | unique'
+curl -sS -b "$(sed 's/^Cookie: //' /tmp/dc-cookies.txt)" 'https://delivery.contenthunter.ru/api/publish/tasks?limit=10&status_exclude=done,skipped' | jq '.rows | map(.status) | unique'
 ```
 
 Ожидаем: массив без `"done"` и без `"skipped"`.
@@ -373,7 +373,7 @@ curl -sS -b /tmp/dc-cookies.txt 'https://delivery.contenthunter.ru/api/publish/t
 - [ ] **Step 7: Smoke с поиском**
 
 ```bash
-curl -sS -b /tmp/dc-cookies.txt 'https://delivery.contenthunter.ru/api/publish/tasks?limit=10&search=test' | jq '.rows | length'
+curl -sS -b "$(sed 's/^Cookie: //' /tmp/dc-cookies.txt)" 'https://delivery.contenthunter.ru/api/publish/tasks?limit=10&search=test' | jq '.rows | length'
 ```
 
 Ожидаем: число (может быть 0). Главное — не 500 и не invalid sort.
@@ -382,15 +382,15 @@ curl -sS -b /tmp/dc-cookies.txt 'https://delivery.contenthunter.ru/api/publish/t
 
 ```bash
 # bad sort
-curl -sS -o /dev/null -w "%{http_code}\n" -b /tmp/dc-cookies.txt 'https://delivery.contenthunter.ru/api/publish/tasks?sort=DROP_TABLE'
+curl -sS -o /dev/null -w "%{http_code}\n" -b "$(sed 's/^Cookie: //' /tmp/dc-cookies.txt)" 'https://delivery.contenthunter.ru/api/publish/tasks?sort=DROP_TABLE'
 # expected: 400
 
 # bad cursor (мусор)
-curl -sS -b /tmp/dc-cookies.txt 'https://delivery.contenthunter.ru/api/publish/tasks?limit=5&cursor=not-base64-!!!' | jq 'has("rows")'
+curl -sS -b "$(sed 's/^Cookie: //' /tmp/dc-cookies.txt)" 'https://delivery.contenthunter.ru/api/publish/tasks?limit=5&cursor=not-base64-!!!' | jq 'has("rows")'
 # expected: true (мусор интерпретируется как "нет курсора" — отдаём первую страницу)
 
 # limit clamping
-curl -sS -b /tmp/dc-cookies.txt 'https://delivery.contenthunter.ru/api/publish/tasks?limit=10000' | jq '.rows | length'
+curl -sS -b "$(sed 's/^Cookie: //' /tmp/dc-cookies.txt)" 'https://delivery.contenthunter.ru/api/publish/tasks?limit=10000' | jq '.rows | length'
 # expected: <= 500
 ```
 
@@ -453,7 +453,7 @@ app.get('/api/publish/tasks/stats', requireAuth, async (req, res) => {
 ```bash
 sudo pm2 reload autowarm
 sleep 1
-curl -sS -b /tmp/dc-cookies.txt 'https://delivery.contenthunter.ru/api/publish/tasks/stats' | jq
+curl -sS -b "$(sed 's/^Cookie: //' /tmp/dc-cookies.txt)" 'https://delivery.contenthunter.ru/api/publish/tasks/stats' | jq
 ```
 
 Ожидаем: `{ "total": <int>, "by_status": { "done": <int>, "failed": <int>, ... } }`. Значения — целые числа. `total` равен сумме всех `by_status`.
@@ -461,7 +461,7 @@ curl -sS -b /tmp/dc-cookies.txt 'https://delivery.contenthunter.ru/api/publish/t
 - [ ] **Step 3: Smoke с фильтром**
 
 ```bash
-curl -sS -b /tmp/dc-cookies.txt 'https://delivery.contenthunter.ru/api/publish/tasks/stats?status=done' | jq
+curl -sS -b "$(sed 's/^Cookie: //' /tmp/dc-cookies.txt)" 'https://delivery.contenthunter.ru/api/publish/tasks/stats?status=done' | jq
 ```
 
 Ожидаем: `total` = `by_status.done`, других ключей нет.
@@ -470,7 +470,7 @@ curl -sS -b /tmp/dc-cookies.txt 'https://delivery.contenthunter.ru/api/publish/t
 
 ```bash
 PGPASSWORD=openclaw123 psql -h localhost -U openclaw -d openclaw -tAc 'SELECT COUNT(*) FROM publish_tasks'
-curl -sS -b /tmp/dc-cookies.txt 'https://delivery.contenthunter.ru/api/publish/tasks/stats' | jq '.total'
+curl -sS -b "$(sed 's/^Cookie: //' /tmp/dc-cookies.txt)" 'https://delivery.contenthunter.ru/api/publish/tasks/stats' | jq '.total'
 ```
 
 Числа должны совпадать.
@@ -546,7 +546,7 @@ sleep 1
 IDS=$(PGPASSWORD=openclaw123 psql -h localhost -U openclaw -d openclaw -tAc 'SELECT id FROM publish_tasks ORDER BY id DESC LIMIT 3' | tr '\n' ',' | sed 's/,$//')
 echo "IDs: $IDS"
 
-curl -sS -b /tmp/dc-cookies.txt "https://delivery.contenthunter.ru/api/publish/tasks/by-ids?ids=$IDS" | jq '.rows | length'
+curl -sS -b "$(sed 's/^Cookie: //' /tmp/dc-cookies.txt)" "https://delivery.contenthunter.ru/api/publish/tasks/by-ids?ids=$IDS" | jq '.rows | length'
 ```
 
 Ожидаем: 3.
@@ -556,7 +556,7 @@ curl -sS -b /tmp/dc-cookies.txt "https://delivery.contenthunter.ru/api/publish/t
 ```bash
 # Найдём ID с status=done и проверим, что с фильтром status=running ответ пустой
 DONE_ID=$(PGPASSWORD=openclaw123 psql -h localhost -U openclaw -d openclaw -tAc "SELECT id FROM publish_tasks WHERE status='done' LIMIT 1")
-curl -sS -b /tmp/dc-cookies.txt "https://delivery.contenthunter.ru/api/publish/tasks/by-ids?ids=$DONE_ID&status=running" | jq '.rows | length'
+curl -sS -b "$(sed 's/^Cookie: //' /tmp/dc-cookies.txt)" "https://delivery.contenthunter.ru/api/publish/tasks/by-ids?ids=$DONE_ID&status=running" | jq '.rows | length'
 ```
 
 Ожидаем: 0 (строка отфильтрована).
@@ -564,13 +564,13 @@ curl -sS -b /tmp/dc-cookies.txt "https://delivery.contenthunter.ru/api/publish/t
 - [ ] **Step 4: Negative — мусор в ids**
 
 ```bash
-curl -sS -b /tmp/dc-cookies.txt 'https://delivery.contenthunter.ru/api/publish/tasks/by-ids?ids=abc,def' | jq '.rows | length'
+curl -sS -b "$(sed 's/^Cookie: //' /tmp/dc-cookies.txt)" 'https://delivery.contenthunter.ru/api/publish/tasks/by-ids?ids=abc,def' | jq '.rows | length'
 ```
 
 Ожидаем: 0 (мусор отброшен фильтром `Number.isInteger`).
 
 ```bash
-curl -sS -o /dev/null -w "%{http_code}\n" -b /tmp/dc-cookies.txt 'https://delivery.contenthunter.ru/api/publish/tasks/by-ids?ids='$(seq -s, 1 501)
+curl -sS -o /dev/null -w "%{http_code}\n" -b "$(sed 's/^Cookie: //' /tmp/dc-cookies.txt)" 'https://delivery.contenthunter.ru/api/publish/tasks/by-ids?ids='$(seq -s, 1 501)
 ```
 
 Ожидаем: 400.
