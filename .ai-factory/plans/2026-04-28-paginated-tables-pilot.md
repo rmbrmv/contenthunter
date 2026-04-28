@@ -220,6 +220,35 @@ function buildPublishTasksFilters(query) {
 
 app.get('/api/publish/tasks', requireAuth, async (req, res) => {
   try {
+    // === BACKWARDS-COMPAT: если клиент не передал ни limit, ни cursor —
+    // отдаём старый формат (плоский массив, без пагинации, без фильтров),
+    // чтобы существующий фронт не сломался между Task 3 и Task 8.
+    // Удалить этот блок одновременно с этапом 2 (когда фронт переехал
+    // на новый формат и больше не зовёт endpoint без параметров).
+    const isLegacyCall = req.query.limit === undefined && req.query.cursor === undefined;
+    if (isLegacyCall) {
+      const { rows } = await pool.query(`
+        SELECT pt.*,
+               pq.media_url   AS s3_url,
+               pq.scheduled_at AS pq_scheduled_at,
+               COALESCE(pq.pack_name,
+                 (SELECT fpa2.pack_name FROM factory_pack_accounts fpa2
+                  JOIN factory_device_numbers fdn2 ON fdn2.id = fpa2.device_num_id
+                  WHERE fdn2.device_id = pt.device_serial LIMIT 1)
+               ) AS pack_name,
+               fdn.device_number,
+               COALESCE(ut.input_video_name, '') AS video_name
+        FROM publish_tasks pt
+        LEFT JOIN publish_queue pq ON pq.publish_task_id = pt.id
+        LEFT JOIN factory_device_numbers fdn ON fdn.device_id = pt.device_serial
+        LEFT JOIN unic_results ur ON ur.id = pq.unic_result_id
+        LEFT JOIN unic_tasks ut ON ut.id = ur.task_id
+        ORDER BY pt.id DESC
+      `);
+      return res.json(rows);   // legacy shape: array
+    }
+    // === END BACKWARDS-COMPAT ===
+
     // 1. sort
     const sortKey = String(req.query.sort || 'id');
     const sortCol = PUBLISH_TASKS_SORT_WHITELIST[sortKey];
@@ -292,13 +321,22 @@ app.get('/api/publish/tasks', requireAuth, async (req, res) => {
 });
 ```
 
-⚠️ **Backwards-compat**: старая фронт-логика ожидает массив; новый формат — `{rows, next_cursor, has_more}`. Это сломает прод до деплоя нового фронта. Поэтому **этот шаг и Task 8 (фронт) должны коммититься, тестироваться и деплоиться вместе** (в рамках одной ветки и одного PR). Не пушить в main, пока оба не готовы.
+✅ **Backwards-compat встроен** в начало handler'а: если клиент не передал `limit` и `cursor`, endpoint отдаёт старый формат (массив). Это значит, что pm2 reload между Task 3 и Task 8 безопасен — старый фронт продолжает работать. Backwards-compat блок будет удалён в этапе 2, когда фронт перестанет вызывать endpoint без параметров.
 
-- [ ] **Step 3: pm2 reload и smoke**
+- [ ] **Step 3: pm2 reload и smoke (backwards-compat)**
 
 ```bash
 pm2 reload all
 sleep 1
+# BC: запрос без новых параметров должен вернуть старый плоский массив
+curl -sS -b /tmp/dc-cookies.txt 'https://delivery.contenthunter.ru/api/publish/tasks' | jq 'type'
+```
+
+Ожидаем: `"array"` (legacy shape сохранён). Если `"object"` — backwards-compat сломан, разобраться.
+
+- [ ] **Step 3b: smoke с новыми параметрами**
+
+```bash
 curl -sS -b /tmp/dc-cookies.txt 'https://delivery.contenthunter.ru/api/publish/tasks?limit=5' | jq
 ```
 
@@ -363,8 +401,9 @@ cd /root/.openclaw/workspace-genri/autowarm/
 git add server.js
 git commit -m "feat(api): publish/tasks cursor-based pagination + server-side filters/sort
 
-BREAKING: response shape changed from [...] to { rows, next_cursor, has_more }.
-Frontend update follows in next commit."
+When request has no 'limit'/'cursor' params, endpoint returns legacy array
+format (backwards-compat for old frontend). With pagination params — new
+{rows, next_cursor, has_more} shape. BC layer removed in iteration 2."
 ```
 
 ---
