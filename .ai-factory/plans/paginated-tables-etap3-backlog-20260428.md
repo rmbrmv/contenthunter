@@ -17,13 +17,13 @@
 
 | # | Endpoint | Размер | Live? | Заметки |
 |---|---|---|---|---|
-| ~~1~~ | ~~`/api/archive/tasks`~~ ✅ closed 2026-04-29 (commits `512fd80`+`af2ffd1`) | 6 360 строк | ❌ | Composite index применён, cost 484→7.9 (60×). Pattern для остальных. |
-| 2 | `/api/unic/tasks` | 1 540 | ✅ | Активная очередь уникализации. liveRefresh=true. |
-| 3 | `/api/factory/tasks` + `/api/factory/accounts` | 1 253 | ✅ | factory_inst_accounts. Может быть составным (две таблицы на одной странице). |
-| 4 | `/api/whatsapp/tasks` | ? | ✅ | Размер уточнить EXPLAIN'ом. |
-| 5 | `/api/telegram/tasks` | ? | ✅ | Аналогично. |
-| 6 | `/api/phone-warm/tasks` | ? | ✅ | Минор по объёму, но «за единообразие». |
-| 7 | `/api/tasks` (общий) | ? | ? | Аудит на этапе планирования: мигрировать или дропнуть как legacy. |
+| ~~1~~ | ~~`/api/archive/tasks`~~ ✅ closed 2026-04-29 (`512fd80`+`af2ffd1`) | 6 360 | ❌ | Full migration: composite index + frontend factory. |
+| ~~2~~ | ~~`/api/unic/tasks`~~ ✅ server done 2026-04-29 (`d880a3f`) | 1 542 | ✅ | UI deferred — div-list, factory designed для tbody. BC layer работает. |
+| ~~3~~ | ~~`/api/factory/tasks` + `/api/factory/accounts`~~ ✅ server done 2026-04-29 (`d880a3f`) | 44 + 44 | ✅ | UI deferred — small N не оправдывает rework. |
+| ~~4~~ | ~~`/api/whatsapp/tasks`~~ ✅ server done 2026-04-29 (`d880a3f`) | 0 | ✅ | UI deferred — пустая таблица. |
+| ~~5~~ | ~~`/api/telegram/tasks`~~ ✅ server done 2026-04-29 (`d880a3f`) | 0 | ✅ | UI deferred — пустая таблица. |
+| ~~6~~ | ~~`/api/phone-warm/tasks`~~ ✅ server done 2026-04-29 (`d880a3f`) | 1 | ✅ | UI deferred — 1 row. |
+| ~~7~~ | ~~`/api/tasks`~~ ✅ server done 2026-04-29 (`d880a3f`) | 315 | ✅ | UI keeps existing custom `tasks-pagination` div, BC layer. |
 
 **Чек-лист каждой миграции:**
 1. [ ] EXPLAIN для дефолтной сортировки (+ для cursor-предиката `(sort_col, id) cmpOp (...)`). Если Seq Scan + Sort на >5k строк — добавить композитный индекс отдельной миграцией ДО endpoint'а.
