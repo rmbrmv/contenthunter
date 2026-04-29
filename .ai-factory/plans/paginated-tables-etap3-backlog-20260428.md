@@ -17,7 +17,7 @@
 
 | # | Endpoint | Размер | Live? | Заметки |
 |---|---|---|---|---|
-| 1 | `/api/archive/tasks` | 6 360+ строк | ❌ | Самая большая, юзер заметит ускорение. liveRefresh=false. **EXPLAIN обязателен** — добавить композитный индекс если cursor-path делает Seq Scan + Sort. |
+| ~~1~~ | ~~`/api/archive/tasks`~~ ✅ closed 2026-04-29 (commits `512fd80`+`af2ffd1`) | 6 360 строк | ❌ | Composite index применён, cost 484→7.9 (60×). Pattern для остальных. |
 | 2 | `/api/unic/tasks` | 1 540 | ✅ | Активная очередь уникализации. liveRefresh=true. |
 | 3 | `/api/factory/tasks` + `/api/factory/accounts` | 1 253 | ✅ | factory_inst_accounts. Может быть составным (две таблицы на одной странице). |
 | 4 | `/api/whatsapp/tasks` | ? | ✅ | Размер уточнить EXPLAIN'ом. |
