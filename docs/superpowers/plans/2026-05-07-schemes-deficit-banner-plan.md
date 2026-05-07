@@ -1,4 +1,4 @@
-# Schemes Deficit Banner — Implementation Plan
+# Schemes Deficit Banner — Implementation Plan (v2)
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
@@ -119,27 +119,39 @@ TEST_PROJECT_ID = -901
 
 
 async def _seed_project_with_packs_and_approved(db, project_id: int, n_packs: int, n_approved: int):
-    """Create n_packs in factory_pack_accounts + n_approved scheme preferences (approved)."""
+    """Create n_packs in factory_pack_accounts + n_approved scheme preferences (approved).
+
+    Fixture invariants:
+    - project_id MUST be negative (caller responsibility) to avoid prod-data collision.
+    - pack_id формула: BASE_PACK_ID + |project_id|*100 + i, где BASE_PACK_ID < -100000 — гарантирует negative и no collision.
+    - scheme_id отдельный диапазон [-1, -50] (общий между всеми тестовыми проектами; ON CONFLICT upsert).
+    """
+    BASE_PACK_ID = -1_000_000
     # 1. Cleanup any prior fixtures for this project_id
     await db.execute(text("DELETE FROM validator_scheme_preferences WHERE project_id = :pid"), {"pid": project_id})
     await db.execute(text("DELETE FROM factory_pack_accounts WHERE project_id = :pid"), {"pid": project_id})
     await db.commit()
 
-    # 2. Create packs (negative ids, base = -1000)
+    # 2. Create packs — гарантированно negative, гарантированно no collision (per-project block of 100 IDs)
     for i in range(n_packs):
+        pack_id = BASE_PACK_ID - abs(project_id) * 100 - i
+        # pack_id < -1_000_000 always; collision impossible with prod (positive ids).
         await db.execute(text("""
             INSERT INTO factory_pack_accounts (id, project_id, pack_name)
             VALUES (:id, :pid, :name)
-            ON CONFLICT (id) DO NOTHING
-        """), {"id": -1000 - i - (project_id * 100), "pid": project_id, "name": f"test_pack_{i}"})
+        """), {"id": pack_id, "pid": project_id, "name": f"test_pack_p{abs(project_id)}_{i}"})
+        # NB: NO ON CONFLICT — pack_id is unique per (project, i) by construction.
+        # Если падает duplicate key — означает что cleanup не отработал, fix cleanup, не conflict-skip.
 
-    # 3. Create unic_schemes (-1 .. -n) и approved preferences
+    # 3. Create unic_schemes (id < 0, общие между тестовыми проектами; не делать DELETE'а в beforeEach потому что разделяются)
     for i in range(n_approved):
-        scheme_id = -1 - i
+        scheme_id = -1 - i  # [-1, -2, ..., -n_approved]
         await db.execute(text("""
             INSERT INTO unic_schemes (id, status) VALUES (:sid, true)
             ON CONFLICT (id) DO UPDATE SET status = true
         """), {"sid": scheme_id})
+        # validator_scheme_preferences UNIQUE (project_id, scheme_id) — uq_project_scheme.
+        # ON CONFLICT работает с этим constraint name.
         await db.execute(text("""
             INSERT INTO validator_scheme_preferences (project_id, scheme_id, status)
             VALUES (:pid, :sid, 'approved')
@@ -150,9 +162,21 @@ async def _seed_project_with_packs_and_approved(db, project_id: int, n_packs: in
 
 
 async def _cleanup_project(db, project_id: int):
+    """Cleanup all fixtures for a single project. Schemes (negative ids) — глобальные,
+    не тримим (могут быть нужны другим тестам в той же сессии). Module-level cleanup
+    добавим в conftest при необходимости."""
     await db.execute(text("DELETE FROM validator_scheme_preferences WHERE project_id = :pid"), {"pid": project_id})
     await db.execute(text("DELETE FROM factory_pack_accounts WHERE project_id = :pid"), {"pid": project_id})
     await db.commit()
+
+
+# Module-teardown: tidy up shared unic_schemes (negative ids) после всех тестов
+@pytest.fixture(scope="module", autouse=True)
+def _cleanup_module_unic_schemes(request):
+    yield
+    # Sync cleanup using sync engine if available, otherwise leak is benign (negative ids)
+    # Если sync engine отсутствует — пропустить, фикстуры не мешают (ids в [-1,-50] безопасны).
+    pass  # implementer fills in if test runner needs explicit sync teardown
 
 
 @pytest_asyncio.fixture
@@ -308,23 +332,29 @@ Source-of-truth for deficits banner."
 В тот же `backend/tests/test_schemes_deficits.py` добавить (в конец):
 
 ```python
-from httpx import AsyncClient
+from httpx import AsyncClient, ASGITransport
 from src.main import app  # FastAPI instance
 
 
 @pytest_asyncio.fixture
 async def http_client():
-    async with AsyncClient(app=app, base_url="http://test") as client:
+    # Codex IMPORTANT #9: используем ASGITransport вместо `app=app` (deprecated в новых httpx)
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="http://test") as client:
         yield client
 
 
-# Helper: build session cookie for a test user
+# STOP-POINT: Helper _login_as_role MUST be replaced before continuing to Step 1B.4.
+# См. backend/tests/test_accounts_endpoint.py (или другой существующий тест с auth)
+# для установленного паттерна логина. Копируем оттуда:
+#  - либо direct token injection через `Authorization: Bearer <token>`
+#  - либо session cookie через прямое создание ValidatorUser в БД + создание session
+#  - либо app-fixture с auth-bypass middleware
 async def _login_as_role(client: AsyncClient, db: AsyncSession, role: str, project_id=None, project_ids=None):
-    """Return cookies dict for an authenticated test user. Uses minimal user creation
-    + login flow that the existing test_accounts_endpoint uses."""
-    # See backend/tests/test_accounts_endpoint.py for the established login pattern.
-    # The implementation MUST mirror that pattern; if it differs, STOP and ask.
-    raise NotImplementedError("see test_accounts_endpoint.py for login pattern; copy exact mechanism")
+    raise NotImplementedError(
+        "Step 1B.2.5: implementer MUST replace this stub by inspecting "
+        "backend/tests/test_accounts_endpoint.py or similar и копируя exact login mechanism."
+    )
 
 
 # B1: client with deficit project_id → 1 entry
@@ -350,20 +380,81 @@ async def test_endpoint_client_with_deficit_returns_one_entry(http_client, db_se
 
 ```bash
 cd /home/claude-user/validator-contenthunter/backend
-grep -nE "login|cookies|auth" tests/test_accounts_endpoint.py | head -20
-cat tests/test_accounts_endpoint.py | head -80
+grep -nE "login|cookies|auth|get_current_user|ValidatorUser" tests/test_accounts_endpoint.py | head -20
+cat tests/test_accounts_endpoint.py | head -100
+# Если этот тест не имеет login pattern — поискать в других:
+grep -rlE "AsyncClient|TestClient" tests/ | head -5
 ```
 
-Document the pattern in your scratchpad. Common patterns:
+Document the pattern in scratchpad. Common patterns:
 - Direct token injection via `Authorization: Bearer <token>`
-- Session cookie via direct DB insertion
-- App fixture with auth-bypass middleware
+- Session cookie via direct DB insertion (e.g. INSERT INTO validator_users + INSERT INTO validator_sessions)
+- FastAPI dependency override via `app.dependency_overrides[get_current_user] = ...`
 
 Use whatever the existing test file uses. **No new login mechanism.**
 
+- [ ] **Step 1B.2.5: Replace _login_as_role stub with copied helper (Codex IMPORTANT #4)**
+
+ОБЯЗАТЕЛЬНЫЙ STOP-POINT перед Step 1B.4. До этого шага `_login_as_role` raise'ит NotImplementedError. Реализовать helper строго по паттерну из Step 1B.2.
+
+Most likely pattern (FastAPI dependency override) — пример:
+
+```python
+# В _login_as_role:
+async def _login_as_role(client, db, role: str, project_id=None, project_ids=None):
+    # Создать тест-юзера в БД с нужной ролью и project access
+    user_result = await db.execute(text("""
+        INSERT INTO validator_users (email, role, project_id, project_ids, password_hash)
+        VALUES (:email, :role, :pid, :pids, 'test-hash')
+        RETURNING id
+    """), {
+        "email": f"test-{role}-{uuid.uuid4().hex[:8]}@test.local",
+        "role": role,
+        "pid": project_id,
+        "pids": project_ids,
+    })
+    user_id = user_result.scalar()
+    await db.commit()
+
+    # Override get_current_user dependency for this client/test
+    from src.dependencies import get_current_user
+    from src.models.user import ValidatorUser
+    test_user = ValidatorUser(
+        id=user_id, role=role, project_id=project_id, project_ids=project_ids
+    )
+    app.dependency_overrides[get_current_user] = lambda: test_user
+    return {}  # пустой cookies dict — auth уже override'нут
+```
+
+(Если в репо уже есть готовый helper — переиспользовать его; этот пример — backup.)
+
+Verify ОДНИМ smoke-тестом перед Step 1B.4:
+
+```python
+@pytest.mark.asyncio
+async def test_smoke_auth_helper_works(http_client, db_session):
+    """Sanity check that login helper produces an authenticated client."""
+    cookies = await _login_as_role(http_client, db_session, "admin")
+    resp = await http_client.get("/api/schemes/deficits", cookies=cookies)
+    # 200 (даже если массив пустой) means auth работает
+    assert resp.status_code == 200
+```
+
+Прогнать: `pytest tests/test_schemes_deficits.py::test_smoke_auth_helper_works -v`. Только когда smoke зелёный — переходить к Step 1B.4.
+
+Если smoke падает с auth-related ошибкой — фиксить helper до тех пор пока не пройдёт (НЕ chase'ить через test изменения).
+
 - [ ] **Step 1B.3: Implement endpoint in `routers/schemes.py`**
 
-В `backend/src/routers/schemes.py` добавить (после существующего `schemes_summary_by_project`, около line 70):
+⚠️ **Codex IMPORTANT #8 — FastAPI route order:** Endpoint `/deficits` должен быть зарегистрирован ДО любого dynamic route с `{...}` в path. Проверить:
+
+```bash
+grep -nE "@router\.(get|post)\b" /home/claude-user/validator-contenthunter/backend/src/routers/schemes.py | head -10
+```
+
+Если есть `@router.get("/{anything}")` (без статического префикса) — наш `/deficits` нужно ставить ВЫШЕ него. Текущий router использует static-prefix paths (`/`, `/summary`, `/summary/{project_id}`, `/readiness/{project_id}`) — все имеют unambiguous match по static segments, поэтому `/deficits` можно добавить anywhere между ними. Безопасный порядок — ВЫШЕ всех `/{...}` routes:
+
+В `backend/src/routers/schemes.py` добавить **ПОСЛЕ `/summary` static route, но ДО `/summary/{project_id}` dynamic** (около line 60–69):
 
 ```python
 @router.get("/deficits")
@@ -586,7 +677,12 @@ cd /home/claude-user/validator-contenthunter/backend
 python -m pytest tests/test_schemes_deficits.py -v 2>&1 | tail -20
 ```
 
-Expected: 11 passed (4 service-level + B1, B2, B3, B4, B5, B5b, B7, B8, B9, B10 = 13 actually; verify count).
+Expected: **14 passed** total. Breakdown:
+- 4 service-level (Subtask 1A: empty, deficit-found, full-coverage, no-packs)
+- 1 auth-smoke (Step 1B.2.5: helper smoke)
+- 9 endpoint tests (B1, B2, B3, B4, B5, B5b, B7, B8, B9, B10)
+
+(B6 — "проект без packs" — покрыт service-level test_get_deficits_filters_no_packs, не дублируется на endpoint уровне.)
 
 If any test fails because of login helper issue, return to Step 1B.2 — likely the helper signature differs from what's needed.
 
@@ -991,9 +1087,64 @@ hasDeficit prop renders red text badge inline with slot content.
 Tooltip configurable via deficitTooltip prop."
 ```
 
-### Subtask 6B — ClientDashboard.vue inline-slot badge
+### Subtask 6B — Wire `<SlotCard>` consumers to pass `:has-deficit` (Codex BLOCKER #2)
 
-- [ ] **Step 6B.1: Read ClientDashboard.vue inline slot template**
+Без этого шага badge добавлен в SlotCard.vue, но never receives `hasDeficit=true` от родителей. Manager-side рендеринг останется без badge'а.
+
+- [ ] **Step 6B.1: Find every `<SlotCard>` usage**
+
+```bash
+cd /home/claude-user/validator-contenthunter
+grep -rnE "<SlotCard\b" frontend/src/ | head -10
+```
+
+Ожидаемые места — manager dashboard и/или admin views. Каждое такое место — точка для wire'инга.
+
+- [ ] **Step 6B.2: Pass `:has-deficit` and tooltip prop in each consumer**
+
+Для каждой найденной `<SlotCard ... />` строки добавить (где `slot` — итерируемая переменная цикла):
+
+```vue
+<SlotCard
+  :slot="slot"
+  ...existing-props...
+  :has-deficit="hasDeficitFor(slot.project_id)"
+  :deficit-tooltip="deficitFor(slot.project_id) ? `Одобрено ${deficitFor(slot.project_id)?.approved} из ${deficitFor(slot.project_id)?.min_required} схем уникализации` : ''"
+/>
+```
+
+В каждом консумере убедиться что:
+1. `useSchemesDeficits()` импортирован в этом родительском компоненте.
+2. `{ hasDeficitFor, deficitFor }` извлечены из composable.
+3. Composable вызывается на mount (или родитель passes `deficits` prop, и сам `<SlotCard>`-консумер вычисляет `hasDeficit` локально).
+
+Если родителей много (≥3) и логика дублируется — extracted в shared composable вызов уже есть; всё чисто.
+
+Если нет родителей с `<SlotCard>` (только SlotCard был использован в одном месте) — STOP, прояснить с пользователем нужен ли badge в этом use-case или sliced.
+
+- [ ] **Step 6B.3: TypeScript check после всех wire'инг'ов**
+
+```bash
+cd /home/claude-user/validator-contenthunter/frontend
+npx vue-tsc --noEmit 2>&1 | grep -E "SlotCard|hasDeficit|deficitFor" | head -15
+```
+
+Expected: 0 errors. Если родители ругаются на `slot.project_id` тип — typing fix (likely добавить в slot interface).
+
+- [ ] **Step 6B.4: Commit Subtask 6B**
+
+```bash
+git add frontend/src/  # или конкретные файлы родителей <SlotCard>
+git commit -m "feat(frontend): wire :has-deficit prop to all SlotCard consumers
+
+Each parent component using <SlotCard> now imports useSchemesDeficits
+and passes hasDeficitFor(slot.project_id) + tooltip. Badge renders
+across all manager-side renderers."
+```
+
+### Subtask 6C — ClientDashboard.vue inline-slot badge
+
+- [ ] **Step 6C.1: Read ClientDashboard.vue inline slot template**
 
 ```bash
 sed -n '120,180p' /home/claude-user/validator-contenthunter/frontend/src/pages/client/ClientDashboard.vue
@@ -1001,9 +1152,9 @@ sed -n '120,180p' /home/claude-user/validator-contenthunter/frontend/src/pages/c
 
 Find where `slot.content_title` is rendered (line ~161 per recon).
 
-- [ ] **Step 6B.2: Add badge HTML inline (analogue to SlotCard.vue)**
+- [ ] **Step 6C.2: Add badge HTML inline (analogue to SlotCard.vue)**
 
-Найти строку типа:
+Найти строку типа (line ~161 per recon):
 ```vue
 <div class="text-xs font-medium text-gray-700 truncate">{{ slot.content_title || 'Контент' }}</div>
 ```
@@ -1020,11 +1171,11 @@ Find where `slot.content_title` is rendered (line ~161 per recon).
 </span>
 ```
 
-(`hasDeficitFor` и `deficitFor` будут доступны через composable — добавим в Task 7.)
+(`hasDeficitFor` и `deficitFor` доступны через composable — добавляются в Task 7.)
 
-- [ ] **Step 6B.3: TypeScript check** (badge ссылается на функции, которые ещё не импортированы — это пока чёрная box; компиляция упадёт; не commit'ить пока)
+- [ ] **Step 6C.3: TypeScript check будет в Task 7**
 
-Шаг ничего не делаем — просто фикcируем что эта строка есть. Компиляция пройдёт после Task 7.
+Не запускать tsc сейчас (badge ссылается на функции, которые ещё не импортированы). Compile-check пройдёт после Task 7.5. Этот subtask без отдельного commit'a — изменения войдут в commit Task 7.7 вместе с wire'ингом.
 
 ---
 
@@ -1053,27 +1204,42 @@ import { useAuthStore } from '@/stores/auth';
 
 (Если `useAuthStore` уже импортирован — пропустить эту часть; нужен только для `userRole`.)
 
-- [ ] **Step 7.3: Initialize composable + lifecycle**
+- [ ] **Step 7.3: Initialize composable + lifecycle (ПОСЛЕ существующих state declarations, не сразу после import'ов)**
 
-В `<script setup>` после import'ов:
+Codex BLOCKER #1: разместить блок **ПОСЛЕ** существующих `const viewMode = ref(...)` и `const selectedProjectId = ref(...)` (или их computed-аналогов) — иначе watch попадёт в JS temporal dead zone.
+
+Рабочий процесс:
+1. `grep -nE "const (viewMode|selectedProjectId|isClient|allProjects)" frontend/src/pages/client/ClientDashboard.vue` — найти точные строки.
+2. **Adapt prop names**: если viewMode называется иначе (например `mode` или `currentView`) — использовать настоящие имена.
+3. Вставить блок **сразу после последней из этих declarations**, ДО `onMounted` (если onMounted уже есть — добавить fetchDeficits в существующий onMounted; не создавать второй).
 
 ```typescript
+// ВСТАВИТЬ ПОСЛЕ существующих ref'ов viewMode/selectedProjectId/isClient
+import { computed, watch, onMounted, onActivated } from 'vue';  // добавить недостающие
+import { useRoute } from 'vue-router';
+
 const { deficits, fetch: fetchDeficits, hasDeficitFor, deficitFor } = useSchemesDeficits();
-const auth = useAuthStore();
 const userRole = computed(() => auth.user?.role ?? 'client');
+const route = useRoute();
 
-onMounted(() => {
+// Codex IMPORTANT #7: refetch при возврате на /dashboard (если используется keep-alive)
+function refetchDeficits() {
   fetchDeficits();
-});
+}
 
-// Refetch on viewMode/selectedProject change OR on route re-entry to /dashboard
+onMounted(refetchDeficits);
+// onActivated срабатывает при возврате на keep-alive'нутый компонент;
+// если keep-alive не используется — onMounted уже отработает на каждый mount.
+onActivated(refetchDeficits);
+
+// Refetch при изменении viewMode/selectedProjectId
 watch(
   () => [viewMode.value, selectedProjectId.value],
-  () => fetchDeficits(),
+  refetchDeficits,
 );
 ```
 
-Если `viewMode` и `selectedProjectId` имеют другие имена в этом файле — pre-flight найти настоящие имена.
+Если в файле уже есть `import { ref, ... } from 'vue'` — добавить недостающие имена в существующий import. Если есть `useAuthStore()` уже — переиспользовать существующий instance, не создавать новый.
 
 - [ ] **Step 7.4: Mount banner in template**
 
@@ -1099,14 +1265,16 @@ npx vue-tsc --noEmit 2>&1 | grep -E "ClientDashboard|SchemesDeficitBanner|useSch
 
 Expected: 0 errors. Если есть — фиксить inline, не commit'ить пока.
 
-- [ ] **Step 7.6: `npm run build` — auto-postbuild доставит в /var/www/validator/**
+- [ ] **Step 7.6: TS check — `vue-tsc --noEmit` (БЕЗ `npm run build`)**
+
+⚠️ **НЕ запускать `npm run build`** на этом этапе. У `frontend/package.json` есть `postbuild` хук, который копирует артефакты в `/var/www/validator/` — это **deploys frontend к live**. Backend ещё не задеплоен (Codex BLOCKER #3). Build делаем только в Step 9.4 ПОСЛЕ backend smoke.
 
 ```bash
 cd /home/claude-user/validator-contenthunter/frontend
-npm run build 2>&1 | tail -30
+npx vue-tsc --noEmit 2>&1 | grep -E "ClientDashboard|SchemesDeficitBanner|SlotCard|useSchemesDeficits|api/schemes" | head -15
 ```
 
-Expected: build success, postbuild copies to /var/www/validator/.
+Expected: 0 errors. Если есть — фиксить inline.
 
 - [ ] **Step 7.7: Commit (everything wired)**
 
@@ -1289,7 +1457,36 @@ npm run build  # postbuild автокопирует в /var/www/validator/
 
 Открыть `https://client.contenthunter.ru/dashboard` (под client/admin/manager аккаунтами по очереди), применить чеклист из Task 8 (Steps 8.2-8.6).
 
-- [ ] **Step 9.6: Commit deploy evidence**
+- [ ] **Step 9.6: Write deploy evidence document**
+
+Создать `docs/evidence/2026-05-07-schemes-deficit-banner-deploy.md` (в repo `contenthunter`, не validator):
+
+```markdown
+# Deploy: SchemesDeficitBanner (date)
+
+## Branch + commits
+- Feature branch: `feature/schemes-deficit-banner-2026-05-07`
+- Merged commit: <merge_sha>
+- Files changed: backend/src/routers/schemes.py, backend/src/services/schemes_service.py, backend/tests/test_schemes_deficits.py, frontend/src/{api,composables,components,pages/client}/...
+
+## Pre-flight
+- Audit current deficits on prod DB: <expected count from Step 0.3>
+- Login pattern source: <link to test_accounts_endpoint.py or other>
+
+## Deploy steps executed
+1. [time] Backend merged to prod main
+2. [time] PM2 restart validator → uptime 0s, restart count <N→N+1>
+3. [time] Backend curl smoke per role:
+   - Client: <result>
+   - Manager: <result>
+   - Admin: <returned N deficits, expected ~6>
+   - Spoofed query param: <ignored ✓>
+4. [time] Frontend `npm run build` → /var/www/validator/ updated
+5. [time] Manual smoke checklist (см. -smoke.md)
+
+## Rollback steps (если применилось)
+- `git revert <merge_sha>` + `pm2 restart validator`. No DB rollback needed.
+```
 
 ```bash
 cd /home/claude-user/contenthunter
@@ -1344,4 +1541,17 @@ git push -u origin feature/schemes-deficit-banner-2026-05-07
 
 ## Codex review iterations
 
-- Plan v1 (этот документ) — на review pending. Если найдутся blocker'ы — apply inline и пересохранить.
+- Plan v1 — Codex review: 3 BLOCKER + 6 IMPORTANT + 3 MINOR. APPROVE-WITH-CHANGES.
+  - BLOCKER #1: TDZ в Task 7 (composable wired до state declarations) — fixed v2.
+  - BLOCKER #2: SlotCard prop never wired by parents — Subtask 6B added v2.
+  - BLOCKER #3: `npm run build` triggers postbuild deploy перед backend deploy — Step 7.6 теперь только `vue-tsc --noEmit`.
+  - IMPORTANT #4: _login_as_role STOP-point insufficient — Step 1B.2.5 added v2 с конкретным helper'ом + smoke test.
+  - IMPORTANT #5: pack ID formula collision risk — fixed v2 (BASE_PACK_ID=-1_000_000, no ON CONFLICT).
+  - IMPORTANT #6: ClientDashboard speculative names — Step 7.3 теперь explicitly требует pre-flight grep + adapt.
+  - IMPORTANT #7: route re-entry refetch — onActivated() добавлен.
+  - IMPORTANT #8: FastAPI route order — Step 1B.3 теперь требует grep на dynamic routes.
+  - IMPORTANT #9: httpx ASGITransport — fixed.
+  - MINOR #11: test count — fixed (14 expected).
+  - MINOR #12: deploy evidence content — Step 9.6 теперь имеет явный template.
+
+- Plan v2 (текущий документ) — все BLOCKER + IMPORTANT applied. Ожидаемый APPROVE на следующем review.
