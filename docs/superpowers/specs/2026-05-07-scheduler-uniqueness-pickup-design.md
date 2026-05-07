@@ -1,164 +1,312 @@
 # Sub-project A — Scheduler→Uniqueness Pickup Sweep
 
 **Date:** 2026-05-07
-**Author:** brainstorming session (Claude Opus 4.7 + Danil)
 **Status:** Design — pending implementation plan
+**Revision:** v2 (post-Codex review)
 
 ## Problem
 
 Клиенты планируют контент в `client.contenthunter.ru/scheduler`, но запланированные видео не подбираются на этап уникализации и поэтому не доходят до публикации. Production-блокер.
 
-### Root cause (подтверждён по коду)
+### Pipeline сегодня (verified от кода `autowarm-testbench/server.js`)
 
-Pipeline сегодня:
+Уникализация запускается из **двух** мест:
 
-1. Validator при approve контента вызывает webhook
-   `POST http://localhost:3848/api/unic/trigger-immediate {"content_id": <id>}`
-   (`validator-contenthunter/backend/src/services/delivery_webhook.py:14-37`)
-2. autowarm `/api/unic/trigger-immediate` (`autowarm/server.js:5299-5344`) выполняет
-   ```sql
-   SELECT ... FROM validator_schedule_slots s
-   JOIN validator_content c ON c.id = s.content_id
-   WHERE s.content_id = $1
-     AND s.slot_date = $today           -- ← timezone-aware, GMT+4
-     AND s.status = 'filled'
-     AND c.status = 'approved'
-     AND c.moderation_status = 'passed'
-     AND NOT EXISTS (... unic_tasks ...)
+1. **`POST /api/unic/trigger-immediate`** (line 5299–5344) — webhook от validator при approve контента. Жёстко фильтрует `slot_date = today` (GMT+4). Если approve не в день slot_date — `triggered=false`, тихо выходит.
+
+2. **`triggerAutoUnic()`** (line 5500–5549) — `setInterval(..., 30 * 60 * 1000)` на line 5551. **НО** внутри проверяется узкое временное окно:
+   ```javascript
+   if (diff < 0 || diff > 30) return; // только в 30-min окне после (publish_start - prep_hours)
+   if (autoUnicLastTriggeredDate === slotDate) return; // только 1 раз в день
    ```
-3. Если строка нашлась → вызывает `runAutoUnicForDate(today, settings)` —
-   INSERT в `unic_tasks` + UPDATE `validator_content.status='in_uniqualization'`.
-4. Если не нашлась → `triggered=false`, тихо выходит.
+   Срабатывает один раз в день в окне ~05:00 GMT+4 (если `publish_start='09:00'` и `prep_hours=4`). После окна — никаких повторов.
 
-`unic-worker` (`autowarm/unic-worker/worker.py:67-74`) поллит `unic_tasks WHERE current_status='pending'` каждые 3 секунды — игнорируя `slot_date`. То есть worker сам по себе работает корректно, но **никто не положит запись в `unic_tasks`, если на момент approve `slot_date != today`**.
+`autoUnicLastTriggeredDate` — переменная **в памяти процесса**. Перезапуск сервера сбрасывает её, но ловить нечего, если день уже прошёл.
 
-`assignUnicResultsToQueue` (`autowarm/server.js:5784`) — `setInterval(..., 30 * 60 * 1000)` — это уже `unic_results → publish_queue`. До него очередь даже не доходит.
+`unic-worker` (`autowarm/unic-worker/worker.py:67-74`) поллит `unic_tasks WHERE current_status='pending'` каждые 3 секунды — игнорируя `slot_date`. Worker корректен; проблема исключительно в том, что в `unic_tasks` ничего не INSERTится.
 
-Никакого ежедневного крона на `runAutoUnicForDate(today)` нет. Поэтому:
+### Сценарии разрыва pipeline'а
 
-| Сценарий | Сегодня |
-|---|---|
-| approve в день slot_date | ✅ работает (trigger-immediate матчится) |
-| approve **раньше** slot_date | ❌ trigger=false; больше никто не дёрнет |
-| approve **позже** slot_date | ❌ trigger=false; per-policy не лечим |
+| approve | slot_date | trigger-immediate | morning-batch (05:00) | Итог сегодня |
+|---|---|---|---|---|
+| день N, slot=N | то же | ✅ срабатывает | ✅ резерв | ✅ |
+| день N–1, slot=N | завтра на момент approve | ❌ today != slot | ✅ ловит утром N | условно ✅ (ждёт утра) |
+| день N–1, slot=N, **сервер рестартанул в окне 05:00–05:30** на N | — | ❌ | ❌ окно прошло (или window-guard сбросил, но все равно miss) | ❌ |
+| день N+1, slot=N | вчера | ❌ | ❌ N уже прошёл | ❌ (per-policy не лечим) |
+| день N, slot=N, transient DB-сбой в 05:00 | — | ❌ (ещё не approve) | ❌ окно ушло | ❌ |
+| день N, slot=N, approve в 14:00 | — | ✅ | — | ✅ |
+| день N, slot=N, **большой объём slots в окне → таймаут** | — | ❌ | ❌ частично, остаток теряется | ❌ |
+
+### Concurrency-риск (Codex finding #1, verified против схемы)
+
+Схема `unic_tasks` (`\d unic_tasks`):
+
+- PRIMARY KEY (id)
+- Partial **non-unique** index `ix_unic_tasks_content_id` (content_id) WHERE content_id IS NOT NULL
+- **НЕТ unique constraint на `(content_id, slot_date)`**
+
+Текущая защита от дублей в SQL:
+```sql
+NOT EXISTS (SELECT 1 FROM unic_tasks ut
+            WHERE ut.content_id = c.id AND ut.slot_date = $1
+            AND ut.current_status IN ('pending','processing','done'))
+```
+
+Это **read-modify-write race**: при default Postgres READ COMMITTED две одновременные транзакции (trigger-immediate + sweep) могут оба прочитать «not exists» и оба заинсертить.
+
+**Blast radius дубликата**: дубль в `unic_tasks` → worker отрабатывает обе → 2× `unic_results` → `assignUnicResultsToQueue` пушит обе → **двойная публикация на телефонах**. Не ОК.
 
 ## Goals
 
-- Любой `(approved + filled)` слот на сегодняшнюю дату должен попасть в `unic_tasks` максимум через 5 минут после того, как оба условия выполнены.
-- In-day flow (upload до 15:00 → approve → публикация сегодня) сохраняется без регрессии — мгновенный отклик через `trigger-immediate` остаётся.
-- Без новых таблиц, миграций, изменений в validator-стороне.
+- Любой `(content.status='approved' AND moderation_status='passed' AND slot.status='filled' AND slot_date=today)` слот должен попасть в `unic_tasks` обычно в пределах одного sweep-интервала (≤5 мин после момента, когда оба условия выполнены).
+- In-day flow остаётся быстрым: `trigger-immediate` не трогаем, отклик 1–2 сек.
+- При concurrency двух источников (trigger-immediate vs sweep) дубликаты в `unic_tasks` физически невозможны.
+- Ничего не ломается в существующем morning-batch (`triggerAutoUnic`).
 
 ## Non-goals
 
 - Не лечим стрэндед-слоты прошлых дней. Per user policy: клиенты переносят вручную.
 - Не делаем cancellation удалённого контента (это под-проект C).
-- Не enqueue'им future-слоты (это пересекается с C — отложенное состояние требует отмены).
-- Не меняем `trigger-immediate` или validator-сторону.
+- Не enqueue'им future-слоты заранее (пересекается с C).
+- Не переписываем validator-сторону.
+- Не убираем `triggerAutoUnic` (морин-батч остаётся как историческая семантика; sweep его дополняет, а не заменяет — см. Open question Q3 ниже).
 
 ## Approach
 
-Один `setInterval` в `autowarm/server.js`, рядом с существующим `assignUnicResultsToQueue`. Тикает каждые **5 минут**. Внутри вызывает существующую `runAutoUnicForDate(today, settings)` — функция уже идемпотентна благодаря `NOT EXISTS (... unic_tasks ...)`.
+Два изменения, каждое маленькое:
 
-```
-[validator approve] ─trigger-immediate─→ [autowarm runAutoUnicForDate(today)] ──→ unic_tasks
-                                                  ▲
-                              (NEW) every 5 min ──┘  ← закрывает gap для approve != slot_date
+### Change 1 — миграция: уникальный partial index на `unic_tasks`
+
+Файл: `autowarm/migrations/<next>_unic_tasks_unique_active_slot.sql`
+
+```sql
+-- Cleanup any pre-existing duplicates first (defensive — production may already have some)
+WITH ranked AS (
+  SELECT id, content_id, slot_date, current_status,
+         ROW_NUMBER() OVER (
+           PARTITION BY content_id, slot_date
+           ORDER BY (current_status='done') DESC,
+                    (current_status='processing') DESC,
+                    (current_status='pending') DESC,
+                    id ASC
+         ) AS rn
+  FROM unic_tasks
+  WHERE content_id IS NOT NULL
+    AND slot_date IS NOT NULL
+    AND current_status IN ('pending','processing','done')
+)
+UPDATE unic_tasks SET current_status = 'error',
+                     error_message = COALESCE(error_message,'') || ' [dedup-by-migration]'
+WHERE id IN (SELECT id FROM ranked WHERE rn > 1);
+
+-- The actual constraint
+CREATE UNIQUE INDEX CONCURRENTLY ux_unic_tasks_active_slot
+  ON unic_tasks (content_id, slot_date)
+  WHERE current_status IN ('pending','processing','done')
+    AND content_id IS NOT NULL
+    AND slot_date IS NOT NULL;
 ```
 
-### Pseudo-code
+Partial unique index: пока задача жива (`pending|processing|done`), нельзя создать вторую с тем же `(content_id, slot_date)`. После `error` — можно повторно (например, sweep подберёт после ручного reset). `CONCURRENTLY` — без долгого блока на проде.
+
+### Change 2 — добавить sweep-loop в `autowarm/server.js`
+
+Self-scheduling recursive `setTimeout` (стабильнее `setInterval` под event-loop задержками — Codex MINOR #17). Date вычисляется явно (Codex BLOCKER #2). INSERT защищён `ON CONFLICT DO NOTHING` поверх нового индекса (Codex BLOCKER #1).
 
 ```javascript
-// autowarm/server.js, рядом со строкой 5784
+// autowarm/server.js, новый блок после строки 5555 (рядом с setInterval(triggerAutoUnic))
 
+const UNIC_SWEEP_INTERVAL_MS = 5 * 60 * 1000;
+const UNIC_SWEEP_INITIAL_DELAY_MS = 30 * 1000;
 let unicSweepRunning = false;
+let unicSweepTimer = null;
+
+function computeBusinessToday(timezone) {
+  const tzOffsets = {
+    'Asia/Dubai': 4, 'Europe/Moscow': 3, 'UTC': 0,
+    'Europe/London': 0, 'America/New_York': -5, 'Asia/Bangkok': 7,
+  };
+  const offset = tzOffsets[timezone] ?? 4;
+  return new Date(Date.now() + offset * 3600000).toISOString().slice(0, 10);
+}
 
 async function runScheduledUnicSweep() {
   if (unicSweepRunning) {
-    console.log('[unic-sweep] previous tick still running, skipping');
+    console.warn('[unic-sweep] previous tick still running; skipping');
+    scheduleNextSweep();
     return;
   }
   unicSweepRunning = true;
   const t0 = Date.now();
+  let targetDate = null;
+  let pickedBefore = 0, pickedAfter = 0;
   try {
-    const settings = await loadAutoUnicSettings();
-    const result = await runAutoUnicForDate(/* today */ null, settings);
-    console.log(
-      `[unic-sweep] ok picked=${result.picked} skipped=${result.skipped} ` +
-      `took=${Date.now() - t0}ms`
-    );
+    const { rows } = await pool.query('SELECT * FROM unic_settings WHERE id=1');
+    const settings = rows[0] || {};
+    targetDate = computeBusinessToday(settings.timezone);
+
+    const { rows: before } = await pool.query(
+      `SELECT COUNT(*)::int AS n FROM unic_tasks WHERE slot_date=$1`, [targetDate]);
+    pickedBefore = before[0].n;
+
+    await runAutoUnicForDate(targetDate, settings);
+
+    const { rows: after } = await pool.query(
+      `SELECT COUNT(*)::int AS n FROM unic_tasks WHERE slot_date=$1`, [targetDate]);
+    pickedAfter = after[0].n;
+
+    console.log(JSON.stringify({
+      tag: 'unic-sweep',
+      ok: true,
+      target_date: targetDate,
+      picked: pickedAfter - pickedBefore,
+      took_ms: Date.now() - t0,
+    }));
   } catch (e) {
-    console.error('[unic-sweep] error:', e);
+    console.error(JSON.stringify({
+      tag: 'unic-sweep',
+      ok: false,
+      target_date: targetDate,
+      error: e.message,
+      took_ms: Date.now() - t0,
+    }));
   } finally {
     unicSweepRunning = false;
+    scheduleNextSweep();
   }
 }
 
-setInterval(runScheduledUnicSweep, 5 * 60 * 1000);
-// один immediate tick через 30 сек после старта сервера, чтобы не ждать первые 5 мин:
-setTimeout(runScheduledUnicSweep, 30 * 1000);
+function scheduleNextSweep() {
+  if (unicSweepTimer) clearTimeout(unicSweepTimer);
+  unicSweepTimer = setTimeout(runScheduledUnicSweep, UNIC_SWEEP_INTERVAL_MS);
+}
+
+// kickoff
+setTimeout(runScheduledUnicSweep, UNIC_SWEEP_INITIAL_DELAY_MS);
 ```
 
-`runAutoUnicForDate` уже принимает `targetDate` и сама вычисляет `today` если null — нужно проверить контракт во время реализации; если сигнатура иная — передаём явный `today` тем же способом, что и trigger-immediate.
+И **минимальный патч в `runAutoUnicForDate`** на line 5456: добавить `ON CONFLICT (content_id, slot_date) WHERE current_status IN ('pending','processing','done') DO NOTHING` к INSERT'у. Это защищает оба пути (trigger-immediate и sweep) от race без меняния логики выше.
 
-### Re-entrancy guard
+```javascript
+// line 5456 (изменение), оставшийся UPDATE validator_content только если INSERT действительно произошёл
+const { rowCount } = await pool.query(`
+  INSERT INTO unic_tasks
+    (input_video_url, input_video_name, project_name, schemes, schemes_total,
+     current_status, project_id, content_id, slot_date, meta, created_at, updated_at)
+  VALUES ($1,$2,$3,$4,$5,'pending',$6,$7,$8,$9,NOW(),NOW())
+  ON CONFLICT ON CONSTRAINT ux_unic_tasks_active_slot DO NOTHING
+`, [...]);
 
-`unicSweepRunning` boolean. Если предыдущий тик ещё в работе (медленный SQL, deadlock, длинный JOIN) — пропускаем текущий, чтобы не получить два конкурирующих INSERT. Дубликаты и так защищены SQL-ом (`NOT EXISTS`), но guard уменьшает нагрузку и шум в логах.
+if (rowCount > 0) {
+  await pool.query(
+    `UPDATE validator_content SET status='in_uniqualization', unic_queued_at=NOW(), updated_at=NOW() WHERE id=$1`,
+    [slot.content_id]
+  );
+  console.log(`[auto-unic] ✅ task created: slot=${slot.slot_id} ...`);
+} else {
+  console.log(`[auto-unic] skipped (race-conflict): slot=${slot.slot_id} content=${slot.content_id}`);
+}
+```
 
-### Initial backfill
+(Уточнение по `ON CONFLICT ON CONSTRAINT <partial-unique-index>` — синтаксис в pg допускает `ON CONFLICT (content_id, slot_date) WHERE current_status IN (...)`; точная форма проверится тестом перед применением.)
 
-Отдельный скрипт **не нужен**. Первый `setTimeout` через 30 сек после деплоя — это и есть backfill для сегодняшних застрявших слотов. Идемпотентность гарантирована.
+## Pseudo-flow после фикса
+
+```
+[validator approve] ─trigger-immediate─→ [autowarm runAutoUnicForDate(today)]
+                                                  ▲   ▲
+       morning-batch (existing) ────────────────┘   │
+       (NEW) sweep every 5 min ───────────────────┘
+                                                  │
+                                  ON CONFLICT DO NOTHING
+                                                  │
+                                                  ▼
+                                          unic_tasks (no dup)
+```
 
 ## Error handling
 
-- Per-slot ошибки уже ловит `runAutoUnicForDate` внутри (по существующей логике). Ничего нового.
-- На уровне sweep: `try/catch` + `console.error('[unic-sweep] error:', e)`. Не падать процесс. Следующий тик попробует снова.
-- Если БД недоступна → `runAutoUnicForDate` бросит, sweep залогирует, продолжит. Без ретраев — следующий тик через 5 мин.
+- На уровне sweep: `try/catch` + структурированный JSON-error log. Не падать процесс.
+- На уровне slot inside `runAutoUnicForDate`: существующая логика (`continue` при отсутствии паков/схем) сохраняется. Добавить структурированный warn-лог если ON CONFLICT случился (видимый сигнал что race реально происходит).
+- Если БД недоступна 5+ мин подряд → процесс продолжит писать ошибки в лог; следующий тик попробует снова.
 
 ## Observability
 
-- Console-логи в PM2 outputs (формат `[unic-sweep] ok picked=N skipped=M took=Xms`).
-- Метрика для мониторинга: количество `[unic-sweep] picked > 0` в час. Если вдруг растёт — это сигнал что trigger-immediate перестал работать или клиенты массово approve'ят за день вперёд.
-- Если в `autowarm` есть централизованная таблица логов (`parsing_logs` или аналог) — добавить туда запись с `tag='unic_sweep'`. Проверим во время реализации; если нет — оставляем только console.
+JSON-логи (один объект на тик) с полями: `tag, ok, target_date, picked, took_ms, error`. PM2 уже агрегирует stdout в файл; внешний дашборд (если будет) парсит JSON. Дополнительно — структурированный warn `[auto-unic] skipped (race-conflict)` укажет, есть ли реально concurrent INSERT'ы; если их 0 за неделю — guard избыточен, но disabling его несёт нулевой downside.
+
+Health-метрика: `SELECT COUNT(*) FROM validator_schedule_slots s JOIN validator_content c ON c.id=s.content_id WHERE s.slot_date=CURRENT_DATE AND s.status='filled' AND c.status='approved' AND c.moderation_status='passed' AND NOT EXISTS (SELECT 1 FROM unic_tasks ut WHERE ut.content_id=c.id AND ut.slot_date=s.slot_date AND ut.current_status IN ('pending','processing','done'))` — сколько слотов на сегодня всё ещё не enqueued. Это alert-source: ожидаемо 0 после первого тика.
 
 ## Testing (TDD)
 
-Integration-тесты против real testbench DB (без mocks). Pattern проверим в `autowarm/tests/` во время реализации (Jest или Mocha).
+Тесты делятся на **unit** (sweep-обёртка, guard, error path, computeBusinessToday) и **integration** (DB-eligibility, ON CONFLICT semantics).
 
-| Тест | Setup | Expect |
+### Unit (Jest, моки `pool` и `runAutoUnicForDate`)
+
+| ID | Сценарий | Expect |
 |---|---|---|
-| **T1** | slot=`today`, content `approved+passed`, нет записи в `unic_tasks` (имитируем «approve вчера, slot сегодня») | После одного тика: 1 запись в `unic_tasks` с этим `content_id`, `slot_date=today`, `current_status='pending'` |
-| **T2** | slot=`today`, content `approved+passed`, **уже есть** `unic_tasks` row с `current_status='pending'` | После тика: количество строк не изменилось (idempotency) |
-| **T3** | slot=`today+1` (завтра), content `approved+passed` | После тика: 0 новых строк (sweep смотрит только today) |
-| **T4** | slot=`today-1` (вчера), content `approved+passed` | После тика: 0 новых строк |
-| **T5** | Re-entrancy: `unicSweepRunning=true` (имитируем длинный предыдущий тик) → вызываем `runScheduledUnicSweep` | Лог `previous tick still running, skipping`; функция возвращается без вызова `runAutoUnicForDate` |
-| **T6** | DB недоступна (моким `runAutoUnicForDate` чтобы бросить) | Sweep пишет error в console и не падает; `unicSweepRunning` сбрасывается |
+| **U1** | `computeBusinessToday('Asia/Dubai')` при mock'нутом `Date.now()=2026-05-07T20:30:00Z` | `'2026-05-08'` (UTC 20:30 + 4ч = 00:30 GMT+4) |
+| **U2** | `computeBusinessToday('UTC')` при том же mock'е | `'2026-05-07'` |
+| **U3** | `computeBusinessToday('America/New_York')` (offset −5) при `2026-05-07T03:00:00Z` | `'2026-05-06'` |
+| **U4** | `runScheduledUnicSweep` когда `unicSweepRunning=true` | warn-лог, нет вызова `runAutoUnicForDate`, recursive setTimeout запланирован |
+| **U5** | `runAutoUnicForDate` бросает → sweep пишет error-JSON, не падает, `unicSweepRunning` сброшен, следующий тик запланирован |
+| **U6** | sweep успешен, `pickedAfter - pickedBefore = 3` | JSON-лог с `picked=3` |
 
-Использовать seed-данные из существующего testbench. Проверить через `git grep` есть ли уже тесты на `runAutoUnicForDate` — переиспользовать fixtures.
+### Integration (real testbench DB, fixture engine)
+
+Setup: создать `validator_content` rows + `validator_schedule_slots` rows с явным `slot_date`. Вызывать `runScheduledUnicSweep()` напрямую с замоканным `Date.now()`.
+
+| ID | Setup | Expect |
+|---|---|---|
+| **I1** | slot=`'2026-05-07'`, content `approved+passed`, нет `unic_tasks`. Mock `Date.now()` = 2026-05-07T08:00 GMT+4 | После tick: 1 строка в `unic_tasks`, `slot_date='2026-05-07'`, `current_status='pending'`. `validator_content.status='in_uniqualization'`. |
+| **I2** | как I1, но **уже есть** `unic_tasks(content_id, slot_date, current_status='pending')` | Ровно 1 строка остаётся (idempotency через ON CONFLICT). validator_content.status НЕ меняется. |
+| **I3** | как I1, но `unic_tasks` row в `current_status='processing'` | По-прежнему 1 строка, no insert. |
+| **I4** | как I1, но `unic_tasks` row в `current_status='done'` | 1 строка, no insert. |
+| **I5** | как I1, но `unic_tasks` row в `current_status='error'` | **2 строки** после tick: старая ('error') + новая ('pending'). Re-enqueue после fail разрешён by-design. |
+| **I6** | slot=`'2026-05-08'` (завтра в GMT+4), mock `Date.now()` соответствует 2026-05-07 | 0 новых строк. |
+| **I7** | slot=`'2026-05-06'` (вчера), mock соответствует 2026-05-07 | 0 новых строк. |
+| **I8** | Midnight rollover: mock `Date.now() = 2026-05-07T19:59 UTC` (= 2026-05-07T23:59 GMT+4). slot=`'2026-05-07'`. | Tick #1 берёт slot=2026-05-07. Затем mock Date.now() = 2026-05-07T20:01 UTC (= 2026-05-08T00:01 GMT+4). slot=`'2026-05-08'` создан. Tick #2 берёт slot=2026-05-08. (Проверяет, что date вычисляется на каждый tick.) |
+| **I9** | slot=`'2026-05-07'`, **content.status='validating'** (не approved) | 0 новых строк. |
+| **I10** | slot=`'2026-05-07'`, content approved, **slot.status='empty'** | 0 новых строк. |
+| **I11** | slot=`'2026-05-07'`, content `status='approved'`, **moderation_status='pending'** | 0 новых строк. |
+| **I12** | Concurrency: запустить два `runAutoUnicForDate(today, settings)` параллельно (Promise.all) на одном content_id | После: ровно 1 строка в `unic_tasks` (защита через unique constraint + ON CONFLICT). Второй вызов пишет skip-лог. |
+| **I13** | Migration cleanup: предзагрузить две дубликатные `unic_tasks` ('pending'+'pending') на тот же `(content_id, slot_date)`. Применить миграцию. | Один остался 'pending', другой 'error' с `error_message LIKE '%dedup-by-migration%'`. |
+
+Использовать существующий `engine.dispose` fixture pattern (см. memory `feedback_validator_test_engine_dispose.md` — для validator side; autowarm проверим аналог в `autowarm/tests/conftest.*` или Jest setup).
 
 ## Rollout
 
-1. **dev (testbench):** реализация в `autowarm-testbench/server.js`, прогон тестов локально.
-2. **smoke:** на seed-данных создать слот `today` + approved content **без** `unic_tasks` row → подождать 30 сек → проверить что тик создал запись.
-3. **prod:** cherry-pick в prod main → auto-push hook доставит на VPS → `pm2 restart <autowarm-server-process>` (имя процесса проверим через `pm2 list` перед деплоем; вероятно `autowarm-server` или `delivery`).
-4. **monitoring (T+30 мин):** смотрим логи `pm2 logs <process> | grep unic-sweep`, считаем `picked` за первые тики. Если `picked > 0` на первом тике после деплоя — backfill отработал.
-5. **monitoring (T+24 ч):** проверить что новые approve'ы за день вперёд начинают подбираться.
-6. **rollback:** удалить `setInterval` + commit → cherry-pick. Никаких миграций откатывать не надо.
+1. **dev (testbench):** ветка `feature/unic-sweep-2026-05-07` (worktree). Применить миграцию → прогон unit + integration → smoke на seed-данных.
+2. **smoke (testbench-stage box):** запустить server.js, подождать 30с → проверить логи `unic-sweep ok target_date=...` и `picked` count > 0 для подложенного слота.
+3. **prod migration:** применить миграцию через psql на prod БД (CONCURRENTLY безопасно). Проверить что dedup-cleanup затронул разумное число строк (вероятно 0 или единицы).
+4. **prod code:** cherry-pick в prod main → auto-push → `pm2 restart <process>` (имя проверим перед деплоем).
+5. **monitoring T+30 мин:** `pm2 logs ... | grep unic-sweep | head -10`. Здоровый сигнал: `picked` падает к 0 после первого тика.
+6. **monitoring T+24 ч:** один день с health-metric SQL раз в час. Ожидаем что значение всегда =0 после первого утреннего тика.
+7. **rollback кода:** удалить блок sweep + commit → cherry-pick → restart. Уже-enqueued задачи остаются (data side остаётся как есть; это нормально — они валидные).
+8. **rollback миграции:** `DROP INDEX CONCURRENTLY ux_unic_tasks_active_slot;` Дедуп нельзя откатить — но он по построению только убирает дубликаты, а не данные.
 
-## Risks
+## Risks (после фикса)
 
 | Риск | Вероятность | Митигация |
 |---|---|---|
-| Конкурентный INSERT trigger-immediate vs sweep даст дубликат в `unic_tasks` | Низкая | SQL-уровень: `NOT EXISTS` уже защищает. Guard на JS-уровне — дополнительная защита от лишней работы, не корректности. |
-| `runAutoUnicForDate` медленнее 5 мин при большом backlog | Низкая | Re-entrancy guard скипает следующий тик. На реальных объёмах (десятки слотов/день) функция отработает за секунды. |
-| Sweep делает лишнюю работу даже когда trigger-immediate всё подобрал | Низкая (не баг — оверхед) | NOT EXISTS возвращает 0 строк → `runAutoUnicForDate` отработает мгновенно (один SELECT, ноль INSERT). |
-| После рестарта server.js окно `[start, start+30s]` без sweep | Низкая | `setTimeout(runScheduledUnicSweep, 30000)` — один immediate tick. |
-| Имя процесса PM2 / расположение `runAutoUnicForDate` отличается от описания | Средняя (по памяти, не свежим kодом) | Pre-flight на этапе реализации: `pm2 list`, `grep -n "runAutoUnicForDate" server.js`. |
+| Существующий dedup-cleanup в миграции пометит как 'error' нужную запись | Низкая | ORDER BY current_status priority (done > processing > pending) сохраняет «более продвинутую» из двух. Дедуп case-insensitive логируется в `error_message`. |
+| ON CONFLICT синтаксис на partial unique index не поддерживается | Низкая (pg ≥9.5 supports) | Тест I12 поймает на dev до прода. Fallback: использовать `INSERT ... WHERE NOT EXISTS (...)` внутри одной транзакции с advisory lock. |
+| Sweep-loop работает в нескольких PM2-инстансах одновременно | Средняя (если кластер) | Pre-flight: подтвердить single-instance. Даже при кластере unique index гарантирует корректность; только лишние тики ON CONFLICT. |
+| Морин-батч `triggerAutoUnic` после фикса избыточен | Низкая (не баг, оверхед) | Sweep ловит то же подмножество. Удаление morning-batch — отдельный follow-up, чтобы не расширять текущий PR. |
+| Новый sweep увеличит DB-нагрузку в 6× (5min vs 30min) | Низкая | Один SELECT с индексом + `runAutoUnicForDate` early-exits на пустом результате. Базы хватит. |
 
-## Open questions для этапа реализации
+## Open questions для writing-plans
 
-- Точная сигнатура `runAutoUnicForDate(targetDate, settings)` — принимает ли null или нужно явно `today`? (Пре-флайт grep.)
-- Существует ли `loadAutoUnicSettings()` или settings приходят из другого места? (Пре-флайт.)
-- Имя PM2-процесса: `autowarm-server`, `delivery`, или иное? (Пре-флайт `pm2 list`.)
-- Существует ли `parsing_logs`-аналог в autowarm для structured-логов? (Пре-флайт `\dt` в БД.)
+| Q | Что проверить |
+|---|---|
+| **Q1** | Точный синтаксис `ON CONFLICT` на partial unique index в Postgres. Сделать smoke-test на pg ≥ 13 локально (testbench) до миграции прода. |
+| **Q2** | Имя PM2-процесса прод-сервера (`pm2 list` на VPS). Имя файла server.js — он же `delivery` или `autowarm-server`? |
+| **Q3** | Удалять ли `triggerAutoUnic` (line 5500–5555) после стабилизации sweep'а? Решить через 1–2 недели после деплоя на основе логов. Сейчас оставляем как backup. |
+| **Q4** | Существуют ли уже unit-тесты на `runAutoUnicForDate` в `autowarm/tests/`? Использовать существующий fixture-pattern. |
+| **Q5** | Есть ли `parsing_logs`-аналог для structured log-стрима в autowarm? Если есть — INSERT в неё дополнительно к console; если нет — только JSON-в-stdout. |
 
-Эти вопросы не блокируют дизайн — это runtime-детали. Решаются на этапе writing-plans.
+## Decisions captured (этой сессии)
+
+- Подход #1 (cron + сохраняем trigger-immediate) — выбран
+- Backfill: только today, прошлые дни — клиенты вручную
+- Cron interval: 5 минут
+- Codex review v1: 2 BLOCKER + 10 IMPORTANT + 5 MINOR — все BLOCKER и большинство IMPORTANT учтены в этой ревизии. Подробности в `.codex-review-2026-05-07-A-v1.txt` (если решим коммитить артефакт).
