@@ -2,7 +2,7 @@
 
 **Date:** 2026-05-07
 **Status:** Design — pending implementation plan
-**Revision:** v2 (post-Codex review)
+**Revision:** v3 (post-Codex v2 review — applied inline)
 
 ## Problem
 
@@ -77,37 +77,40 @@ NOT EXISTS (SELECT 1 FROM unic_tasks ut
 
 ### Change 1 — миграция: уникальный partial index на `unic_tasks`
 
-Файл: `autowarm/migrations/<next>_unic_tasks_unique_active_slot.sql`
+Деплой делится на **два шага**, потому что `CREATE INDEX CONCURRENTLY` не может выполняться внутри транзакции, а живой dedup мутирует прод-данные при работающем worker'е (Codex BLOCKER #3). Воркер придётся остановить на короткое окно дедупа.
+
+**Step 1 — read-only audit (до деплоя):** скрипт `autowarm/scripts/audit_unic_tasks_duplicates.sql`:
 
 ```sql
--- Cleanup any pre-existing duplicates first (defensive — production may already have some)
-WITH ranked AS (
-  SELECT id, content_id, slot_date, current_status,
-         ROW_NUMBER() OVER (
-           PARTITION BY content_id, slot_date
-           ORDER BY (current_status='done') DESC,
-                    (current_status='processing') DESC,
-                    (current_status='pending') DESC,
-                    id ASC
-         ) AS rn
-  FROM unic_tasks
-  WHERE content_id IS NOT NULL
-    AND slot_date IS NOT NULL
-    AND current_status IN ('pending','processing','done')
-)
-UPDATE unic_tasks SET current_status = 'error',
-                     error_message = COALESCE(error_message,'') || ' [dedup-by-migration]'
-WHERE id IN (SELECT id FROM ranked WHERE rn > 1);
+SELECT content_id, slot_date,
+       array_agg(id ORDER BY id) AS task_ids,
+       array_agg(current_status ORDER BY id) AS statuses,
+       array_agg(created_at ORDER BY id) AS created_ats
+FROM unic_tasks
+WHERE content_id IS NOT NULL
+  AND slot_date IS NOT NULL
+  AND current_status IN ('pending','processing','done')
+GROUP BY content_id, slot_date
+HAVING COUNT(*) > 1;
+```
 
--- The actual constraint
-CREATE UNIQUE INDEX CONCURRENTLY ux_unic_tasks_active_slot
+Если дубликатов нет (ожидаемое состояние) — переходим к Step 2 без cleanup. Если есть — отдельная ручная процедура: остановить `pm2 stop unic-worker`, провести сверку с `unic_results` для каждого спорного `(content_id, slot_date)`, ops решает какие оставить, какие пометить `error` через явные SQL (с PRINT'ом затронутых ID до изменения). Не автоматизируем — слишком много политики (что лучше: сохранять `processing` или `done` если есть оба).
+
+**Step 2 — миграция:** `autowarm/migrations/<next>_unic_tasks_unique_active_slot.sql`. Файл стандартный одноразовый SQL, выполняется напрямую через psql, не через runner с tx-обёрткой:
+
+```sql
+-- Запускать напрямую через psql, НЕ через migration runner с автотранзакцией.
+-- CREATE INDEX CONCURRENTLY запрещён внутри tx.
+CREATE UNIQUE INDEX CONCURRENTLY IF NOT EXISTS ux_unic_tasks_active_slot
   ON unic_tasks (content_id, slot_date)
   WHERE current_status IN ('pending','processing','done')
     AND content_id IS NOT NULL
     AND slot_date IS NOT NULL;
 ```
 
-Partial unique index: пока задача жива (`pending|processing|done`), нельзя создать вторую с тем же `(content_id, slot_date)`. После `error` — можно повторно (например, sweep подберёт после ручного reset). `CONCURRENTLY` — без долгого блока на проде.
+После применения — проверить `\d unic_tasks` и подтвердить присутствие индекса. Если миграция падает с `could not create unique index ... duplicate key value` — значит audit пропустил дубль; rollback `DROP INDEX CONCURRENTLY` и заново через ручную процедуру.
+
+Partial unique index: пока задача жива (`pending|processing|done`), нельзя создать вторую с тем же `(content_id, slot_date)`. После `error` — можно повторно (например, sweep подберёт после ручного reset).
 
 ### Change 2 — добавить sweep-loop в `autowarm/server.js`
 
@@ -121,52 +124,74 @@ const UNIC_SWEEP_INITIAL_DELAY_MS = 30 * 1000;
 let unicSweepRunning = false;
 let unicSweepTimer = null;
 
-function computeBusinessToday(timezone) {
-  const tzOffsets = {
-    'Asia/Dubai': 4, 'Europe/Moscow': 3, 'UTC': 0,
-    'Europe/London': 0, 'America/New_York': -5, 'Asia/Bangkok': 7,
-  };
-  const offset = tzOffsets[timezone] ?? 4;
-  return new Date(Date.now() + offset * 3600000).toISOString().slice(0, 10);
+// DST-aware (Codex IMPORTANT #6). Использует Intl, который учитывает DST.
+function computeBusinessDate(timezone, baseTime = Date.now()) {
+  const tz = timezone || 'Asia/Dubai';
+  try {
+    const fmt = new Intl.DateTimeFormat('en-CA', {
+      timeZone: tz,
+      year: 'numeric', month: '2-digit', day: '2-digit',
+    });
+    return fmt.format(new Date(baseTime));  // 'YYYY-MM-DD'
+  } catch (e) {
+    console.error(JSON.stringify({
+      tag: 'unic-sweep', ok: false,
+      error: `unknown timezone '${tz}', falling back to Asia/Dubai`,
+    }));
+    return new Intl.DateTimeFormat('en-CA', {
+      timeZone: 'Asia/Dubai', year: 'numeric', month: '2-digit', day: '2-digit',
+    }).format(new Date(baseTime));
+  }
+}
+
+// Возвращает [today, yesterday] business-dates для grace-window после midnight (Codex IMPORTANT #5)
+function computeBusinessDateWindow(timezone) {
+  const today = computeBusinessDate(timezone);
+  const yesterdayMs = Date.now() - 24 * 3600 * 1000;
+  const yesterday = computeBusinessDate(timezone, yesterdayMs);
+  return [today, yesterday];
 }
 
 async function runScheduledUnicSweep() {
   if (unicSweepRunning) {
-    console.warn('[unic-sweep] previous tick still running; skipping');
+    console.warn(JSON.stringify({
+      tag: 'unic-sweep', ok: true, skipped: true,
+      reason: 'previous tick still running',
+    }));
     scheduleNextSweep();
     return;
   }
   unicSweepRunning = true;
   const t0 = Date.now();
-  let targetDate = null;
-  let pickedBefore = 0, pickedAfter = 0;
+  let targetDates = [];
   try {
     const { rows } = await pool.query('SELECT * FROM unic_settings WHERE id=1');
     const settings = rows[0] || {};
-    targetDate = computeBusinessToday(settings.timezone);
+    targetDates = computeBusinessDateWindow(settings.timezone);  // [today, yesterday]
 
-    const { rows: before } = await pool.query(
-      `SELECT COUNT(*)::int AS n FROM unic_tasks WHERE slot_date=$1`, [targetDate]);
-    pickedBefore = before[0].n;
-
-    await runAutoUnicForDate(targetDate, settings);
-
-    const { rows: after } = await pool.query(
-      `SELECT COUNT(*)::int AS n FROM unic_tasks WHERE slot_date=$1`, [targetDate]);
-    pickedAfter = after[0].n;
+    let totalInserted = 0;
+    for (const date of targetDates) {
+      // runAutoUnicForDate возвращает {inserted, skipped, errors} (см. изменение ниже)
+      const r = await runAutoUnicForDate(date, settings);
+      totalInserted += r.inserted;
+      console.log(JSON.stringify({
+        tag: 'unic-sweep', ok: true,
+        target_date: date,
+        inserted: r.inserted, skipped: r.skipped, errors: r.errors,
+      }));
+    }
 
     console.log(JSON.stringify({
-      tag: 'unic-sweep',
-      ok: true,
-      target_date: targetDate,
-      picked: pickedAfter - pickedBefore,
+      tag: 'unic-sweep', ok: true,
+      summary: true,
+      target_dates: targetDates,
+      total_inserted: totalInserted,
       took_ms: Date.now() - t0,
     }));
   } catch (e) {
     console.error(JSON.stringify({
-      tag: 'unic-sweep',
-      ok: false,
-      target_date: targetDate,
+      tag: 'unic-sweep', ok: false,
+      target_dates: targetDates,
       error: e.message,
       took_ms: Date.now() - t0,
     }));
@@ -181,34 +206,81 @@ function scheduleNextSweep() {
   unicSweepTimer = setTimeout(runScheduledUnicSweep, UNIC_SWEEP_INTERVAL_MS);
 }
 
-// kickoff
-setTimeout(runScheduledUnicSweep, UNIC_SWEEP_INITIAL_DELAY_MS);
+// Запускать только в production-режиме. В тестах используем module.exports {start, stop} (Codex MINOR #11)
+function startUnicSweepLoop() {
+  if (unicSweepTimer) return;  // idempotent
+  unicSweepTimer = setTimeout(runScheduledUnicSweep, UNIC_SWEEP_INITIAL_DELAY_MS);
+}
+
+function stopUnicSweepLoop() {
+  if (unicSweepTimer) { clearTimeout(unicSweepTimer); unicSweepTimer = null; }
+}
+
+if (process.env.NODE_ENV !== 'test') {
+  startUnicSweepLoop();
+}
+
+module.exports = {
+  ...module.exports,  // или эквивалентная пристройка для server.js export-style
+  startUnicSweepLoop, stopUnicSweepLoop, runScheduledUnicSweep, computeBusinessDate,
+};
 ```
 
-И **минимальный патч в `runAutoUnicForDate`** на line 5456: добавить `ON CONFLICT (content_id, slot_date) WHERE current_status IN ('pending','processing','done') DO NOTHING` к INSERT'у. Это защищает оба пути (trigger-immediate и sweep) от race без меняния логики выше.
+И **изменение в `runAutoUnicForDate`** (line 5355–5481) — две вещи:
+
+1. INSERT с правильным `ON CONFLICT` index-inference syntax (Codex BLOCKER #1):
 
 ```javascript
-// line 5456 (изменение), оставшийся UPDATE validator_content только если INSERT действительно произошёл
-const { rowCount } = await pool.query(`
+// line 5456 — заменить INSERT
+const insertResult = await pool.query(`
   INSERT INTO unic_tasks
     (input_video_url, input_video_name, project_name, schemes, schemes_total,
      current_status, project_id, content_id, slot_date, meta, created_at, updated_at)
   VALUES ($1,$2,$3,$4,$5,'pending',$6,$7,$8,$9,NOW(),NOW())
-  ON CONFLICT ON CONSTRAINT ux_unic_tasks_active_slot DO NOTHING
+  ON CONFLICT (content_id, slot_date)
+  WHERE current_status IN ('pending','processing','done')
+  DO NOTHING
+  RETURNING id
 `, [...]);
 
-if (rowCount > 0) {
+const inserted = insertResult.rowCount > 0;
+if (inserted) {
   await pool.query(
     `UPDATE validator_content SET status='in_uniqualization', unic_queued_at=NOW(), updated_at=NOW() WHERE id=$1`,
     [slot.content_id]
   );
   console.log(`[auto-unic] ✅ task created: slot=${slot.slot_id} ...`);
 } else {
-  console.log(`[auto-unic] skipped (race-conflict): slot=${slot.slot_id} content=${slot.content_id}`);
+  console.log(JSON.stringify({
+    tag: 'auto-unic', skipped: true, reason: 'race-conflict',
+    slot_id: slot.slot_id, content_id: slot.content_id, slot_date: slotDate,
+  }));
 }
 ```
 
-(Уточнение по `ON CONFLICT ON CONSTRAINT <partial-unique-index>` — синтаксис в pg допускает `ON CONFLICT (content_id, slot_date) WHERE current_status IN (...)`; точная форма проверится тестом перед применением.)
+2. **Возвращать count из `runAutoUnicForDate`** (Codex IMPORTANT #9):
+
+```javascript
+async function runAutoUnicForDate(slotDate, settings) {
+  let inserted = 0, skipped = 0, errors = 0;
+  // ... existing body ...
+  for (const slot of slots) {
+    try {
+      // existing select packs/schemes
+      if (!packs.length || !approvedSchemes.length || ...) { skipped++; continue; }
+      // INSERT with ON CONFLICT
+      if (insertResult.rowCount > 0) { inserted++; }
+      else { skipped++; }
+    } catch (e) {
+      console.error(`[auto-unic] error on slot=${slot.slot_id}:`, e.message);
+      errors++;
+    }
+  }
+  return { inserted, skipped, errors };
+}
+```
+
+**Все INSERT'ы в `unic_tasks` идут через `runAutoUnicForDate`** (Codex IMPORTANT #7) — `trigger-immediate` (line 5337) и `triggerAutoUnic` (line 5547) оба её вызывают. Один patch покрывает все пути.
 
 ## Pseudo-flow после фикса
 
@@ -234,7 +306,7 @@ if (rowCount > 0) {
 
 JSON-логи (один объект на тик) с полями: `tag, ok, target_date, picked, took_ms, error`. PM2 уже агрегирует stdout в файл; внешний дашборд (если будет) парсит JSON. Дополнительно — структурированный warn `[auto-unic] skipped (race-conflict)` укажет, есть ли реально concurrent INSERT'ы; если их 0 за неделю — guard избыточен, но disabling его несёт нулевой downside.
 
-Health-метрика: `SELECT COUNT(*) FROM validator_schedule_slots s JOIN validator_content c ON c.id=s.content_id WHERE s.slot_date=CURRENT_DATE AND s.status='filled' AND c.status='approved' AND c.moderation_status='passed' AND NOT EXISTS (SELECT 1 FROM unic_tasks ut WHERE ut.content_id=c.id AND ut.slot_date=s.slot_date AND ut.current_status IN ('pending','processing','done'))` — сколько слотов на сегодня всё ещё не enqueued. Это alert-source: ожидаемо 0 после первого тика.
+Health-метрика (запускать через скрипт, который сам вычисляет business-date в нужном TZ — Codex IMPORTANT #10): `SELECT COUNT(*) FROM validator_schedule_slots s JOIN validator_content c ON c.id=s.content_id WHERE s.slot_date = $1 AND s.status='filled' AND c.status='approved' AND c.moderation_status='passed' AND NOT EXISTS (SELECT 1 FROM unic_tasks ut WHERE ut.content_id=c.id AND ut.slot_date=s.slot_date AND ut.current_status IN ('pending','processing','done'))` где `$1 = computeBusinessDate(timezone)` (тот же помощник, что и в sweep'е). НЕ использовать `CURRENT_DATE` — даст ложные алерты на UTC midnight.
 
 ## Testing (TDD)
 
@@ -268,7 +340,8 @@ Setup: создать `validator_content` rows + `validator_schedule_slots` rows
 | **I9** | slot=`'2026-05-07'`, **content.status='validating'** (не approved) | 0 новых строк. |
 | **I10** | slot=`'2026-05-07'`, content approved, **slot.status='empty'** | 0 новых строк. |
 | **I11** | slot=`'2026-05-07'`, content `status='approved'`, **moderation_status='pending'** | 0 новых строк. |
-| **I12** | Concurrency: запустить два `runAutoUnicForDate(today, settings)` параллельно (Promise.all) на одном content_id | После: ровно 1 строка в `unic_tasks` (защита через unique constraint + ON CONFLICT). Второй вызов пишет skip-лог. |
+| **I12a** | Race против partial unique index напрямую: открыть **два отдельных PG client'a** на pool, оба `BEGIN`, оба `INSERT INTO unic_tasks ... ON CONFLICT (content_id, slot_date) WHERE current_status IN (...) DO NOTHING` для одного и того же `(content_id, slot_date)`. Затем оба commit одновременно. (Codex IMPORTANT #8 — тест проверяет физический index, не app-таймнинг.) | Один INSERT возвращает `rowCount=1`, другой `rowCount=0`. Финально в БД ровно 1 row. |
+| **I12b** | Application race: barrier-driven harness. Два инстанса runAutoUnicForDate, оба после SELECT phase ждут на shared barrier, потом одновременно идут к INSERT. | Ровно 1 строка после; counts корректные. |
 | **I13** | Migration cleanup: предзагрузить две дубликатные `unic_tasks` ('pending'+'pending') на тот же `(content_id, slot_date)`. Применить миграцию. | Один остался 'pending', другой 'error' с `error_message LIKE '%dedup-by-migration%'`. |
 
 Использовать существующий `engine.dispose` fixture pattern (см. memory `feedback_validator_test_engine_dispose.md` — для validator side; autowarm проверим аналог в `autowarm/tests/conftest.*` или Jest setup).
@@ -298,15 +371,23 @@ Setup: создать `validator_content` rows + `validator_schedule_slots` rows
 
 | Q | Что проверить |
 |---|---|
-| **Q1** | Точный синтаксис `ON CONFLICT` на partial unique index в Postgres. Сделать smoke-test на pg ≥ 13 локально (testbench) до миграции прода. |
+| **Q1** | ~~Синтаксис `ON CONFLICT`~~ ✅ resolved: `ON CONFLICT (cols) WHERE <predicate> DO NOTHING` (index-inference, не constraint-name). Pg ≥ 9.5 поддерживает. |
 | **Q2** | Имя PM2-процесса прод-сервера (`pm2 list` на VPS). Имя файла server.js — он же `delivery` или `autowarm-server`? |
-| **Q3** | Удалять ли `triggerAutoUnic` (line 5500–5555) после стабилизации sweep'а? Решить через 1–2 недели после деплоя на основе логов. Сейчас оставляем как backup. |
-| **Q4** | Существуют ли уже unit-тесты на `runAutoUnicForDate` в `autowarm/tests/`? Использовать существующий fixture-pattern. |
-| **Q5** | Есть ли `parsing_logs`-аналог для structured log-стрима в autowarm? Если есть — INSERT в неё дополнительно к console; если нет — только JSON-в-stdout. |
+| **Q3** | Удалять ли `triggerAutoUnic` (line 5500–5555) после стабилизации sweep'а? Не сейчас. Через 2 недели логов смотрим overlap; если sweep ловит всё, что ловил morning-batch — удаляем отдельным PR. |
+| **Q4** | Существуют ли уже unit-тесты на `runAutoUnicForDate` в `autowarm/tests/`? Если есть — использовать fixture-pattern; если нет — создать с нуля. |
+| **Q5** | Есть ли `parsing_logs`-аналог для structured log-стрима в autowarm? Если есть — INSERT в неё дополнительно к console; если нет — только JSON-в-stdout (его pm2 уже агрегирует). |
+| **Q6** | Pre-flight на проде: запустить audit_unic_tasks_duplicates.sql ПЕРЕД миграцией. Если результат непустой — миграция блокируется до ручного резолва ops'ом. |
 
 ## Decisions captured (этой сессии)
 
 - Подход #1 (cron + сохраняем trigger-immediate) — выбран
 - Backfill: только today, прошлые дни — клиенты вручную
 - Cron interval: 5 минут
-- Codex review v1: 2 BLOCKER + 10 IMPORTANT + 5 MINOR — все BLOCKER и большинство IMPORTANT учтены в этой ревизии. Подробности в `.codex-review-2026-05-07-A-v1.txt` (если решим коммитить артефакт).
+- Sweep target: **[business_today, business_yesterday]** (grace window для midnight rollover)
+- DST: используем `Intl.DateTimeFormat` (не fixed offsets) — корректно для всех IANA-TZ
+- ON CONFLICT: index-inference syntax (`ON CONFLICT (col1, col2) WHERE <predicate> DO NOTHING`)
+- Migration: read-only audit script + ручной резолв дублей + чистая `CREATE INDEX CONCURRENTLY` миграция (без in-line cleanup)
+- Codex review iterations:
+  - v1: 2 BLOCKER + 10 IMPORTANT + 5 MINOR — переписали v2
+  - v2: 3 BLOCKER + 7 IMPORTANT + 2 MINOR — применили инлайн-патчем (v3 = текущий документ)
+  - Открытые из v2-ревью: MINOR #11 (start/stop exports — учтено в Change 2), MINOR #12 (consistent JSON logs — учтено)
