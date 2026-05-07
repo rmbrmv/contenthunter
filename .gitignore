@@ -48,3 +48,6 @@ logs/
 .DS_Store
 .idea/
 .vscode/
+
+# Local Claude Code settings (permissions + local tokens, никогда в репо)
+.claude/
