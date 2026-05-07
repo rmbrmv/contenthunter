@@ -2,7 +2,7 @@
 
 **Date:** 2026-05-07
 **Status:** Design — pending implementation plan
-**Revision:** v2 (post-Codex review)
+**Revision:** v3 (post-Codex v2 review — applied cleanup)
 **Project:** validator-contenthunter (Vue 3 SPA + FastAPI backend)
 
 ## Problem
@@ -45,7 +45,7 @@ Allowed project IDs **строго** из server-side authenticated user (JWT/se
 
 - role=`client` → `[current_user.project_id]` если не None; иначе `[]` → ранний return.
 - role=`manager` → `current_user.project_ids` (массив из БД, prepopulated в JWT/session). Если пусто — `[]`, никаких "fall through to all".
-- role=`admin` → все project_ids из канонической project-таблицы (см. § Project identity ниже).
+- role=`admin` → все project_ids из канонической project-таблицы. **Решено (v3, Codex IMPORTANT #2):** источник = `SELECT DISTINCT project_id FROM factory_pack_accounts WHERE project_id IS NOT NULL`. Self-consistent с расчётом min_required (проект без packs = min_required=0 = не показывается в дефицитах в любом случае). НЕ использовать `validator_projects` отдельно — это могло бы привести к admin'у, видящему проекты без packs (для которых дефицит логически не определён).
 - Любая другая роль → 403.
 
 Cross-tenant контроль: тест должен попытаться spoof'нуть `X-Project-Id` header и проверить что ответ не меняется.
@@ -86,6 +86,15 @@ ORDER BY p.project_id;
 ```
 
 Один query, индексы существуют (`ix_validator_scheme_preferences_project_id`, `factory_pack_accounts_pkey` — не оптимально по project_id; см. risk).
+
+### Count semantics (Codex IMPORTANT #3)
+
+- `min_required = COUNT(*) FROM factory_pack_accounts WHERE project_id=?`. Каждая строка в этой таблице = независимый аккаунт-в-паке-для-публикации. Дубликаты project_id ОЖИДАЮТСЯ (несколько паков на проект); это НЕ ошибка. `COUNT(*)`, не `COUNT(DISTINCT)`.
+- `approved = COUNT(*) FROM validator_scheme_preferences WHERE project_id=? AND status='approved' JOIN unic_schemes ON ... AND status=true`. UNIQUE constraint `uq_project_scheme(project_id, scheme_id)` гарантирует что pre row = pre scheme. `COUNT(*)` корректно равно `COUNT(DISTINCT scheme_id)`. Для устойчивости в случае будущих schema-изменений можно использовать `COUNT(DISTINCT sp.scheme_id)` явно — overhead минимальный.
+
+### No query parameters (Codex IMPORTANT #4)
+
+Endpoint signature: `GET /api/schemes/deficits` — **без** query-параметров. Backend не принимает `?project=`, `?role=` и подобное. Это гарантирует что весь scope — server-side, через JWT. Тест: client запрашивает `/api/schemes/deficits?project=999` → query-param игнорируется (FastAPI не подключает к функции).
 
 ### Project identity (Codex BLOCKER #2)
 
@@ -132,7 +141,7 @@ logger.info("schemes_deficits", extra={"role": role, "project_count": len(allowe
 **Banner component:** `frontend/src/components/SchemesDeficitBanner.vue` (новый):
 - Props: `deficits: DeficitEntry[]`, `viewMode: 'single' | 'all'`, `currentProjectId?: number | null`, `userRole: string`
 - Resolves project_name из существующего project store (см. § Project identity) — `useProjectStore().findById(id)?.project ?? \`Project ${id}\``
-- **Single mode:** показывается только если `deficitsByProjectId.has(currentProjectId)`. Single-line banner с числами + кнопка CTA.
+- **Single mode:** показывается только если `deficitFor(currentProjectId)` возвращает non-null (используем единый null-safe helper, не прямой `Map.has` — Codex IMPORTANT #5). Single-line banner с числами + кнопка CTA.
 - **All mode (Codex IMPORTANT #7):** глобальный (across all accessible projects), не scoped к видимой неделе. Copy: "**N проектов с заблокированной публикацией.** Раскрыть список ↓". В раскрытом списке — каждая строка `<project_name>: X/Y · [Одобрить →]` (Codex MINOR #15: per-project CTA в expanded list).
 - CTA-линк (final):
   - role=client → `/client/schemes` (один маршрут, проект уже привязан к client'у)
@@ -168,18 +177,22 @@ Slot project_id source (Codex IMPORTANT #12): использовать тот ж
 
 ```
 [/dashboard mount]
-   ↓ apiClient.get('/api/schemes/deficits')
-[Backend] schemes.py → schemes_service.get_summary loop → filtered
+   ↓ apiClient.get('/api/schemes/deficits')  [no query params]
+[Backend] schemes.py → resolve allowed_ids server-side (JWT/session)
+                    → single CTE query (packs JOIN approved-schemes)
+                    → filter min_required > approved
+   ↓ DeficitEntry[] {project_id, approved, min_required, missing}
+[Frontend composable] deficits ref set; deficitsByProjectId computed Map
    ↓
-[Frontend composable] deficits ref set
-   ↓
-[Banner] reads deficits, viewMode, currentProjectId → renders / hides
-[SlotCard / inline slot] reads hasDeficitFor(project_id) → renders badge
+[Banner] uses deficitFor(currentProjectId) (single-mode) или deficits.length (all-mode)
+[SlotCard / inline slot] uses hasDeficitFor(slot.project_id) — null-safe
 
 [user clicks CTA "Одобрить схемы →"]
    ↓
 client: /client/schemes
-manager/admin: /admin/scheme-preferences?project=<id>
+manager/admin single-mode: /admin/scheme-preferences?project=<id>
+manager/admin all-mode top: /admin/scheme-preferences (generic)
+manager/admin all-mode per-row: /admin/scheme-preferences?project=<row.id>
 ```
 
 ## Error handling
@@ -190,9 +203,9 @@ manager/admin: /admin/scheme-preferences?project=<id>
 
 ## Observability
 
-- Backend: `[deficits] role=client project_ids=[79] returned=1` console-log per request
-- Frontend: ничего специального; Vue Devtools покажет state composable
-- Не нужны метрики — фича read-only поверх существующих данных
+- Backend: structured logger (см. § Logging выше) — `logger.info("schemes_deficits", extra={"role": ..., "project_count": ..., "returned": ..., "took_ms": ...})`. Полный список project_ids — только debug-level. Никаких ad-hoc print/console-log per request.
+- Frontend: ничего специального; Vue Devtools покажет state composable; 4xx/5xx логируются в `console.error` со структурированным payload (`{tag: 'schemes-deficits', status, message}`).
+- Не нужны метрики — фича read-only поверх существующих данных.
 
 ## Testing
 
@@ -249,7 +262,7 @@ Mount-тесты для **обоих** рендереров слотов с по
 2. Открыть `/dashboard` под admin'ом, single mode выбран project 79 → то же что #1.
 3. Admin all-mode → агрегированный banner "X проектов" + per-slot badges по всем deficit-проектам.
 4. Клик «Одобрить схемы →» переходит на правильную страницу.
-5. После одобрения недостающих схем на /client/schemes и возврата на /dashboard → банера и бейджей нет (после refresh страницы — TTL кеш).
+5. После одобрения недостающих схем на /client/schemes и возврата на /dashboard → composable refetch'ит на mount (нет client-side cache в v1) → banner и бейджи пропадают сразу (без manual refresh страницы).
 
 ## Rollout
 
@@ -257,7 +270,12 @@ Mount-тесты для **обоих** рендереров слотов с по
 
 1. **Dev (validator-contenthunter):** ветка `feature/schemes-deficit-banner-2026-05-07`. Worktree (memory `feedback_parallel_claude_sessions.md`).
 2. **Backend impl + tests** — запустить pytest, smoke `/api/schemes/deficits` через curl с реальным JWT для client/manager/admin. Применить также cross-tenant тесты (B8/B9).
-3. **Backend deploy first:** cherry-pick backend изменений в prod main → `pm2 restart validator-backend` (имя процесса pre-flight; backend и frontend serve отдельно). Verify endpoint живой: `curl -H "Cookie: session=..." https://client.contenthunter.ru/api/schemes/deficits` — должен вернуть массив (с 6 ожидаемыми deficits для admin).
+3. **Backend deploy first:** cherry-pick backend изменений в prod main → `pm2 restart <validator-backend-process-name>` (имя — pre-flight Q5). **Verify endpoint per role** (Codex IMPORTANT #7):
+   - `curl -H "Cookie: session=<client-jwt>" https://client.contenthunter.ru/api/schemes/deficits` → 0 или 1 entry (если client.project_id в дефиците)
+   - `curl -H "Cookie: session=<manager-jwt>" ...` → дефициты только из manager.project_ids
+   - `curl -H "Cookie: session=<admin-jwt>" ...` → ожидаемо 6 entries (Aneco, Inakent, и т.п. — известные на 2026-05-07)
+   - `curl ... /api/schemes/deficits?project=999` → query-параметр игнорируется, ответ как без него (B-test эквивалент)
+   Если хоть одна из них падает 5xx или возвращает не-то — STOP, не катить frontend.
 4. **Frontend impl + tests** — `npm run build` (auto-postbuild копирует в `/var/www/validator/`).
 5. **Frontend deploy:** cherry-pick frontend в prod main → npm run build → готово (постбилд авто-копирует).
 6. **Smoke на проде:** открыть `client.contenthunter.ru/dashboard` под одним из 6 проблемных проектов (79/81/83/85), увидеть banner + badges. Под admin'ом all-mode — увидеть aggregated banner.
@@ -268,18 +286,18 @@ Mount-тесты для **обоих** рендереров слотов с по
 
 | Риск | Вероятность | Митигация |
 |---|---|---|
-| `/api/schemes/deficits` для admin'а с 30+ проектами медленный | Низкая | Each get_summary → 2 SELECT'а, итого ~60 SELECT'ов. На indexed таблицах <100ms. Если станет узким — оптимизировать одним JOIN-запросом позже. |
-| project_name неправильно резолвится (если pack_name suffix паттерн другой) | Средняя | Pre-flight grep по `validator_projects` или `factory_projects` — найти canonical таблицу с проект-именами. |
-| Клиент видит баннер от другого проекта (cross-tenant leak) | Низкая | Backend строго фильтрует по `current_user.project_id` для роли client. Тест B1+B2 покрывает. |
-| Stale кеш — клиент одобрил схемы, баннер ещё показывается 10 мин | Низкая | UX-приемлемо. Можно очистить кеш на route-change `/client/schemes → /dashboard` (минимально). |
-| Per-slot badge ломает существующий layout слота | Средняя | Проверить визуально оба рендерера до commit. Использовать `position: absolute` или inline-flex с маленьким размером (10px шрифт). |
+| `/api/schemes/deficits` для admin'а с 30+ проектами медленный | Низкая | Один CTE-query (см. § Backend), не N+1. Indexed на `validator_scheme_preferences.project_id`; `factory_pack_accounts` без индекса по project_id — full-scan приемлем при <10K строк. Pre-flight: `EXPLAIN ANALYZE` на проде до релиза. |
+| Project store на фронте не содержит проект для admin'а в all-mode | Низкая | Fallback `Project ${id}` в banner expanded list. Acceptable UX; admin всё равно увидит project_id и может определиться. |
+| Клиент видит баннер от другого проекта (cross-tenant leak) | Низкая | Backend строго фильтрует server-side. Тесты B1+B2+B8+B9 покрывают (header-spoof, query-param spoof, multi-project manager scope). |
+| Per-slot badge ломает существующий layout слота | Средняя | Проверить визуально оба рендерера до commit. Inline-flex с small text (10px шрифт). Без `position: absolute` (могут быть z-index конфликты в существующем UI). |
+| `validator_scheme_preferences` или `factory_pack_accounts` имеют дубликаты, инфлирующие counts | Низкая | UNIQUE `uq_project_scheme` гарантирует non-dup approved. Для packs дубликаты project_id ОЖИДАЕМЫ (= пакаунт count). См. § Count semantics выше. |
 
 ## Open questions для writing-plans
 
 | Q | Что проверить |
 |---|---|
 | **Q1** | Frontend test runner: vitest или jest? Pre-flight `cat package.json`. Если ничего — добавить vitest dev-dep (предпочтительно для Vue) или fall back на node:test. |
-| **Q2** | Canonical таблица для project списка admin-mode'а: `validator_projects` или `factory_projects`? Project NAME — резолвим через project store (frontend), backend этого не возвращает. |
+| **Q2** | ~~Canonical таблица для project списка admin-mode'а~~ ✅ resolved (v3): `SELECT DISTINCT project_id FROM factory_pack_accounts WHERE project_id IS NOT NULL`. Self-consistent с min_required и не требует отдельной project-таблицы. |
 | **Q3** | Composable-pattern: `ls frontend/src/composables/` (если папка пуста — создаём первый файл с этим паттерном; OK для нашего случая). |
 | **Q4** | Auth/role: `current_user.project_ids` уже есть в `Auth` Pydantic model для manager? Pre-flight `grep -nE "project_ids" backend/src/models backend/src/auth*`. Если только `project_id` (одиночный) — manager может быть только привязан к одному проекту? Это меняет дизайн B4. |
 | **Q5** | PM2 process names на проде: уточнить `validator` vs `validator-backend` vs `validator-frontend` (frontend обычно serve через nginx из /var/www/validator/, не отдельный pm2 process). |
@@ -302,4 +320,6 @@ Mount-тесты для **обоих** рендереров слотов с по
 - **Deploy:** backend first → smoke endpoint → frontend (Codex MINOR #17)
 
 ## Codex review iterations
-- v1: 2 BLOCKER (auth, project name) + 9 IMPORTANT + 4 MINOR — все BLOCKER applied, основные IMPORTANT applied. Финальный verdict APPROVE-WITH-CHANGES → v2 это проводит в действие.
+- v1 review: 2 BLOCKER (auth, project name) + 9 IMPORTANT + 4 MINOR — applied → v2.
+- v2 review: 0 BLOCKER + 7 IMPORTANT + 3 MINOR — preimущественно cleanup stale wording от v1; applied → v3 (этот документ). Verdict APPROVE-WITH-CHANGES.
+- Convergence: после v3 ожидаем APPROVE без новых блокеров. Open questions Q1/Q4/Q5/Q6 — runtime pre-flight checks для writing-plans, не дизайн-уровень.
