@@ -2,6 +2,7 @@
 
 **Date:** 2026-05-07
 **Status:** Design — pending implementation plan
+**Revision:** v2 (post-Codex review)
 **Project:** validator-contenthunter (Vue 3 SPA + FastAPI backend)
 
 ## Problem
@@ -36,41 +37,109 @@
 
 **Новый endpoint:** `GET /api/schemes/deficits`
 
-Файл: `backend/src/routers/schemes.py` (добавить новую функцию). Использует существующий `schemes_service` для подсчётов.
+Файл: `backend/src/routers/schemes.py` (добавить новую функцию).
 
-Логика:
-1. Определить список доступных пользователю project_ids:
-   - role=`client` → `[current_user.project_id]` если он не None, иначе пустой список → возвращаем `[]`
-   - role=`manager` → `current_user.project_ids` (массив доступа)
-   - role=`admin` → все project_ids из `factory_projects` (или `validator_projects` — тот же `factory_pack_accounts.project_id` source-of-truth)
-2. Для каждого project_id вызвать `schemes_service.get_summary(project_id)` → `{approved, min_required, ...}`.
-3. Отфильтровать `approved < min_required AND min_required > 0`.
-4. JOIN с project name (через `factory_pack_accounts.pack_name → strip suffix` или существующий маппинг).
+### Authorization (Codex BLOCKER #1)
 
-Ответ:
+Allowed project IDs **строго** из server-side authenticated user (JWT/session DB-claim). НЕ читаем `X-Project-Id` header или query-параметр — это display-only state на фронтенде, не источник прав.
+
+- role=`client` → `[current_user.project_id]` если не None; иначе `[]` → ранний return.
+- role=`manager` → `current_user.project_ids` (массив из БД, prepopulated в JWT/session). Если пусто — `[]`, никаких "fall through to all".
+- role=`admin` → все project_ids из канонической project-таблицы (см. § Project identity ниже).
+- Любая другая роль → 403.
+
+Cross-tenant контроль: тест должен попытаться spoof'нуть `X-Project-Id` header и проверить что ответ не меняется.
+
+### Single grouped query (Codex IMPORTANT #3)
+
+Не циклить `get_summary()` per-project (60 SELECT'ов на admin-load). Один query с CTE:
+
+```sql
+WITH allowed AS (
+  -- $1 = ARRAY of allowed project_ids (validated server-side)
+  SELECT unnest($1::int[]) AS project_id
+),
+packs AS (
+  SELECT project_id, COUNT(*) AS pack_count
+  FROM factory_pack_accounts
+  WHERE project_id IN (SELECT project_id FROM allowed)
+  GROUP BY project_id
+),
+approved AS (
+  SELECT sp.project_id, COUNT(*) AS approved_count
+  FROM validator_scheme_preferences sp
+  JOIN unic_schemes us ON us.id = sp.scheme_id AND us.status = true
+  WHERE sp.status = 'approved'
+    AND sp.project_id IN (SELECT project_id FROM allowed)
+  GROUP BY sp.project_id
+)
+SELECT
+  p.project_id,
+  p.pack_count                          AS min_required,
+  COALESCE(a.approved_count, 0)         AS approved,
+  p.pack_count - COALESCE(a.approved_count, 0) AS missing
+FROM packs p
+LEFT JOIN approved a ON a.project_id = p.project_id
+WHERE p.pack_count > 0
+  AND p.pack_count > COALESCE(a.approved_count, 0)
+ORDER BY p.project_id;
+```
+
+Один query, индексы существуют (`ix_validator_scheme_preferences_project_id`, `factory_pack_accounts_pkey` — не оптимально по project_id; см. risk).
+
+### Project identity (Codex BLOCKER #2)
+
+**НЕ** деривируем имя через `factory_pack_accounts.pack_name → strip suffix`. Backend возвращает только `project_id`. Frontend резолвит project_name через **существующий project store** (Pinia store с `allProjects: [{id, project, ...}]`, см. recon `frontend/src/stores/project.ts`). Если store не имеет проекта — fallback на `Project ${id}` плейсхолдер.
+
+Pre-flight для writing-plans (Q2): подтвердить структуру project store + существование `validator_projects` или `factory_projects` table для admin-mode (где admin может видеть проекты которых нет в personal `project_ids`).
+
+### Response format (Codex MINOR #13)
+
 ```json
 [
-  {"project_id": 79, "project_name": "Aneco", "approved": 5, "min_required": 9},
-  {"project_id": 81, "project_name": "Inakent", "approved": 7, "min_required": 9}
+  {"project_id": 79, "approved": 5, "min_required": 9, "missing": 4},
+  {"project_id": 81, "approved": 7, "min_required": 9, "missing": 2}
 ]
 ```
 
-Производительность — O(N projects) per request, для admin (N=~30) это OK на dashboard load.
+(Без project_name — frontend резолвит.)
+
+### Errors
+
+- 401 (no auth) → 401 (FastAPI auth dependency)
+- 403 (unknown role) → 403
+- 5xx (DB error) → 500 + structured backend log
+
+### Logging (Codex MINOR #14)
+
+Структурированный logger.info/debug, без полных списков project_ids в info-level:
+```python
+logger.info("schemes_deficits", extra={"role": role, "project_count": len(allowed_ids), "returned": len(result), "took_ms": elapsed_ms})
+```
+Полный список project_ids — только debug-level.
 
 ### Frontend
 
 **Composable:** `frontend/src/composables/useSchemesDeficits.ts` (новый):
-- Reactive `deficits: Ref<DeficitEntry[]>`
-- `fetch()` — вызывает `GET /api/schemes/deficits` с `projectHeaders()` (см. `stores/project.ts`)
-- TTL-кеш на 10 минут (in-memory, per-session)
-- Helper `hasDeficitFor(projectId): boolean`
-- Helper `deficitFor(projectId): DeficitEntry | null`
+- Reactive state: `deficits: Ref<DeficitEntry[]>`, `deficitsByProjectId: ComputedRef<Map<number, DeficitEntry>>` — единственный источник истины (Codex IMPORTANT #4)
+- `fetch()` — вызывает `GET /api/schemes/deficits` БЕЗ `projectHeaders()` для этого endpoint'а (auth уже в JWT — см. backend §). Однако для admin/manager если фронтенд хочет filter'нуть по `viewMode='single'` selectedProjectId — это computed-фильтр поверх массива, НЕ передача header'а.
+- **Cache policy (Codex IMPORTANT #8):** НЕ кешировать долго. Refetch при каждом mount компонента + при возврате на `/dashboard` через router-hook (`watch` на `route.path`). Опционально 30-секундный server-side cache (FastAPI middleware) для admin запросов — но это в backlog, не в первой версии.
+- Helpers (Codex IMPORTANT #6 — null-safe):
+  - `hasDeficitFor(projectId: number | null | undefined): boolean` — false для `null/undefined/NaN`, иначе lookup в Map.
+  - `deficitFor(projectId: number | null | undefined): DeficitEntry | null` — то же.
+- Error states: `loading`, `error` (для вывода "статус схем недоступен" подсказки в DevTools без пользовательского noise — Codex IMPORTANT #9).
 
 **Banner component:** `frontend/src/components/SchemesDeficitBanner.vue` (новый):
-- Props: `deficits: DeficitEntry[]`, `viewMode: 'single' | 'all'`, `currentProjectId?: number`, `userRole: string`
-- Если `viewMode === 'single'` И есть deficit для `currentProjectId` → single-line banner с числами + CTA
-- Если `viewMode === 'all'` И deficits.length > 0 → агрегированный baner ("N проектов") с раскрывающимся списком
-- CTA-линк: для client → `/client/schemes`; для manager/admin → `/admin/scheme-preferences?project=<id>` (если single) или `/admin/scheme-preferences` (если all-mode без выбранного проекта)
+- Props: `deficits: DeficitEntry[]`, `viewMode: 'single' | 'all'`, `currentProjectId?: number | null`, `userRole: string`
+- Resolves project_name из существующего project store (см. § Project identity) — `useProjectStore().findById(id)?.project ?? \`Project ${id}\``
+- **Single mode:** показывается только если `deficitsByProjectId.has(currentProjectId)`. Single-line banner с числами + кнопка CTA.
+- **All mode (Codex IMPORTANT #7):** глобальный (across all accessible projects), не scoped к видимой неделе. Copy: "**N проектов с заблокированной публикацией.** Раскрыть список ↓". В раскрытом списке — каждая строка `<project_name>: X/Y · [Одобрить →]` (Codex MINOR #15: per-project CTA в expanded list).
+- CTA-линк (final):
+  - role=client → `/client/schemes` (один маршрут, проект уже привязан к client'у)
+  - role=manager/admin **single mode** → `/admin/scheme-preferences?project=<id>`
+  - role=manager/admin **all mode top-button** → `/admin/scheme-preferences` (generic, без preselect — пусть выбирают на странице)
+  - role=manager/admin **all mode per-row in expanded list** → `/admin/scheme-preferences?project=<row.project_id>`
+- **Visual (Codex MINOR #16):** убираем emoji 🚫 в badge, оставляем только текстовый "Не хватает схем" с red bg. В banner допустим одиночный info-icon из существующего lucide/heroicons библиотеки (если есть в проекте — pre-flight).
 
 **Per-slot badge:** добавить в **ОБА** рендерера:
 1. `frontend/src/components/SlotCard.vue` (manager-side)
@@ -81,11 +150,13 @@ Per-slot badge — небольшой inline `<span>` блок с условны
 <span
   v-if="hasDeficit"
   class="inline-flex items-center px-1.5 py-0.5 text-[10px] font-semibold text-red-700 bg-red-100 border border-red-200 rounded"
-  title="Одобрено X из Y схем уникализации"
->🚫 Не хватает схем</span>
+  :title="deficitTooltip"
+>Не хватает схем</span>
 ```
 
-Где `hasDeficit` пробрасывается prop'ом сверху (рассчитывается в `ClientDashboard.vue` через composable).
+`hasDeficit: boolean` и `deficitTooltip: string` — оба prop'а пробрасываются сверху из родителя (Codex IMPORTANT #4: badges и banner используют ОДНУ Map из composable). Tooltip строится в parent: `Одобрено ${approved} из ${min_required} схем уникализации` (NB: `Об` и `из` со строчной — обычные слова).
+
+Slot project_id source (Codex IMPORTANT #12): использовать тот же field, что и существующий код в render — recon показал `slot.project_id` (line 158 ClientDashboard.vue: `:title="slot.project_name"`). Если в `SlotCard.vue` поле названо иначе — pre-flight grep'ом найти canonical name. Если `slot.project_id` бывает null/undefined для ещё-не-заполненных слотов — наш null-safe helper вернёт `false`.
 
 **Integration в `ClientDashboard.vue`:**
 - В `<script setup>` импортировать composable, вызвать `fetch()` в `onMounted`
@@ -129,26 +200,48 @@ manager/admin: /admin/scheme-preferences?project=<id>
 
 | Тест | Setup | Expect |
 |---|---|---|
-| **B1** | client с project_id=79 (5/9 deficit) | 1 элемент `{project_id:79, approved:5, min_required:9}` |
+| **B1** | client с project_id=79 (5/9 deficit) | 1 элемент `{project_id:79, approved:5, min_required:9, missing:4}` |
 | **B2** | client с project_id=99 (full coverage 9/9) | empty array |
 | **B3** | client с project_id=NULL | empty array |
-| **B4** | manager с project_ids=[79,80,81], deficits на 79 и 81 | 2 элемента |
+| **B4** | manager с project_ids=[79,80,81], deficits на 79 и 81 | 2 элемента (без 80) |
 | **B5** | admin (все проекты), 6 deficits | 6 элементов |
-| **B6** | проект без packs (min_required=0) | НЕ включается (фильтр `min_required > 0`) |
+| **B5b** | manager с **project_ids=[]** (пусто) | empty array; никаких "fall through to all projects"; 0 SQL queries against project tables |
+| **B6** | проект без packs (min_required=0) | НЕ включается |
 | **B7** | unauthenticated → 401 |
+| **B8** (cross-tenant, Codex IMPORTANT #10) | client с project_id=79 отправляет `X-Project-Id: 80` header | Header игнорируется. Ответ — только проект 79. |
+| **B9** (cross-tenant) | manager с project_ids=[79] отправляет `X-Project-Id: 999` header | Header игнорируется. Ответ — только дефициты project_id=79. |
+| **B10** (role escalation) | role=`producer` (не client/manager/admin) → 403 |
 
 Использовать существующий `engine.dispose` autouse fixture (см. memory `feedback_validator_test_engine_dispose.md`).
 
-### Frontend (vitest или node:test — выяснить convention в repo)
+**Performance smoke (Codex IMPORTANT #3):** `B11` тест считает количество SQL-запросов через SQLAlchemy event listener (если есть hook в существующих тестах — переиспользовать). Запрос `/api/schemes/deficits` для admin с 30 проектами → ровно 1 query на project-data (CTE), без N+1.
+
+### Frontend (test runner — pre-flight в writing-plans, см. Q1)
 
 | Тест | Setup | Expect |
 |---|---|---|
-| **F1** | composable без deficits → banner v-if=false |
-| **F2** | composable с 1 deficit + viewMode='single' → single-line banner с правильными числами |
-| **F3** | composable с 3 deficits + viewMode='all' → агрегированный banner "3 проекта" |
-| **F4** | hasDeficitFor(79)=true, hasDeficitFor(80)=false → badge только на slot.project_id=79 |
+| **F1** | composable без deficits → banner v-if=false, badges не показываются |
+| **F2** | composable с 1 deficit + viewMode='single' с этим project_id → single-line banner с правильными числами |
+| **F2b** | composable с 1 deficit + viewMode='single' с **другим** project_id → banner НЕ показывается, badges на slot'ах с deficit-project показываются (orthogonal data sources) |
+| **F3** | composable с 3 deficits + viewMode='all' → агрегированный banner "3 проекта", expanded list имеет 3 строки + per-row CTA |
+| **F4** (helper, Codex IMPORTANT #6) | `hasDeficitFor(null)`, `hasDeficitFor(undefined)`, `hasDeficitFor(NaN)` все возвращают `false` |
 | **F5** | CTA-линк для role='client' → href='/client/schemes' |
 | **F6** | CTA-линк для role='admin' single mode → href='/admin/scheme-preferences?project=79' |
+| **F6b** | CTA-линк для role='manager' all mode top-button → href='/admin/scheme-preferences' (без project param) |
+| **F6c** | CTA-линк per-row in expanded list → href='/admin/scheme-preferences?project=<that-row-id>' |
+| **F7** (mode switching, Codex IMPORTANT #4) | viewMode all → single → another single → видим banner switch'ит без stale state |
+
+### Integration tests (Codex IMPORTANT #11)
+
+Mount-тесты для **обоих** рендереров слотов с подключённым composable:
+
+| Тест | Setup | Expect |
+|---|---|---|
+| **I-S1** | mount `SlotCard.vue` (manager renderer) с props slot.project_id=79, deficits map содержит 79 | badge виден |
+| **I-S2** | mount `SlotCard.vue` с slot.project_id=80, deficits map не содержит 80 | badge не виден |
+| **I-D1** | mount `ClientDashboard.vue` с client-роль и project_id=79 (deficit), seed slots на этой неделе | banner виден + badges на client inline-render слотах |
+| **I-D2** | mount `ClientDashboard.vue` с slot.project_id=null | badge не виден (null-safe) |
+| **I-D3** | After-fetch state change (deficits initially empty → re-fetch with 1 entry) → badge appears reactively |
 
 ### Manual smoke
 
@@ -160,13 +253,16 @@ manager/admin: /admin/scheme-preferences?project=<id>
 
 ## Rollout
 
-1. **Dev (validator-contenthunter):** ветка `feature/schemes-deficit-banner-2026-05-07`. Worktree (см. memory `feedback_parallel_claude_sessions.md`).
-2. **Backend** сначала — запустить pytest, smoke `/api/schemes/deficits` через curl с реальным JWT.
-3. **Frontend** — `npm run build` (auto-postbuild копирует в `/var/www/validator/` — см. memory `feedback_validator_postbuild_autodeploy.md`). Hot-reload не нужен для prod-like smoke.
-4. **Smoke на dev:** открыть `client.contenthunter.ru` локально через port-forward или dev-server, под одним из 6 проблемных проектов (79/81/83/85), увидеть banner.
-5. **Cherry-pick в prod main**, рестарт validator PM2-процесса (`pm2 restart validator`).
-6. **Monitoring T+15 мин:** запросить от клиента screenshot или попросить тестового клиента проверить. Также `pm2 logs validator | grep deficits` показывает активность.
-7. **Rollback:** `git revert <merge_sha>` + `pm2 restart validator`. Никаких миграций, БД-изменений, не нужно откатывать данные.
+**Order matters (Codex MINOR #17):** backend deploy ПЕРЕД frontend, чтобы избежать окна, в котором фронт зовёт несуществующий endpoint и баннер тихо скрывается.
+
+1. **Dev (validator-contenthunter):** ветка `feature/schemes-deficit-banner-2026-05-07`. Worktree (memory `feedback_parallel_claude_sessions.md`).
+2. **Backend impl + tests** — запустить pytest, smoke `/api/schemes/deficits` через curl с реальным JWT для client/manager/admin. Применить также cross-tenant тесты (B8/B9).
+3. **Backend deploy first:** cherry-pick backend изменений в prod main → `pm2 restart validator-backend` (имя процесса pre-flight; backend и frontend serve отдельно). Verify endpoint живой: `curl -H "Cookie: session=..." https://client.contenthunter.ru/api/schemes/deficits` — должен вернуть массив (с 6 ожидаемыми deficits для admin).
+4. **Frontend impl + tests** — `npm run build` (auto-postbuild копирует в `/var/www/validator/`).
+5. **Frontend deploy:** cherry-pick frontend в prod main → npm run build → готово (постбилд авто-копирует).
+6. **Smoke на проде:** открыть `client.contenthunter.ru/dashboard` под одним из 6 проблемных проектов (79/81/83/85), увидеть banner + badges. Под admin'ом all-mode — увидеть aggregated banner.
+7. **Monitoring T+15 мин:** `pm2 logs validator-backend | grep schemes_deficits` — активность endpoint'а. Запросить тестового клиента screenshot чтобы подтвердить визуал.
+8. **Rollback:** `git revert <merge_sha>` (отдельно для backend и frontend). PM2-restart соответствующего процесса. Никаких миграций.
 
 ## Risks
 
@@ -182,17 +278,28 @@ manager/admin: /admin/scheme-preferences?project=<id>
 
 | Q | Что проверить |
 |---|---|
-| **Q1** | Frontend test runner: vitest или jest? Если ничего — добавить vitest как dev-dep ИЛИ написать тесты на node:test (как в autowarm-testbench). Pre-flight `cat package.json`. |
-| **Q2** | Canonical таблица для project_name: `validator_projects` или `factory_projects`? `factory_pack_accounts.pack_name` имеет суффикс типа `_1`, `_2` — strip их, как в существующем `runAutoUnicForDate` (`pack_name?.replace(/_\d+$/, '')`). |
-| **Q3** | Есть ли уже composable-pattern в validator (Pinia store + composable) или только Pinia? Pre-flight `ls frontend/src/composables/`. |
-| **Q4** | Auth/role pass-through: `current_user.project_ids` уже есть в `Auth` Pydantic model для manager? Pre-flight `grep -nE "project_ids" backend/src/models`. |
-| **Q5** | UNIQUE на `validator_scheme_preferences (project_id, scheme_id)` — есть (`uq_project_scheme`), используется в schemes_service. ✓ |
+| **Q1** | Frontend test runner: vitest или jest? Pre-flight `cat package.json`. Если ничего — добавить vitest dev-dep (предпочтительно для Vue) или fall back на node:test. |
+| **Q2** | Canonical таблица для project списка admin-mode'а: `validator_projects` или `factory_projects`? Project NAME — резолвим через project store (frontend), backend этого не возвращает. |
+| **Q3** | Composable-pattern: `ls frontend/src/composables/` (если папка пуста — создаём первый файл с этим паттерном; OK для нашего случая). |
+| **Q4** | Auth/role: `current_user.project_ids` уже есть в `Auth` Pydantic model для manager? Pre-flight `grep -nE "project_ids" backend/src/models backend/src/auth*`. Если только `project_id` (одиночный) — manager может быть только привязан к одному проекту? Это меняет дизайн B4. |
+| **Q5** | PM2 process names на проде: уточнить `validator` vs `validator-backend` vs `validator-frontend` (frontend обычно serve через nginx из /var/www/validator/, не отдельный pm2 process). |
+| **Q6** | Иконка-библиотека (lucide / heroicons / homemade) для info-icon в banner — pre-flight `grep -rE "lucide-vue\|heroicons" frontend/package.json frontend/src/components`. Если нет — текстовый emoji-free дизайн. |
 
 ## Decisions captured
 
 - Single endpoint `/api/schemes/deficits` (не extend существующий `/api/schemes/summary/{project_id}` — sep responsibility)
-- Composable + reactive ref (не Pinia store, проще для one-off use case)
-- Per-slot badge inline в обоих рендерерах (правило `feedback_validator_two_slot_renderers.md`)
-- Aggregated banner expandable (clickable disclosure), не fixed list (rascal-проблема)
-- TTL 10min — компромисс между свежестью и нагрузкой; ручной refresh через page reload
-- CTA URLs: client→/client/schemes, admin/manager→/admin/scheme-preferences?project=<id>
+- **Single SQL CTE-query** вместо цикла per-project (Codex IMPORTANT #3)
+- **Auth — server-side only,** игнорируем `X-Project-Id` для этого endpoint'а (Codex BLOCKER #1)
+- **Project name резолвится на фронте** через project store, backend возвращает только project_id (Codex BLOCKER #2)
+- Response поле `missing` на бэке (Codex MINOR #13)
+- Composable + reactive ref + computed Map deficitsByProjectId — единый источник истины
+- **No client-side cache** (refetch on mount + on /dashboard re-entry); Codex IMPORTANT #8
+- Per-slot badge inline в обоих рендерерах (memory `feedback_validator_two_slot_renderers.md`)
+- Aggregated banner expandable (clickable disclosure)
+- All-mode banner **глобальный** (не scoped к видимой неделе) — Codex IMPORTANT #7
+- CTA URLs: client→/client/schemes; admin/manager single→preselect; admin/manager all top-button → generic; per-row in expanded list → preselect (Codex MINOR #15)
+- **Visual:** убрали emoji в badge, `Не хватает схем` text-only (Codex MINOR #16)
+- **Deploy:** backend first → smoke endpoint → frontend (Codex MINOR #17)
+
+## Codex review iterations
+- v1: 2 BLOCKER (auth, project name) + 9 IMPORTANT + 4 MINOR — все BLOCKER applied, основные IMPORTANT applied. Финальный verdict APPROVE-WITH-CHANGES → v2 это проводит в действие.
