@@ -56,50 +56,55 @@ e103152 feat(yt-gmail): add match_gmail_to_handle with ambiguity handling
 - `node --check server.js`: **syntax-ok**
 - HTML grep `new-acc-gmail|acc-gmail-input|acc-gmail-display` в `public/index.html`: **8 references** (new-row input + 2 lookups; existing-row input + edit-toggle + display span + clear-protection check + ...).
 
-## Deploy steps (run by controller / operator)
+## Deploy выполнен ✅ 2026-05-07 17:19 UTC
 
-1. **Merge feature branch → main** (см. `superpowers:finishing-a-development-branch`).
-2. **Push to `GenGo2/delivery-contenthunter`** origin/main.
-3. **Sync prod cwd**: `cd /root/.openclaw/workspace-genri/autowarm/ && sudo git pull origin main`.
-4. **`sudo pm2 reload autowarm`** — server.js забирает новые endpoints. Frontend `public/index.html` отдаётся либо самим autowarm, либо nginx'ом — проверить `pm2 describe autowarm | grep "exec cwd"` (см. `feedback_pm2_dump_path_drift.md`).
-5. Smoke validate сразу: открыть `https://delivery.contenthunter.ru/...` (testbench UI) → раздел Паки → попробовать создать pack с YT-аккаунтом → должно требовать gmail.
+1. ✅ Feature branch merged → main `bb7c140` (no-ff merge commit), pushed to GenGo2/delivery-contenthunter.
+2. ✅ `git pull --ff-only` в `/root/.openclaw/workspace-genri/autowarm/` (claude-user может писать в этот path без sudo, см. `reference_vps_fs_access.md`).
+3. ✅ `sudo pm2 reload autowarm` — uptime 10s post-reload, exec cwd корректный, лог чист (только pre-existing infra noise — Pi #4/#6 unreachable, dispatch-queue pq=766 type-error — НЕ от наших правок).
+4. ✅ Deployed code verified: `extract_yt_picker_pairs` в `yt_gmail_probe.py`, "gmail обязателен для YouTube" в `server.js`, `new-acc-gmail` в `public/index.html`.
 
-## Post-deploy ops (manual для Feminista)
+## Gmail filled для Feminista ✅ 2026-05-07
 
-1. **Восстановить gmail для Feminista пакетов 402/403/404**:
-   - **Manual UI:** открыть Паки → каждый из 3 паков (Феминиста_154/155/156) → edit YT-row → ввести gmail оператора → save.
-   - **OR** если YT-аккаунты уже залогинены на phones #154/155/156:
-     ```bash
-     cd /root/.openclaw/workspace-genri/autowarm/ && \
-       python3 backfill_yt_gmails.py --device-number 154 --device-number 155 --device-number 156 --dry-run
-     # If dry-run looks right, apply без --dry-run.
-     ```
+`backfill_yt_gmails.py` НЕ нашёл Feminista accounts в picker'е (см. ниже «Critical finding»). Заполнено через прямой SQL UPDATE на основе скринов picker'а от пользователя:
 
-2. **Re-queue YT-only failing tasks** (3 из 9 — IG/TT остаются в backlog):
-   ```sql
-   UPDATE publish_queue pq SET status='pending', publish_task_id=NULL
-     FROM publish_tasks pt
-     WHERE pq.publish_task_id = pt.id
-       AND pt.id IN (3243, 3246, 3247);
-   ```
+| acc_id | username | gmail |
+|---|---|---|
+| 1852 | feminista.beauty | `veronikamavrikeva@gmail.com` |
+| 1855 | feminista_patches | `avdodyaderevenskaya@gmail.com` |
+| 1860 | feminista_glow | `glafirakuznechnaya@gmail.com` |
 
-3. **T+30 min smoke**:
-   ```sql
-   SELECT id, account, platform, status, error_code,
-     to_char(created_at AT TIME ZONE 'Europe/Moscow', 'MM-DD HH24:MI') ts
-   FROM publish_tasks
-   WHERE account ILIKE 'feminista%' AND platform='YouTube'
-   ORDER BY created_at DESC LIMIT 5;
-   ```
-   Expected: новые YT задачи без `yt_target_not_in_picker_after_scroll: gmail=None`.
+Re-queued: `publish_queue.id IN (1136, 1148, 1156)` → `status='pending', publish_task_id=NULL`. dispatchPublishQueue (5 мин cycle) подхватит.
 
-## Известные follow-ups (out of scope этого спека)
+## Critical finding — YT picker структура изменилась ⚠️
 
-- IG `ig_target_not_in_picker` для `feminista_glow` / `feminista_patches` → sub-task **B-IG**.
-- TT `tt_target_not_on_device` → sub-task **B-TT**.
-- 100+ legacy YT NULL gmails (cross-project audit) → разовый прогон `backfill_yt_gmails.py --all --parallel 8` post-deploy.
-- Code-review минорные items, отложенные на будущий cleanup (см. commit-сообщения 0099c8f, 5215ca5, 8b9f149).
+При попытке `backfill_yt_gmails.py --device-number 154/155/156` всплыло, что `extract_yt_picker_pairs` ловит только **legacy-формат** rows (`text="X@gmail.com" content-desc="X@gmail.com"`). Реальный picker сейчас иерархичный:
 
-## Memory updates after deploy
-- Обновить `project_session_2026_05_07_shipped.md` — добавить B-YT в Отгружено, B-IG/B-TT остаются в Backlog.
-- При желании — `project_yt_gmail_switcher.md` дополнить тем, что nav-логика теперь в `yt_gmail_probe.py` (прежде была inline в `backfill_yt_gmails.py`).
+- **Google account header**: `<text="DisplayName"/>` + `<text="user@gmail.com"/>` (отдельные ноды)
+- **Channels под аккаунтом**: `<text="ChannelName"/>` + `<text="@channel-handle"/>` (отдельные ноды, gmail канала = gmail Google-родителя)
+- **Separator**: `<text="Другие аккаунты"/>` между группами
+
+Пример с phone #154:
+- `Veronikamavrikeva` + `veronikamavrikeva@gmail.com` (Google account)
+  - `Feminista` + `@feminista.beauty` (channel — gmail = veronikamavrikeva)
+- `Другие аккаунты`
+- `zxclesya154@gmail.com` (Google account, just gmail)
+  - `WellFresh_1` + `5 подписчиков` (channel)
+
+**Implication для production:**
+1. `backfill_yt_gmails.py` пропускает каналы в современных picker'ах → старые NULL gmail не восполнятся автоматом.
+2. **`account_switcher.find_yt_row_by_gmail`** скорее всего использует тот же regex-формат → может не находить inactive каналы по gmail (нужно проверить и переписать).
+3. Revision auto-backfill из Task 6 имеет ту же ограниченность парсера.
+
+Дамп для отладки сохранён: `/tmp/yt_debug_154/round_*.xml` (18KB каждый). Скрин phone 154: см. `reference_yt_picker_structure_2026_05_07.md` (если будет создан).
+
+## Follow-ups в backlog
+
+- **B-YT-parser** — переписать `extract_yt_picker_pairs` + `extract_yt_picker_deleted_pairs` под иерархичный picker (stream-state-machine: gmail nodes открывают Google section, @handle-nodes ассоциируются с последним open gmail).
+- **B-YT-switcher** — проверить и обновить `account_switcher.find_yt_row_by_gmail` для современного picker'а (если использует ту же логику).
+- **B-IG** — `ig_target_not_in_picker` для feminista_*.
+- **B-TT** — `tt_target_not_on_device` для feminista_*.
+- 100+ legacy YT NULL gmails — после fix B-YT-parser.
+
+## Memory updates применены
+- `project_session_2026_05_07_shipped.md` — B-YT в Отгружено; B-YT-parser, B-YT-switcher, B-IG, B-TT в Backlog.
+- `project_yt_gmail_switcher.md` — заметка про shared probe + caveat про парсер.
