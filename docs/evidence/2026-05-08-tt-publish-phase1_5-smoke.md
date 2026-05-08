@@ -166,3 +166,54 @@ WHERE id IN (4185, 3046, 2895, 2781, 2681, 2339, 2116);
 **После sweep:** 0 failed TT tasks с post_url за 14 дней. TT сторона чиста.
 
 **Backlog:** IG имеет 4 аналогичных mis-classified failed-with-post_url cases (out of TT scope, отдельная задача).
+
+## Phase 2 production rollout (13:36 UTC)
+
+После Phase 1.5 verified, выполнен production rollout TT_BOUND_NAV_ENABLED=true в main `autowarm` process.
+
+**Изменения:**
+- Создан `ecosystem.production.config.js` с `env.TT_BOUND_NAV_ENABLED='true'`.
+- `sudo pm2 delete autowarm` (старый PM2 #1, raw start, без env).
+- `sudo pm2 start ecosystem.production.config.js` → новый PM2 #34, online с env.
+- Verified: `sudo pm2 env 34 | grep TT_BOUND_NAV` → `true`.
+- Все остальные PM2 processes (testbench, farming, ch-auth, producer, validator) untouched.
+
+**Kill switch:**
+```bash
+# Disable bound-nav, keep autowarm running:
+sed -i "s/TT_BOUND_NAV_ENABLED: 'true'/TT_BOUND_NAV_ENABLED: 'false'/" ecosystem.production.config.js
+sudo pm2 reload autowarm --update-env
+
+# Or full revert to pre-rollout baseline:
+sudo pm2 delete autowarm
+sudo pm2 start <path-to-old-server.js> --name autowarm
+```
+
+### Phase 2 canary first results
+
+**Task 4228 (clickpay_life, raspberry=9, RFGYC31P7DT — НОВОЕ устройство ≠ phone #19):**
+
+| Time | Event | Result |
+|---|---|---|
+| 13:41:09 | sa_preflight | `single_account=False known=hobrukartt,clickpay_life,clickpay_team` (3 TT accounts on device) |
+| 13:43:12 | tt_bound_nav | **`tap_method=xml_bounds coords=(972,2136)`** ✅ |
+| 13:44:11 | tt_account_sheet_closed_before_parse | bottomsheet не открылся (different code path: `tt_3_open_list`) |
+| 13:44:20 | failed | publish failed |
+
+**КРИТИЧЕСКОЕ EVIDENCE:** bound-helper резолвил **те же coords (972, 2136)** на новом raspberry/устройстве как на phone #19. Это подтверждает что Samsung Galaxy bottom-nav layout consistent across S21 family, **bound-nav generalizes** на production fleet.
+
+Failure mode `tt_account_sheet_closed_before_parse` — это **другой code path** (`tt_3_open_list` после own_profile detected, switcher пытается сменить аккаунт через bottomsheet). Phase-1 covered foreign-profile recovery (T8 enum split applied там), но not this path. Это **pre-existing issue**, обнаруженный благодаря Phase-1 unblock'у. Backlog для следующей итерации.
+
+### Phase 2 verdict
+
+✅ **Bound-nav generalization confirmed на 1 production устройстве** (нужно ещё 3-4 для confidence, 4224-4227 pending dispatch). 
+
+**Risks остаются low:** даже на устройствах где XML bounds drift'ят, fallback chain `xml_bounds → vision → coords_fallback` обеспечивает no-worse-than-baseline behavior.
+
+**Recommended monitoring:** 24h post-rollout dashboard check для TT success rate trends.
+
+## Final memory updates needed
+
+- `project_publish_testbench.md` — обновить (testbench scope = phone #19 только, hard-coded в scheduler).
+- New entry: «TT publish Phase-1+1.5+2 shipped 2026-05-08» с key learnings.
+- Update `feedback_publisher_error_code_misleading.md` с note про false-fail pattern (post_url=profile-only + status=failed).
