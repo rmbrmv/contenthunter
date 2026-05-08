@@ -525,16 +525,20 @@ def _extract_hierarchical_pairs(xml: str, deleted_only: bool = False) -> list[tu
     current_gmail: Optional[str] = None
     for _y_top, text, desc, clickable in nodes:
         is_deleted = bool(DELETED_LABEL_RE.search(text + ' ' + desc))
-        # Filter по deleted_only — invariant: skip deleted кроме как когда хотим именно deleted.
-        if deleted_only and not is_deleted:
-            continue
-        if not deleted_only and is_deleted:
-            continue
 
-        # Шаг 3.b — gmail header detect
+        # Шаг 3.b — gmail header detect (ВСЕГДА, независимо от deleted_only).
+        # Header не deleted сам по себе, но он нужен для канал-row под ним —
+        # включая deleted-каналы (test_extract_deleted_pairs_hierarchical).
         gm_text = GMAIL_RE.search(text)
         if gm_text and (desc == '' or desc == text):
             current_gmail = gm_text.group(0).lower()
+            continue
+
+        # Filter по deleted_only — применяется ТОЛЬКО к channel rows ниже.
+        # Invariant: skip deleted кроме как когда хотим именно deleted.
+        if deleted_only and not is_deleted:
+            continue
+        if not deleted_only and is_deleted:
             continue
 
         # Channel rows должны быть clickable И иметь current_gmail в scope.
