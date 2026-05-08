@@ -1,5 +1,39 @@
 # BACKLOG — Генри
 
+## 🟢 Publish dup incident 2026-05-08 — Phase 2 (через 2-4 нед observation)
+**Приоритет:** средний
+**Статус:** waiting for verification window
+
+**Контекст:** Phase 1 (Spec C+B+A) shipped 2026-05-08 — closed RC-1..5, RC-7, RC-8.
+- autowarm origin/main: `fab52dc` (B 2 + A 3 + C 4 commits)
+- validator origin/main: `cdda4a5` (B 2 + A 1 commits)
+- Stop-gap: sweep отключён `UNIC_SWEEP_DISABLED=1`, после prod pull нужно `pm2 unset` обратно
+
+**Phase 2 — D4 sweep window narrow (RC-5 finishing):**
+- В `unic_sweep.js:28-33` `computeBusinessDateWindow` вернуть `[today]` (убрать `yesterday`)
+- Pre-condition: 2-4 нед observation что `past_slot_dropped` events падают к 0 (= trigger-immediate ловит все cases)
+- Worktree-prep: `feat/sweep-window-narrow-today-only-20260601` (от main)
+- Test: `tests/test_sweep_window.test.js` уже scaffold'ed в Spec A plan
+- 2 теста + 1 commit + cherry-pick
+
+**Verification queries:**
+```sql
+-- Phase 2 trigger: should be 0 daily for 2-4 weeks
+SELECT count(*) FROM publish_queue WHERE status='past_slot_dropped' AND created_at::date = CURRENT_DATE;
+
+-- если sweep не вставляет yesterday — D4 безопасно
+SELECT count(*) FROM unic_tasks
+WHERE created_at > now() - interval '24 hours'
+  AND content_id IS NOT NULL AND slot_date = (CURRENT_DATE - 1);
+```
+
+**Related followups (low priority):**
+- D1.5 в Spec C: проверить call chain `return None` → `publish_task.status='failed'` (T5 GREEN, но в проде проверить через `media_store_pollution_pre_publish` event count)
+- RC-3 morning batch reliability (отдельный design, не критичен после D1+sweep)
+- IG локализация без 'видео' в content-desc — если spike `ig_gallery_no_video_candidate` → расширить video selector
+
+---
+
 ## 🔵 Zoom Voice Agent — Кира на звонках (2026-03-01)
 **Приоритет:** средний (после presence)
 **Статус:** ожидает ресёрча
