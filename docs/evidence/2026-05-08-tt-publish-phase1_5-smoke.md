@@ -135,3 +135,34 @@ Working tree (this commit):
 - 4185 still в `awaiting_url` (последний URL resolve idle) — не блокер, post_url уже captured как profile URL (не video URL). TT часто требует ~24h для video URL availability через scraping; standard async flow.
 - 4129 `tt_audio_dialog_stuck` (Phase 1.5 T4 cap evidence) — task запас в БД для tracking как baseline measurement.
 - Phase 2 canary — отдельная итерация (отдельный design+plan).
+
+## DB sweep (12:50 UTC, after fix verified)
+
+**Hypothesis check:** 14 cases `tt_upload_confirmation_timeout` за 7 дней с post_url — НЕ подтвердился. 0 таких записей (все timeout cases без post_url, реально не опубликовались).
+
+**Реальный mis-classification pattern найден:** **7 cases** `switch_failed_unspecified` со status=failed но **с post_url=profile-only**:
+
+| id | account | created_at |
+|---:|---|---|
+| 4185 | user70415121188138 | 2026-05-08 (Phase 1.5 verified task) |
+| 3046 | spbpropertyguide | 2026-05-05 |
+| 2895 | content_expert_1 | 2026-05-04 |
+| 2781 | content_expert_1 | 2026-05-03 |
+| 2681 | procontent_lab | 2026-05-03 |
+| 2339 | content_expert_1 | 2026-05-02 |
+| 2116 | content_expert_1 | 2026-05-01 |
+
+Все 7 — profile-only URLs. Pattern: publish прошёл (post_url_captured event), partial profile URL stored, но потом другой step fail'нул и `error_code` overrode на `switch_failed_unspecified` (известный bug error_code-врёт, memory `feedback_publisher_error_code_misleading`).
+
+**UPDATE applied:** 
+```sql
+UPDATE publish_tasks SET status='awaiting_url', error_code=NULL
+WHERE id IN (4185, 3046, 2895, 2781, 2681, 2339, 2116);
+```
++ audit trail в `log` column.
+
+Семантически корректно — publish был success, video URL pending (TT часто async). Operators больше не видят misleading «failed» в UI для этих tasks.
+
+**После sweep:** 0 failed TT tasks с post_url за 14 дней. TT сторона чиста.
+
+**Backlog:** IG имеет 4 аналогичных mis-classified failed-with-post_url cases (out of TT scope, отдельная задача).
