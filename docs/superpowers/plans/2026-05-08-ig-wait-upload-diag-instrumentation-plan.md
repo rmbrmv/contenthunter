@@ -316,23 +316,27 @@ def _make_publisher_stub(adb_responses=None, dump_ui_response=None,
 
 
 def test_wait_upload_iter0_diag_event_logged():
-    """На старте wait_upload должен emit'нуться wait_upload_iter0_diag event.
+    """iter0_diag event fires при входе в wait_upload (driven через timeout path).
 
-    Verifies always-fire (даже на success path где iteration 0 уже finds MainTabActivity).
+    Drive timeout path (adb всегда возвращает InstagramMainActivity, НЕ MainTabActivity)
+    чтобы избежать success-path post-publish методов (которые бы потребовали мокать
+    _save_post_url, _fetch_instagram_url_via_api и т.д.). Method возвращает False;
+    iter0_diag должен fire'нуться regardless.
     """
-    # adb returns MainTabActivity → loop ends fast (1 iteration)
-    activity_str = 'topResumedActivity=ActivityRecord{abc u0 com.instagram.android/.activity.MainTabActivity t123}'
+    stuck_activity = 'topResumedActivity=ActivityRecord{abc u0 com.instagram.android/com.instagram.mainactivity.InstagramMainActivity t123}'
     ui_xml = (
         "<?xml version='1.0'?><hierarchy>"
         '<node text="Поделиться" content-desc="" bounds="[100,2000][900,2200]" '
         'clickable="true" resource-id="com.instagram.android:id/share_button"/>'
         '</hierarchy>'
     )
-    stub = _make_publisher_stub(adb_responses=activity_str, dump_ui_response=ui_xml,
+    stub = _make_publisher_stub(adb_responses=stuck_activity, dump_ui_response=ui_xml,
                                   ui_dump_url='https://s3/iter0.xml')
 
     with patch('time.sleep'):
-        stub._wait_instagram_upload()
+        result = stub._wait_instagram_upload()
+
+    assert result is False  # timeout path
 
     # Find iter0_diag log_event call
     iter0_calls = [
@@ -342,7 +346,7 @@ def test_wait_upload_iter0_diag_event_logged():
     assert len(iter0_calls) == 1, f'expected 1 iter0_diag event, got {len(iter0_calls)}: {stub.log_event.call_args_list}'
     meta = iter0_calls[0].kwargs['meta']
     assert 'topResumedActivity' in meta
-    assert 'MainTabActivity' in meta['topResumedActivity']
+    assert 'InstagramMainActivity' in meta['topResumedActivity']
     assert meta['ui_dump_url'] == 'https://s3/iter0.xml'
     assert isinstance(meta['share_candidates'], list)
     assert len(meta['share_candidates']) == 1
@@ -350,15 +354,16 @@ def test_wait_upload_iter0_diag_event_logged():
 
 
 def test_wait_upload_timeout_diag_event_logged():
-    """На timeout-exhaustion должен emit'нуться wait_upload_timeout_diag event."""
-    # adb всегда возвращает InstagramMainActivity (не MainTabActivity) → 30 iterations exhaust
+    """timeout_diag event fires при exhaustion 30-iteration loop."""
     stuck_activity = 'topResumedActivity=ActivityRecord{abc u0 com.instagram.android/com.instagram.mainactivity.InstagramMainActivity t456}'
     ui_xml = '<hierarchy/>'
     stub = _make_publisher_stub(adb_responses=stuck_activity, dump_ui_response=ui_xml,
                                   ui_dump_url='https://s3/timeout.xml')
 
     with patch('time.sleep'):
-        stub._wait_instagram_upload()
+        result = stub._wait_instagram_upload()
+
+    assert result is False  # timeout path
 
     timeout_calls = [
         call for call in stub.log_event.call_args_list
