@@ -130,7 +130,7 @@ XML uiautomator dump'а picker'а (string).
 1. **Drop bogus `(gmail, gmail)` tuples** — если `_normalize(identifier) == _normalize(gmail)` ИЛИ identifier при lower равен gmail при lower, пропускаем. Это фильтрует legacy false-positive где старая логика возвращала `('zxclesya154@gmail.com', 'zxclesya154@gmail.com')` из text=desc=gmail-only нод (без последующего channel display row под ней). Применяется ПОСЛЕ merge legacy+hierarchical, чтобы legacy-output без полезной handle-инфо не загрязнял contract функции.
 2. **Dedup** — set на tuple `(identifier_lower, gmail_lower)`, сохранение первого вхождения.
 
-> **Side-effect:** существующие тесты `test_extract_two_rows` / similar legacy-fixtures, которые ожидали `(gmail, gmail)` пары, могут стать жёлтыми. Mitigation в Section 5.3 — пройдёмся по существующим тестам и переопределим ожидания, если найдём `assert ... in [..., (gmail, gmail), ...]`. Это легитимное усиление контракта (`(gmail, gmail)` никогда не использовалось caller'ами полезно — `match_gmail_to_handle('WellFresh_1', [('zxclesya154@gmail.com', 'zxclesya154@gmail.com')])` всё равно None).
+**Существующие fixtures совместимы.** Pre-flight grep по `tests/fixtures/yt_picker_*.xml` (раздел 5.3) подтверждает: legacy ноды в существующих тестах имеют форму `text='Makiavelli Inakent' content-desc='... makiavelli485@gmail.com'` (display ≠ gmail), а не `text=desc=gmail`. Filter `(gmail, gmail)` НЕ затрагивает existing 11 тестов.
 
 ---
 
@@ -178,7 +178,12 @@ XML uiautomator dump'а picker'а (string).
 
 ### 5.3. Регрессия legacy
 
-Существующие 11 тестов (`test_extract_two_rows`, `test_extract_skips_deleted_channels`, и т.д.) остаются как есть. По построению (legacy logic в `_extract_legacy_format_pairs` неизменна) они зелёные.
+Существующие 11 тестов (`test_extract_two_rows`, `test_extract_skips_deleted_channels`, и т.д.) остаются как есть. Подтверждение:
+
+- `_extract_legacy_format_pairs` — буквальная копия текущей логики, не меняется.
+- `_finalize_pairs` filter `(gmail, gmail)` не сработает на existing fixtures: `yt_picker_two_rows.xml` ожидает `('Makiavelli Inakent', 'makiavelli485@gmail.com')` и `('Feminista patches', 'feminista155@gmail.com')` — display ≠ gmail; `yt_picker_with_deleted.xml` ожидает `'Active Channel'` (display) gmail. Ни одна existing assertion не совпадает с pattern `(gmail, gmail)`.
+
+Если в ходе implementation обнаружится unexpected legacy fixture с `(gmail, gmail)` ожиданием — это знак что старое ожидание было багом, обновляем тест к корректному поведению.
 
 `test_match_*` тесты не затрагиваются — `match_gmail_to_handle` не меняется.
 
