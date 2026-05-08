@@ -129,7 +129,29 @@ Phase-1 fix **корректно классифицировал** это как 
 - `fix/tt-bound-nav-phase1` (deploy tree): T1-T8 commits (8 atomic) + T7-fix (no double-tap).
 - Working tree (this commit): `docs/evidence/2026-05-08-tt-publish-phase1-phone19-smoke.md`.
 
-## Open follow-ups
+## Final settled state (post-write update)
 
-- 3948 still running при write этого файла — outcome не зафиксирован, но **predicted same pattern** как 3947 (bound-nav success, audio-dialog timeout).
-- Polling background process bbrpvj9k8 будет продолжать мониторить пока 3948 не settle.
+3948 settled at 11:46:27 → `tt_upload_confirmation_timeout` (точно как 3947, 59 итераций audio-dialog loop).
+
+**Финальная сводка:**
+- 5 failed (3× gennadiya4 inventory + 2× user70415121188138 audio-dialog timeout)
+- 5 cancelled (2× gennadiya4 auto-block + 3× controller-cap)
+- 0 done
+
+**Phase-1 nav fix evidence reinforcement:** 4/4 attempts that reached profile_tab used `tap_method=xml_bounds` resolving to (972, 2136). 0 fallback to legacy (972, 2320) coords. 0 vision-fallback needed (XML usable on phone #19).
+
+## Open follow-ups для Phase 1.5
+
+1. **Audio-dialog detector update.** TT 44.4.3 button label/coords drift аналогично profile-tab. `tap_element` для «Пропустить»/«Skip»/«Готово» не находит → fallback (830, 1950) тоже мимо. Нужны:
+   - Новые text/content-desc labels (UI inspection нужен).
+   - Cap retry loop на ~10 итераций (vs текущий ~60 до timeout).
+   - New error category `tt_audio_dialog_stuck`.
+   - Vision-fallback для finding skip/done button (как Phase-1 для bottom-nav).
+   - **Instrumentation gap:** publish-stage не сохраняет ui_dump в S3 (только switcher_save_dump). Нужно добавить save_dump на entry в audio-dialog branch.
+
+2. **Inventory cleanup phone #19.** `gennadiya4` (pack 19b) не залогинен. Либо:
+   - Manual login операторам.
+   - Deactivate `factory_inst_accounts.id=1629 active=false` если не нужен.
+   - Проверить через `account_revision.py --device-number 19`.
+
+3. **Polling background process bbrpvj9k8** завершился по 30-min timeout.
