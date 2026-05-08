@@ -17,8 +17,7 @@
 **Files:**
 - Create: `/home/claude-user/autowarm-testbench-yt-parser/` (worktree)
 - Create: `tests/fixtures/yt_picker_hierarchical_154.xml`
-- Create: `tests/fixtures/yt_picker_legacy_only.xml`
-- Create: `tests/fixtures/yt_picker_hierarchical_deleted.xml`
+- Create: `tests/fixtures/yt_picker_hierarchical_deleted.xml` (с live sibling каналом под тем же gmail)
 - Create: `tests/fixtures/yt_picker_multi_channel_per_gmail.xml`
 
 - [ ] **Step 1: Сделать `git fetch` чтобы убедиться что свежий main**
@@ -53,23 +52,7 @@ wc -c /home/claude-user/autowarm-testbench-yt-parser/tests/fixtures/yt_picker_hi
 
 Expected: ~18173 bytes (или близко).
 
-- [ ] **Step 4: Создать `yt_picker_legacy_only.xml`**
-
-Write to `/home/claude-user/autowarm-testbench-yt-parser/tests/fixtures/yt_picker_legacy_only.xml`:
-
-```xml
-<?xml version='1.0' encoding='UTF-8' standalone='yes' ?>
-<hierarchy rotation="0">
-  <node index="0" bounds="[0,0][1080,2400]">
-    <node index="0" text="legacy_user@gmail.com" content-desc="legacy_user@gmail.com" bounds="[100,500][800,600]" clickable="false"/>
-    <node index="0" text="" content-desc="LegacyChannel,,5 подписчиков" bounds="[100,650][900,800]" clickable="true">
-      <node index="0" text="LegacyChannel" content-desc="" bounds="[150,670][400,720]" clickable="false"/>
-    </node>
-  </node>
-</hierarchy>
-```
-
-- [ ] **Step 5: Создать `yt_picker_hierarchical_deleted.xml`**
+- [ ] **Step 4: Создать `yt_picker_hierarchical_deleted.xml`** (с live sibling каналом под тем же gmail)
 
 Write:
 
@@ -83,11 +66,15 @@ Write:
       <node index="0" text="ИмяКанала" content-desc="" bounds="[150,670][400,720]" clickable="false"/>
       <node index="0" text="@deleted_handle" content-desc="" bounds="[150,730][400,780]" clickable="false"/>
     </node>
+    <node index="0" text="" content-desc="LiveSibling,@live_sibling,7 подписчиков" bounds="[100,820][900,970]" clickable="true">
+      <node index="0" text="LiveSibling" content-desc="" bounds="[150,840][400,890]" clickable="false"/>
+      <node index="0" text="@live_sibling" content-desc="" bounds="[150,900][400,950]" clickable="false"/>
+    </node>
   </node>
 </hierarchy>
 ```
 
-- [ ] **Step 6: Создать `yt_picker_multi_channel_per_gmail.xml`**
+- [ ] **Step 5: Создать `yt_picker_multi_channel_per_gmail.xml`**
 
 Write:
 
@@ -109,7 +96,7 @@ Write:
 </hierarchy>
 ```
 
-- [ ] **Step 7: Baseline — existing 11 тестов всё ещё green**
+- [ ] **Step 6: Baseline — existing 11 тестов всё ещё green**
 
 ```bash
 cd /home/claude-user/autowarm-testbench-yt-parser
@@ -118,19 +105,17 @@ python3 -m pytest tests/test_yt_gmail_probe.py -v
 
 Expected: 11 passed (`test_extract_two_rows`, `test_extract_empty_picker`, …, `test_extract_deleted_pairs_empty_when_no_deleted`).
 
-- [ ] **Step 8: Commit fixtures**
+- [ ] **Step 7: Commit fixtures**
 
 ```bash
 cd /home/claude-user/autowarm-testbench-yt-parser
 git add tests/fixtures/yt_picker_hierarchical_154.xml \
-        tests/fixtures/yt_picker_legacy_only.xml \
         tests/fixtures/yt_picker_hierarchical_deleted.xml \
         tests/fixtures/yt_picker_multi_channel_per_gmail.xml
 git commit -m "test(yt-gmail): add fixtures for hierarchical picker parser
 
 - yt_picker_hierarchical_154.xml: real-world dump from phone 154
-- yt_picker_legacy_only.xml: synthetic minimal legacy
-- yt_picker_hierarchical_deleted.xml: synthetic with «Канал удалён»
+- yt_picker_hierarchical_deleted.xml: synthetic с «Канал удалён» + live sibling
 - yt_picker_multi_channel_per_gmail.xml: synthetic two channels under one gmail"
 ```
 
@@ -393,12 +378,17 @@ def test_hierarchical_legacy_mix_returns_both_pairs():
     assert ('zxclesya154@gmail.com', 'zxclesya154@gmail.com') not in pairs
 
 
-def test_hierarchical_skips_deleted_channels():
-    """Иерархичный fixture с deleted каналом — extract_yt_picker_pairs его skip'ит."""
+def test_hierarchical_skips_deleted_channels_emits_live_sibling():
+    """Иерархичный fixture с deleted + live sibling под тем же gmail.
+
+    extract_yt_picker_pairs должен skip'ить deleted_handle но emit'ить
+    live_sibling (invariant: deleted-skip не должен сбрасывать current_gmail).
+    """
     xml = _load('yt_picker_hierarchical_deleted.xml')
     pairs = extract_yt_picker_pairs(xml)
     handles = [h.lower() for h, _ in pairs]
     assert 'deleted_handle' not in handles
+    assert ('live_sibling', 'deleteduser@gmail.com') in pairs
 
 
 def test_extract_deleted_pairs_hierarchical():
