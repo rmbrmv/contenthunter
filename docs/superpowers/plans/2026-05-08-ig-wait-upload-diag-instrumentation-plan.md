@@ -315,30 +315,46 @@ def _make_publisher_stub(adb_responses=None, dump_ui_response=None,
     return stub
 
 
-def test_wait_upload_iter0_diag_event_logged():
-    """iter0_diag event fires при входе в wait_upload (driven через timeout path).
+def _editor_screen_xml(share_text: str = 'Поделиться') -> str:
+    """UI XML simulating editor screen — содержит >5 nodes чтобы избежать
+    срабатывания empty-UI success heuristic в _wait_instagram_upload (line ~1936).
 
-    Drive timeout path (adb всегда возвращает InstagramMainActivity, НЕ MainTabActivity)
-    чтобы избежать success-path post-publish методов (которые бы потребовали мокать
-    _save_post_url, _fetch_instagram_url_via_api и т.д.). Method возвращает False;
-    iter0_diag должен fire'нуться regardless.
+    Heuristic считает успехом 5+ consecutive iterations с len(<node>) ≤ 5.
+    Возвращаем 7 nodes minimum.
     """
-    stuck_activity = 'topResumedActivity=ActivityRecord{abc u0 com.instagram.android/com.instagram.mainactivity.InstagramMainActivity t123}'
-    ui_xml = (
+    return (
         "<?xml version='1.0'?><hierarchy>"
-        '<node text="Поделиться" content-desc="" bounds="[100,2000][900,2200]" '
+        '<node text="Caption text" content-desc="" bounds="[100,100][900,200]" clickable="false"/>'
+        '<node text="" content-desc="" bounds="[0,0][100,100]" clickable="false"/>'
+        '<node text="" content-desc="" bounds="[0,200][100,300]" clickable="false"/>'
+        '<node text="" content-desc="" bounds="[0,300][100,400]" clickable="false"/>'
+        '<node text="" content-desc="" bounds="[0,400][100,500]" clickable="false"/>'
+        '<node text="" content-desc="" bounds="[0,500][100,600]" clickable="false"/>'
+        f'<node text="{share_text}" content-desc="" bounds="[100,2000][900,2200]" '
         'clickable="true" resource-id="com.instagram.android:id/share_button"/>'
         '</hierarchy>'
     )
+
+
+def test_wait_upload_iter0_diag_event_logged():
+    """iter0_diag event fires при входе в wait_upload (driven через timeout path).
+
+    Drive timeout path:
+      - adb всегда возвращает InstagramMainActivity (НЕ MainTabActivity)
+      - dump_ui возвращает 7-node editor XML (избегаем empty-UI success heuristic
+        в line ~1936 которая considers 5+ consecutive empty iterations as success)
+    Method возвращает False; iter0_diag должен fire'нуться regardless.
+    """
+    stuck_activity = 'topResumedActivity=ActivityRecord{abc u0 com.instagram.android/com.instagram.mainactivity.InstagramMainActivity t123}'
+    ui_xml = _editor_screen_xml(share_text='Поделиться')
     stub = _make_publisher_stub(adb_responses=stuck_activity, dump_ui_response=ui_xml,
                                   ui_dump_url='https://s3/iter0.xml')
 
     with patch('time.sleep'):
         result = stub._wait_instagram_upload()
 
-    assert result is False  # timeout path
+    assert result is False  # timeout path (avoided success heuristic)
 
-    # Find iter0_diag log_event call
     iter0_calls = [
         call for call in stub.log_event.call_args_list
         if call.kwargs.get('meta', {}).get('category') == 'wait_upload_iter0_diag'
@@ -354,9 +370,13 @@ def test_wait_upload_iter0_diag_event_logged():
 
 
 def test_wait_upload_timeout_diag_event_logged():
-    """timeout_diag event fires при exhaustion 30-iteration loop."""
+    """timeout_diag event fires при exhaustion 30-iteration loop.
+
+    Same setup as iter0 test — 7-node UI избегает empty-UI heuristic; adb stuck
+    на InstagramMainActivity.
+    """
     stuck_activity = 'topResumedActivity=ActivityRecord{abc u0 com.instagram.android/com.instagram.mainactivity.InstagramMainActivity t456}'
-    ui_xml = '<hierarchy/>'
+    ui_xml = _editor_screen_xml(share_text='Поделиться')
     stub = _make_publisher_stub(adb_responses=stuck_activity, dump_ui_response=ui_xml,
                                   ui_dump_url='https://s3/timeout.xml')
 
