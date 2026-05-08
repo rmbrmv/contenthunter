@@ -102,7 +102,8 @@ factory_inst_accounts WHERE platform='youtube' AND active=true:
 - ✅ Sub-project YT closed: parser fix отгружен, switcher empirically работает.
 - ✅ P0.1 (switcher) — closed без code-fix.
 - ✅ P1.4 (parser) — closed, code в prod.
-- ⏭️ **Operational follow-up (не делал в этой сессии):** запустить `backfill_yt_gmails.py --device-number ...` или batch'ом для 118 NULL-gmail аккаунтов. Это операторская задача с потенциальной нагрузкой на устройства; оставлено на отдельную сессию или ручной запуск.
+- ✅ **Backfill batch выполнен:** `backfill_yt_gmails.py --all --parallel 8` (09:20–09:30 UTC, ~10.5 мин). Результат: **64 NULL→filled gmail UPDATEs** (118 → 54 NULL). Coverage 58% → 81%. 16 минор-ошибок (device unavailable / picker не загрузился) — не блокеры. Лог: `/tmp/backfill_yt_2026-05-08.log`.
+- ⏭️ **54 оставшихся NULL** — accounts либо не залогинены на устройствах, либо имеют не-`@gmail.com` домены (out of scope per spec R6). Operational track: оператор re-login batch'ом или explicitly skip.
 
 ## Связанные коммиты
 
