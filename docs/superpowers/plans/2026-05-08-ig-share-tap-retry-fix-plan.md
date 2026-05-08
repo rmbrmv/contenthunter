@@ -510,7 +510,10 @@ Expected: видим `published = False` около line ~1700 и `Diagnostic in
                                              'retry_n': retry_n})
                         time.sleep(2)
                     else:
-                        progressed = True  # share button gone — likely progressed
+                        # tap_element не matched share text НО editor visible
+                        # (per check above). НЕ set progressed=True — final check решит:
+                        # если editor still visible → fail-fast ig_share_tap_no_progress.
+                        log.warning(f'wait_upload retry {retry_n}: tap_element no share match — break to final check')
                         break
 
                 if not progressed and self._is_ig_editor_still_visible(self.dump_ui()):

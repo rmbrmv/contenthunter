@@ -99,7 +99,10 @@ try:
                                      'retry_n': retry_n})
                 time.sleep(2)
             else:
-                progressed = True  # share button gone
+                # tap_element не matched share text НО editor visible
+                # (per check above). НЕ set progressed=True — final check
+                # решит fate (fail-fast если editor still visible).
+                log.warning(f'wait_upload retry {retry_n}: tap_element no share match — break to final check')
                 break
 
         if not progressed and self._is_ig_editor_still_visible(self.dump_ui()):
@@ -145,7 +148,7 @@ _wait_instagram_upload entry
 | 2 | Editor visible на iter0, оба retry tapped, всё ещё editor → retries exhausted | `ig_share_retry` ×2, final check confirms editor → `ig_share_tap_no_progress` error, return False |
 | 3 | Editor НЕ visible на iter0 (4098 success path) | Retry block skipped целиком |
 | 4 | iter0 captures editor, retry check finds editor gone (transitional) | `progressed=True` без re-tap, break, main loop normally |
-| 5 | Share button исчез без editor closing (rare) | `tap_element` returns False → `progressed=True` (assume IG progressed inflight) → break |
+| 5 | Editor still visible но `tap_element` не matched share text (resource-id-only / localization edge) | `tap_element` returns False, log warning, break БЕЗ progressed=True. Final check видит editor visible → `ig_share_tap_no_progress` fail-fast emit. |
 | 6 | iter0 dump_ui failed (`iter0_ui_xml` empty или undefined) | `_is_ig_editor_still_visible('')` → False, retry block skipped |
 | 7 | Final check после retry loop: editor исчез между last retry и final check | `progressed=False` НО final `_is_ig_editor_still_visible(self.dump_ui())` → False → НЕ emit error_code, fall through к main loop |
 | 8 | `_save_debug_artifacts` failed during error path | Wrapped exception swallowed by outer try/except, error event уже emit'нут, return False остаётся |
