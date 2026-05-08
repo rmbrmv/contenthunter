@@ -71,7 +71,7 @@ Caller'ы:
 def extract_yt_picker_pairs(xml: str) -> list[tuple[str, str]]:
     legacy = _extract_legacy_format_pairs(xml)
     hierarchical = _extract_hierarchical_pairs(xml)
-    return _dedupe_pairs(legacy + hierarchical)
+    return _finalize_pairs(legacy + hierarchical)
 ```
 
 То же для `extract_yt_picker_deleted_pairs`.
@@ -124,9 +124,13 @@ XML uiautomator dump'а picker'а (string).
 
 4. Return list.
 
-### 3.3. Дедупликация
+### 3.3. Финализация (dedup + cleanup)
 
-`_dedupe_pairs` — set на tuple (`(identifier_lower, gmail_lower)`), сохранение первого вхождения.
+`_finalize_pairs(pairs)`:
+1. **Drop bogus `(gmail, gmail)` tuples** — если `_normalize(identifier) == _normalize(gmail)` ИЛИ identifier при lower равен gmail при lower, пропускаем. Это фильтрует legacy false-positive где старая логика возвращала `('zxclesya154@gmail.com', 'zxclesya154@gmail.com')` из text=desc=gmail-only нод (без последующего channel display row под ней). Применяется ПОСЛЕ merge legacy+hierarchical, чтобы legacy-output без полезной handle-инфо не загрязнял contract функции.
+2. **Dedup** — set на tuple `(identifier_lower, gmail_lower)`, сохранение первого вхождения.
+
+> **Side-effect:** существующие тесты `test_extract_two_rows` / similar legacy-fixtures, которые ожидали `(gmail, gmail)` пары, могут стать жёлтыми. Mitigation в Section 5.3 — пройдёмся по существующим тестам и переопределим ожидания, если найдём `assert ... in [..., (gmail, gmail), ...]`. Это легитимное усиление контракта (`(gmail, gmail)` никогда не использовалось caller'ами полезно — `match_gmail_to_handle('WellFresh_1', [('zxclesya154@gmail.com', 'zxclesya154@gmail.com')])` всё равно None).
 
 ---
 
@@ -202,7 +206,7 @@ XML uiautomator dump'а picker'а (string).
 | R2 | gmail-header в `text` смешивается с какой-то системной нодой (например debug-log overlay показывает email пользователя). | На практике `desc` всегда либо пуст, либо равен text для legacy формата. Filter в шаге 3.b строгий `desc=='' OR desc==text`. |
 | R3 | Регрессия в существующем legacy path при extract внутрь helper'а. | `_extract_legacy_format_pairs` — буквальная копия текущей логики; existing fixtures + 11 тестов охраняют. |
 | R4 | `current_gmail` ошибочно живёт между несвязанными picker-секциями (например после «Другие аккаунты» separator gmail предыдущей секции остаётся). | На практике reset не нужен — следующий gmail header перезапишет. Риск минимальный — separator'ом обычно sign-out/add-account кнопки без gmail. Если станет проблемой — добавим reset на specific separator label'ы (out of scope сейчас). |
-| R5 | Caller backfill ожидает определённый порядок пар. | `_dedupe_pairs` сохраняет порядок первого вхождения. `match_gmail_to_handle` сейчас делает unique-candidate check (возвращает None при `len(candidates) > 1`) — порядок не важен. |
+| R5 | Caller backfill ожидает определённый порядок пар. | `_finalize_pairs` сохраняет порядок первого вхождения. `match_gmail_to_handle` сейчас делает unique-candidate check (возвращает None при `len(candidates) > 1`) — порядок не важен. |
 | R6 | i18n: prefix-strip в шаге 3.d работает только для русской локали (`'Вы выбрали аккаунт '`). На английской UI desc=`'You selected account ...'` пройдёт без strip и emit'нет с мусорным префиксом в display. | Тестбенч сейчас на русском (factory_inst_accounts только русские). Если появится англоязычный rig — добавим английский pattern. Помечено как known limitation. |
 
 ---
