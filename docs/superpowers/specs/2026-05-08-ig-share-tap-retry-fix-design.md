@@ -81,9 +81,9 @@ def _is_ig_editor_still_visible(self, ui_xml: str) -> bool:
 # === Tier 1 fix: detect editor-stuck and retry Share ===
 # Phase 1.7 evidence: Share tap can be no-op (timing race / anti-bot / layout shift).
 # Detect via editor markers; re-tap up to 2 times; fail-fast если progress нет.
+share_no_progress = False  # signal вне try/except для unconditional return False
 try:
-    iter0_ui_for_retry = locals().get('iter0_ui_xml', '') or ''
-    if self._is_ig_editor_still_visible(iter0_ui_for_retry):
+    if self._is_ig_editor_still_visible(iter0_ui_xml):
         progressed = False
         for retry_n in range(1, 3):  # 2 retries
             time.sleep(3)
@@ -109,13 +109,19 @@ try:
                                  'platform': self.platform,
                                  'step': 'wait_upload',
                                  'retries_exhausted': 2})
-            self._save_debug_artifacts('instagram_share_no_progress')
-            return False
+            try:
+                self._save_debug_artifacts('instagram_share_no_progress')
+            except Exception as _art_e:
+                log.warning(f'_save_debug_artifacts failed: {_art_e}')
+            share_no_progress = True
 except Exception as _retry_e:
     log.warning(f'wait_upload share retry block failed: {_retry_e}')
+
+if share_no_progress:
+    return False
 ```
 
-`locals().get('iter0_ui_xml', '')` защищает от случая когда iter0 diag failed и переменная не определена. Try/except по периметру — никакой fix не должен ломать happy path.
+Per Codex review: artifact save wrapped в inner try/except; `share_no_progress` flag signals fail-fast return ВНЕ outer try/except (artifact save failure НЕ должна bypass fail-fast). Outer try/except только для protection of detection/retry logic. Variable `iter0_ui_xml` initialized к `''` ВЫШЕ existing iter0 diag block (replaces `locals().get` non-idiomatic pattern).
 
 ### 3.3. Order of operations
 
