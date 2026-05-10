@@ -30,7 +30,7 @@ Publisher тапает основную «Опубликовать» (publisher_
 
 AI Unstuck тапает «Подтверждение прав на использование музыки >» (link на детали) — это не accept, dialog остаётся.
 
-Confirmed на 5 samples (4488, 4482, 4470, 4468, 4416, 4439, 4432, 4466, 4429), все на raspberry=9, разные accounts. Системный publisher gap.
+Confirmed на 9 samples (4488, 4482, 4470, 4468, 4416, 4439, 4432, 4466, 4429), все на raspberry=9, разные accounts. Системный publisher gap.
 
 ### 1.3. Почему сейчас и почему #9
 
@@ -110,32 +110,39 @@ def _detect_tt_music_rights_dialog(self, ui_xml: str) -> bool:
     except Exception:
         return False
     has_title_node = False
-    has_checkbox_or_button = False
+    has_specific_structure = False  # checkbox-label или button-node (music-specific)
+    has_generic_checkbox = False    # любой checkable=true / CheckBox class
+    # Single pass — собираем все три флага независимо (не order-dependent)
     for n in root.iter('node'):
         txt = (n.get('text', '') or '').strip()
         desc = (n.get('content-desc', '') or '').strip()
-        # Title node — exact match (parsed, не substring)
-        if not has_title_node and (txt in self._TT_MUSIC_RIGHTS_TITLE_MARKERS
-                                   or desc in self._TT_MUSIC_RIGHTS_TITLE_MARKERS):
+        # Title — EXACT match по text ИЛИ desc (independently, не OR-short-circuit)
+        if not has_title_node and (
+            txt in self._TT_MUSIC_RIGHTS_TITLE_MARKERS
+            or desc in self._TT_MUSIC_RIGHTS_TITLE_MARKERS
+        ):
             has_title_node = True
-        # Checkbox-presence (label или CheckBox class) ИЛИ button (any clickable state)
-        if not has_checkbox_or_button:
-            if any(c in txt or c in desc for c in self._TT_MUSIC_RIGHTS_CHECKBOX):
-                has_checkbox_or_button = True
+        # Music-specific structure: checkbox-label substring ИЛИ button-node EXACT
+        if not has_specific_structure:
+            if (any(c in txt for c in self._TT_MUSIC_RIGHTS_CHECKBOX)
+                or any(c in desc for c in self._TT_MUSIC_RIGHTS_CHECKBOX)):
+                has_specific_structure = True
             elif (txt in self._TT_MUSIC_RIGHTS_BUTTON
                   or desc in self._TT_MUSIC_RIGHTS_BUTTON):
-                has_checkbox_or_button = True
-            elif n.get('checkable') == 'true' or 'CheckBox' in n.get('class', ''):
-                # generic checkbox node (не music-specific) — sufficient
-                # only if title was already found
-                if has_title_node:
-                    has_checkbox_or_button = True
-        if has_title_node and has_checkbox_or_button:
-            return True
-    return False
+                has_specific_structure = True
+        # Generic checkbox/checkable node — sufficient ТОЛЬКО в комбинации с title
+        if not has_generic_checkbox and (
+            n.get('checkable') == 'true'
+            or 'CheckBox' in n.get('class', '')
+        ):
+            has_generic_checkbox = True
+    # Final decision (after full traversal — не order-dependent):
+    if not has_title_node:
+        return False
+    return has_specific_structure or has_generic_checkbox
 ```
 
-Detection теперь: title-node EXACT + (checkbox-label OR button-node OR generic-checkbox-with-title). Button НЕ обязан быть clickable на этом этапе — его strict-tap происходит в `_handle_*` после checkbox tick + re-dump.
+Detection теперь: title-node EXACT + (music-specific checkbox-label OR button-node OR any generic checkable-node). Button НЕ обязан быть clickable на этом этапе — его strict-tap происходит в `_handle_*` после checkbox tick + re-dump. Single-pass collection без order dependence (Codex round 5 fix).
 
 ### 3.3. Pure helper (handle)
 
@@ -208,25 +215,31 @@ def _tick_tt_music_rights_checkbox(self, ui_xml: str) -> bool:
         root = _ET.fromstring(ui_xml)
     except Exception:
         return False
-    # Pattern A: single self-labeled checkbox
+    # Pattern A: single self-labeled checkbox.
+    # Codex round 5: проверять text И desc независимо, не OR-short-circuit
+    # (если text non-empty, desc игнорируется в (text or desc)).
     for n in root.iter('node'):
         if n.get('clickable') != 'true' or n.get('checked') != 'false':
             continue
-        txt = (n.get('text', '') or n.get('content-desc', '')).strip()
-        if any(c in txt for c in self._TT_MUSIC_RIGHTS_CHECKBOX):
+        txt = (n.get('text', '') or '').strip()
+        desc = (n.get('content-desc', '') or '').strip()
+        if (any(c in txt for c in self._TT_MUSIC_RIGHTS_CHECKBOX)
+            or any(c in desc for c in self._TT_MUSIC_RIGHTS_CHECKBOX)):
             return self._tap_node_bounds(n)
-    # Pattern B: separate checkbox + nearby label
+    # Pattern B: separate checkbox + nearby label.
     # Найти все checkable=true|class=CheckBox unchecked nodes,
-    # найти label-node с music-rights текстом, выбрать checkbox
-    # с минимальным расстоянием центра bounds к центру label.
+    # найти label-node с music-rights текстом (text ИЛИ desc independently),
+    # выбрать checkbox с минимальным расстоянием центра bounds к центру label.
     cb_nodes = [n for n in root.iter('node')
                 if (n.get('checkable') == 'true' or
                     'CheckBox' in n.get('class', ''))
                 and n.get('checked') == 'false']
     label_nodes = []
     for n in root.iter('node'):
-        txt = (n.get('text', '') or n.get('content-desc', '')).strip()
-        if any(c in txt for c in self._TT_MUSIC_RIGHTS_CHECKBOX):
+        txt = (n.get('text', '') or '').strip()
+        desc = (n.get('content-desc', '') or '').strip()
+        if (any(c in txt for c in self._TT_MUSIC_RIGHTS_CHECKBOX)
+            or any(c in desc for c in self._TT_MUSIC_RIGHTS_CHECKBOX)):
             label_nodes.append(n)
     if not cb_nodes or not label_nodes:
         return False
