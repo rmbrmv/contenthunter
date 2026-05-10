@@ -115,22 +115,41 @@ ORDER BY updated_at DESC;
 
 ---
 
-## Mode B — Backlog
+## Mode B — Diag deployed ⏳ awaiting live evidence
 
-### Diag instrumentation
+### Status 2026-05-10
 
-Перед blind-tap `(95, 1995)` (publisher_instagram.py:1252) залогать:
-- `dumpsys activity activities | grep topResumedActivity` (foreground app перед тапом)
-- `logcat -d -t 200 ActivityTaskManager:I` (recent activity transitions)
-- сохранить ui_dump XML до и после тапа
+PR #27 merged `4be50f5` в prod main. Helper `_log_blind_tap_diag(stage, label, ui_xml)` добавлен в `publisher_instagram.py:180` и wired в Шаг 4 line 1342+1345 (before/after blind-tap (95, 1995) initial). Behavior preserved.
 
-Цель — подтвердить или опровергнуть recents-overlay гипотезу. Sample 3-5 fails с этой instrumentation должно дать ответ.
+Helper эмитит `log_event(category='ig_gallery_blind_tap_diag', stage, label, topResumedActivity, ui_dump_url)`. Best-effort — dumpsys/S3 exceptions swallow'аются.
 
-### Possible fixes (после подтверждения)
+### Evidence query
+
+```sql
+SELECT id, account, raspberry, status, error_code,
+  jsonb_path_query_array(events,
+    '$[*] ? (@.meta.category == "ig_gallery_blind_tap_diag")'
+  ) AS diag_events
+FROM publish_tasks
+WHERE updated_at >= '2026-05-10 15:00'
+  AND events @> '[{"meta": {"category": "ig_gallery_blind_tap_diag"}}]'::jsonb
+ORDER BY updated_at DESC LIMIT 10;
+```
+
+### Decision tree после 3-5 samples
+
+- topResumedActivity stays `com.instagram.android` before/after → hijack гипотеза **опровергнута**, копать дальше (IG internal screen drift, permission re-prompt, etc.)
+- topResumedActivity drift'ит на `com.android.vending` (Play Store) / `com.android.systemui` (Recents) / `com.sec.android.app.launcher` → hijack **confirmed**
+
+### Followup PR (если hijack confirmed)
 
 1. **Удалить blind-tap** — заменить на coord lookup gallery-button через bounds (как `_tap_create_reels_tile_strict`). Если 'Галерея' не нашлась через tap_element, fail-fast с structured error_code (e.g., `ig_gallery_button_not_found`) — не оставлять рандомный tap.
 2. **Pre-Шаг-5 foreground guard** — проверять `topResumedActivity` startswith `com.instagram.android` перед каждым шагом. Раннее abort если drift.
 3. **Recents-overlay dismiss helper** — если recents открылся, нажать KEYCODE_BACK + force-stop foreign packages.
+
+### Followup PR (если hijack опровергнут)
+
+- Удалить diag (helper остаётся как infra), копать в IG internal state — возможно camera permission dialog, возможно draft continuation, возможно highlights empty state.
 
 ---
 
