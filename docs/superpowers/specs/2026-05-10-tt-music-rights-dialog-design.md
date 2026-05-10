@@ -45,7 +45,7 @@ Confirmed на 5 samples (4488, 4482, 4470, 4468, 4416, 4439, 4432, 4466, 4429),
 
 ## 2. Approach
 
-**Approach A** из 3 предложенных: handler в `wait_upload` loop рядом с `_tt_notif_markers` / `_tt_audio_markers`. Pure helper в TikTokMixin, returns True если dialog обработан. Caller делает `continue`.
+**Approach A** из 3 предложенных: handler в `wait_upload` loop рядом с `_tt_notif_markers` / `_tt_audio_markers`. Pure helper в TikTokMixin, returns True если dialog **успешно обработан** (title + checkbox tick + button tap). Caller делает `continue` **только при handled=True** — на False продолжает downstream handlers (audio dialog, still_on_editor re-tap, AI Unstuck).
 
 Альтернативы рассмотрены и отклонены:
 - *Approach B (handler в still_on_editor)*: dialog — overlay, не editor screen. Misidentified semantics.
@@ -66,9 +66,13 @@ MAX_MUSIC_RIGHTS_ITERATIONS = 5
 Class constants в `TikTokMixin`, рядом с `_tt_notif_markers` / `_tt_audio_markers` (которые тоже class-level в текущем коде):
 
 ```python
-_TT_MUSIC_RIGHTS_MARKERS = [
+# Codex round 2: split title vs body markers — detector требует title node,
+# не любой substring (body/link match — false-positive risk).
+_TT_MUSIC_RIGHTS_TITLE_MARKERS = [
     'Подтвердить и опубликовать видео',
     'Confirm and publish video',
+]
+_TT_MUSIC_RIGHTS_BODY_MARKERS = [
     'Подтверждение прав на использование музыки',
     'music usage rights',
 ]
@@ -79,26 +83,61 @@ _TT_MUSIC_RIGHTS_CHECKBOX = [
 ]
 ```
 
-Markers — class const (полиморфизм через mixin). Cap — module const (соответствует `MAX_AUDIO_DIALOG_ITERATIONS`).
+Markers — class const (полиморфизм через mixin). Cap — module const (соответствует `MAX_AUDIO_DIALOG_ITERATIONS`). **Title vs body разделены**: detector использует title для structural identity, body — только supporting evidence (low-priority confirm если title не нашёлся в exact form).
 
-### 3.2. Structured detection (anti-false-positive)
+### 3.2. Structured detection (anti-false-positive, button-may-be-disabled-safe)
 
-**Codex finding #2:** plain substring match `'music usage rights' in ui` слишком широкий — может match copyright educational banner, music selector copy, link tooltip. Заменяем substring на **structured XML check**: dialog существует только если есть И title-маркер И clickable «Опубликовать видео» button (parsed XML node) одновременно.
+**Codex round 1 finding #2:** plain substring match `'music usage rights' in ui` слишком широкий — может match copyright educational banner, music selector copy, link tooltip.
+
+**Codex round 2 finding:** требование `clickable=true` для button небезопасно — если TT disable'ит «Опубликовать видео» до tick'а checkbox'а, detection вернёт False, checkbox не будет проставлен → infinite loop avoided через cap, но fix не сработает. Detection должен опираться на **title-node + checkbox-structure** (и то и другое присутствует до checkbox tick), а button strict-tap'ается ПОСЛЕ checkbox + re-dump.
 
 ```python
 def _detect_tt_music_rights_dialog(self, ui_xml: str) -> bool:
-    """Strict structural detector — title marker AND publish-video button
-    BOTH present as parseable XML nodes."""
+    """Strict structural detector — TITLE node AND checkbox-or-button structure.
+
+    Не требует button=clickable (TT может disable до acceptance). Требует:
+    - parseable XML
+    - node с text/desc EXACT-match одного из _TT_MUSIC_RIGHTS_TITLE_MARKERS
+    - дополнительно: либо checkbox-node с music-rights label, либо
+      publish-video button-node (clickable=any) — что-то из dialog-структуры
+    """
     if not ui_xml:
         return False
-    # Cheap pre-filter: substring любого marker — если его нет, точно не диалог.
-    if not any(m in ui_xml for m in self._TT_MUSIC_RIGHTS_MARKERS):
+    # Cheap pre-filter: title substring (fast bail-out)
+    if not any(m in ui_xml for m in self._TT_MUSIC_RIGHTS_TITLE_MARKERS):
         return False
-    # Strict check: button должна существовать как clickable=true XML node
-    # с exact text/desc match. Это исключает substring-collisions с link'ами,
-    # banner'ами, generic «Опубликовать видео» текстом в feed.
-    return self._find_strict_clickable(ui_xml, self._TT_MUSIC_RIGHTS_BUTTON) is not None
+    try:
+        import xml.etree.ElementTree as _ET
+        root = _ET.fromstring(ui_xml)
+    except Exception:
+        return False
+    has_title_node = False
+    has_checkbox_or_button = False
+    for n in root.iter('node'):
+        txt = (n.get('text', '') or '').strip()
+        desc = (n.get('content-desc', '') or '').strip()
+        # Title node — exact match (parsed, не substring)
+        if not has_title_node and (txt in self._TT_MUSIC_RIGHTS_TITLE_MARKERS
+                                   or desc in self._TT_MUSIC_RIGHTS_TITLE_MARKERS):
+            has_title_node = True
+        # Checkbox-presence (label или CheckBox class) ИЛИ button (any clickable state)
+        if not has_checkbox_or_button:
+            if any(c in txt or c in desc for c in self._TT_MUSIC_RIGHTS_CHECKBOX):
+                has_checkbox_or_button = True
+            elif (txt in self._TT_MUSIC_RIGHTS_BUTTON
+                  or desc in self._TT_MUSIC_RIGHTS_BUTTON):
+                has_checkbox_or_button = True
+            elif n.get('checkable') == 'true' or 'CheckBox' in n.get('class', ''):
+                # generic checkbox node (не music-specific) — sufficient
+                # only if title was already found
+                if has_title_node:
+                    has_checkbox_or_button = True
+        if has_title_node and has_checkbox_or_button:
+            return True
+    return False
 ```
+
+Detection теперь: title-node EXACT + (checkbox-label OR button-node OR generic-checkbox-with-title). Button НЕ обязан быть clickable на этом этапе — его strict-tap происходит в `_handle_*` после checkbox tick + re-dump.
 
 ### 3.3. Pure helper (handle)
 
@@ -289,13 +328,14 @@ Strict structural detection из 3.2 (требование button-node) дела
 
 ## 4. Тесты
 
-Файл: `tests/test_publisher_tt_music_rights.py` (новый, 14 тестов).
+Файл: `tests/test_publisher_tt_music_rights.py` (новый, 18 тестов).
 
-### 4.1. Detector tests (3)
+### 4.1. Detector tests (4)
 
-1. **test_detect_returns_true_when_title_and_button_present** — UI с title marker «Подтвердить и опубликовать видео» + clickable XML node text='Опубликовать видео' → `_detect_tt_music_rights_dialog` returns True
-2. **test_detect_returns_false_when_only_substring_no_button** — UI содержит «music usage rights» (e.g. в banner/link) без clickable «Опубликовать видео» button-node → False (Codex #2 защита от false-positive)
-3. **test_detect_returns_false_no_marker** — Empty UI / UI без markers → False сразу
+1. **test_detect_returns_true_when_title_and_button_present** — UI с title-node EXACT «Подтвердить и опубликовать видео» + button-node «Опубликовать видео» (clickable=any) → True
+2. **test_detect_returns_true_when_title_and_disabled_button** — same UI но button `clickable='false'` → True (button может быть disabled до checkbox tick — round 2 fix)
+3. **test_detect_returns_false_when_only_body_substring_no_title_node** — UI содержит «music usage rights» в body/link (substring), но title как EXACT-node отсутствует → False (round 2: body markers не достаточны)
+4. **test_detect_returns_false_no_marker** — Empty UI / UI без title markers → False сразу
 
 ### 4.2. Handle/checkbox helper tests (5)
 
@@ -313,9 +353,16 @@ Strict structural detection из 3.2 (требование button-node) дела
 
 ### 4.4. Ordering & regression tests (3)
 
-12. **test_upload_ok_check_runs_before_music_rights** — UI marker'ы UPLOAD_OK ('Опубликовано') + music rights — UPLOAD_OK выигрывает (early break), music rights handler **не** вызывается на той же итерации. Codex #3 invariant.
+12. **test_upload_ok_check_runs_before_music_rights** — UI marker'ы UPLOAD_OK ('Опубликовано') + music rights — UPLOAD_OK выигрывает (early break), music rights handler **не** вызывается на той же итерации. Codex round 1 #3 invariant.
 13. **test_existing_audio_dialog_handler_independent** — UI matches только `_tt_audio_markers` (не music rights) → music rights detector returns False, audio dialog handler срабатывает. Не ломает Phase 1.5 path.
-14. **test_kernel_mapping_includes_music_rights** — `from publisher_kernel import _SWITCHER_STEP_TO_CATEGORY` → assert `_SWITCHER_STEP_TO_CATEGORY['tt_5_music_rights_stuck'] == 'tt_music_rights_stuck'`. Codex #9.
+14. **test_kernel_mapping_includes_music_rights** — `from publisher_kernel import _SWITCHER_STEP_TO_CATEGORY` → assert `_SWITCHER_STEP_TO_CATEGORY['tt_5_music_rights_stuck'] == 'tt_music_rights_stuck'`. Codex round 1 #9.
+
+### 4.5. Strict tap helper direct tests (4) — Codex round 2
+
+15. **test_strict_tap_exact_text_match** — node `text='Опубликовать видео' clickable='true'` → tap по center bounds, returns True
+16. **test_strict_tap_exact_desc_match** — node `content-desc='Publish video' clickable='true'` (text empty) → tap по center bounds, returns True
+17. **test_strict_tap_rejects_substring** — node `text='Опубликовать видео и поделиться' clickable='true'` (substring matches '_TT_MUSIC_RIGHTS_BUTTON' value but не exact) → returns False, no tap
+18. **test_strict_tap_rejects_non_clickable** — node `text='Опубликовать видео' clickable='false'` → returns False, no tap (НЕ fall through на find_element_bounds vs `tap_element` baseline behavior)
 
 ---
 
@@ -349,7 +396,7 @@ Strict structural detection из 3.2 (требование button-node) дела
   - `platform: 'TikTok'`
 - `tt_music_rights_stuck` (error) — cap exceeded. Final error_code; mirrors `tt_audio_dialog_stuck`. Meta:
   - `iterations: 6` (cap+1)
-  - `step: 'wait_upload'`
+  - `step: 'tt_5_music_rights_stuck'` (per kernel mapping convention; canonicalized в `tt_music_rights_stuck`)
   - `platform: 'TikTok'`
 
 **Dashboard split (post-deploy triage):**
@@ -393,7 +440,7 @@ Strict structural detection из 3.2 (требование button-node) дела
 
 ## 9. Acceptance criteria
 
-1. Все 14 unit/integration тестов green
+1. Все 18 unit/integration тестов green
 2. Существующий TT publish suite зелёный (`tests/test_publisher_tt_*.py`, `tests/test_publish_*tiktok*.py`) — no regression
 3. Live verification: re-queue 1 known fail (e.g. 4488 clickpay_world через `UPDATE publish_queue SET status='pending', publish_task_id=NULL WHERE id=<qid>`) → ожидаем `tt_music_rights_accepted` event в новом publish_task + успешный post_url
 4. Dashboard може различать recovered (`tt_music_rights_accepted`) vs stuck (`tt_music_rights_stuck`)
