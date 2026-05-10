@@ -71,7 +71,12 @@ Class constants в `TikTokMixin`, рядом с `_tt_notif_markers` / `_tt_audio
 # широкий, mistake-prone). Identity dialog'а = title-node + checkbox/button
 # структура.
 _TT_MUSIC_RIGHTS_TITLE_MARKERS = [
+    # Codex round 6: evidence показывает «Подтвердить и опубликовать видео?»
+    # с question mark. Detector требует EXACT match — без знака не matched бы
+    # реальный dialog. Включаем оба варианта на случай TT minor-update.
+    'Подтвердить и опубликовать видео?',
     'Подтвердить и опубликовать видео',
+    'Confirm and publish video?',
     'Confirm and publish video',
 ]
 _TT_MUSIC_RIGHTS_BUTTON = ['Опубликовать видео', 'Publish video']
@@ -350,30 +355,30 @@ Strict structural detection из 3.2 (title-EXACT-node + checkbox/button structu
 
 ### 4.2. Handle/checkbox helper tests (5)
 
-4. **test_handle_taps_publish_via_strict_helper** — detected dialog → `_strict_tap_clickable` called с (`['Опубликовать видео', 'Publish video']`), returns True, info event `tt_music_rights_accepted` logged. **Не использует** `tap_element` (Codex #5).
-5. **test_handle_redumps_ui_after_checkbox_tick** — checkbox tap → `dump_ui` зовётся **до** button tap. Verify через mock call ordering (Codex #6).
-6. **test_checkbox_pattern_a_self_labeled** — node `text='Я принимаю Подтверждение прав на использование музыки' checked='false' clickable='true' bounds='[100,2200][1000,2280]'` → `adb_tap(550, 2240)`. Meta `checkbox_set: True`
-7. **test_checkbox_pattern_b_split_label_and_checkbox** — отдельная нода `class='android.widget.CheckBox' checked='false' clickable='true' bounds='[40,2200][120,2280]'` + sibling-label TextView с music-rights текстом → tap по checkbox bounds (80, 2240), не по label (Codex #7)
-8. **test_handle_button_not_found_returns_false_no_continue** — detected=True (title+button оба есть для detector pre-check) но `_strict_tap_clickable` failed (race: button исчез между detect и tap) → returns False, warning event `tt_music_rights_button_not_found` logged
+5. **test_handle_taps_publish_via_strict_helper** — detected dialog → `_strict_tap_clickable` called с (`['Опубликовать видео', 'Publish video']`), returns True, info event `tt_music_rights_accepted` logged. **Не использует** `tap_element` (round 1 #5).
+6. **test_handle_redumps_ui_after_checkbox_tick** — checkbox tap → `dump_ui` зовётся **до** button tap. Verify через mock call ordering (round 1 #6).
+7. **test_checkbox_pattern_a_self_labeled** — node `text='Я принимаю Подтверждение прав на использование музыки' checked='false' clickable='true' bounds='[100,2200][1000,2280]'` → `adb_tap(550, 2240)`. Meta `checkbox_set: True`
+8. **test_checkbox_pattern_b_split_label_and_checkbox** — отдельная нода `class='android.widget.CheckBox' checked='false' clickable='true' bounds='[40,2200][120,2280]'` + sibling-label TextView с music-rights текстом → tap по checkbox bounds (80, 2240), не по label (round 1 #7)
+9. **test_handle_button_not_found_returns_false_no_continue** — detected=True (title+button оба есть для detector pre-check) но `_strict_tap_clickable` failed (race: button исчез между detect и tap) → returns False, warning event `tt_music_rights_button_not_found` logged
 
 ### 4.3. Loop integration tests (3)
 
-9. **test_loop_continues_only_on_handled_true** — handler returns False → loop **НЕ** делает `continue` (downstream handlers получают шанс). Иначе — `continue`. Codex #1.
-10. **test_loop_iteration_cap_fails_with_stuck_code** — `_music_rights_iter` доходит до 6 → error event `tt_music_rights_stuck` + `set_step('tt_5_music_rights_stuck')` + return False from publish.
-11. **test_per_publish_counter_reset** — second `publish_tiktok()` call на same publisher instance → `_music_rights_iter == 0` в начале (не наследует из prev publish). Codex #4.
+10. **test_loop_continues_only_on_handled_true** — handler returns False → loop **НЕ** делает `continue` (downstream handlers получают шанс). Иначе — `continue`. Round 1 #1.
+11. **test_loop_iteration_cap_fails_with_stuck_code** — `_music_rights_iter` доходит до 6 → error event `tt_music_rights_stuck` + `set_step('tt_5_music_rights_stuck')` + return False from publish.
+12. **test_per_publish_counter_reset** — second `publish_tiktok()` call на same publisher instance → `_music_rights_iter == 0` в начале (не наследует из prev publish). Round 1 #4.
 
 ### 4.4. Ordering & regression tests (3)
 
-12. **test_upload_ok_check_runs_before_music_rights** — UI marker'ы UPLOAD_OK ('Опубликовано') + music rights — UPLOAD_OK выигрывает (early break), music rights handler **не** вызывается на той же итерации. Codex round 1 #3 invariant.
-13. **test_existing_audio_dialog_handler_independent** — UI matches только `_tt_audio_markers` (не music rights) → music rights detector returns False, audio dialog handler срабатывает. Не ломает Phase 1.5 path.
-14. **test_kernel_mapping_includes_music_rights** — `from publisher_kernel import _SWITCHER_STEP_TO_CATEGORY` → assert `_SWITCHER_STEP_TO_CATEGORY['tt_5_music_rights_stuck'] == 'tt_music_rights_stuck'`. Codex round 1 #9.
+13. **test_upload_ok_check_runs_before_music_rights** — UI marker'ы UPLOAD_OK ('Опубликовано') + music rights — UPLOAD_OK выигрывает (early break), music rights handler **не** вызывается на той же итерации. Round 1 #3 invariant.
+14. **test_existing_audio_dialog_handler_independent** — UI matches только `_tt_audio_markers` (не music rights) → music rights detector returns False, audio dialog handler срабатывает. Не ломает Phase 1.5 path.
+15. **test_kernel_mapping_includes_music_rights** — `from publisher_kernel import _SWITCHER_STEP_TO_CATEGORY` → assert `_SWITCHER_STEP_TO_CATEGORY['tt_5_music_rights_stuck'] == 'tt_music_rights_stuck'`. Round 1 #9.
 
-### 4.5. Strict tap helper direct tests (4) — Codex round 2
+### 4.5. Strict tap helper direct tests (4) — Round 2
 
-15. **test_strict_tap_exact_text_match** — node `text='Опубликовать видео' clickable='true'` → tap по center bounds, returns True
-16. **test_strict_tap_exact_desc_match** — node `content-desc='Publish video' clickable='true'` (text empty) → tap по center bounds, returns True
-17. **test_strict_tap_rejects_substring** — node `text='Опубликовать видео и поделиться' clickable='true'` (substring matches '_TT_MUSIC_RIGHTS_BUTTON' value but не exact) → returns False, no tap
-18. **test_strict_tap_rejects_non_clickable** — node `text='Опубликовать видео' clickable='false'` → returns False, no tap (НЕ fall through на find_element_bounds vs `tap_element` baseline behavior)
+16. **test_strict_tap_exact_text_match** — node `text='Опубликовать видео' clickable='true'` → tap по center bounds, returns True
+17. **test_strict_tap_exact_desc_match** — node `content-desc='Publish video' clickable='true'` (text empty) → tap по center bounds, returns True
+18. **test_strict_tap_rejects_substring** — node `text='Опубликовать видео и поделиться' clickable='true'` (substring matches '_TT_MUSIC_RIGHTS_BUTTON' value but не exact) → returns False, no tap
+19. **test_strict_tap_rejects_non_clickable** — node `text='Опубликовать видео' clickable='false'` → returns False, no tap (НЕ fall through на find_element_bounds vs `tap_element` baseline behavior)
 
 ---
 
