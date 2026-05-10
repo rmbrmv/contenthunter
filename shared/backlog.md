@@ -1,10 +1,15 @@
 # Backlog — Задачи агента
 
 ## OPEN
-<!-- Когда получаешь задачу — добавь сюда -->
-<!-- Формат: - [YYYY-MM-DD HH:MM] Описание задачи | от: [кто поставил] -->
+- [2026-05-11] **24h метрика TT music rights handler** — измерить fail-rate `tt_upload_confirmation_timeout` на raspberry=9 за 24h после deploy `8ec5c53`. Expect: < 3 (was 12). Query в evidence doc. | от: self (T10 deferred)
+- [2026-05-10] **`tt_fg_lost` после успешного music rights handle (pt 4523)** — Phase 1 investigation: AI Unstuck multi-tap может накликать nav buttons / background TT после tt_music_rights_accepted. Hypothesis. Sample: pt 4523 events 19:42:40-19:55:15. | от: self (T10 live verify finding)
+- [2026-05-10] **Re-enable unic-sweep PM2 flag (после dup incident 2026-05-08)** — `sudo pm2 unset autowarm:UNIC_SWEEP_DISABLED && sudo pm2 restart autowarm`. Пер memory `project_publish_dup_incident_2026_05_08` — 3 spec'а merged, остался последний шаг re-enable. Verify: `sudo pm2 env autowarm | grep SWEEP`. | от: self (initial backlog scan)
+- [2026-05-10] **server.js:6190 SQL bug ($2/$1 P3)** — one-line fix готов к PR (per memory `project_dispatcher_sql_param_bug`). Silent fail в inactive-account skip path. | от: self (initial backlog scan)
+- [2026-05-09] **IG Share Tier 2 impl** — spec `be23e8706` готов (long-press escalation 2×200ms). Sample size 3 fails/7д — low priority. После /aif-plan → impl в worktree. | от: self (sub-project carry-over)
+- [2026-05-04] **multi-logo (validator)** — design brief `.ai-factory/plans/multi-logo-brief-upload-brief-20260506.md` готов (Опция B рекомендована — отдельная таблица `validator_brand_logos`). Не запущен. | от: self
+- [2026-05-04] **account-checker (delivery-contenthunter)** — research-карта переиспользуемого кода `.ai-factory/plans/account-checker-reusable-code-brief-20260504.md` готова. Открытые вопросы для автора ТЗ: набор признаков, триггер запуска, нужен ли UI. | от: self
 
 ## DONE
-<!-- Когда завершил задачу — перенеси из OPEN сюда -->
-<!-- Формат: - [YYYY-MM-DD HH:MM] ~~Описание задачи~~ | закрыто: YYYY-MM-DD HH:MM -->
+- [2026-05-10 19:55] ~~TT music rights confirmation dialog handler~~ | закрыто: 2026-05-10 19:55 | PR #28 `8ec5c53`, evidence `docs/evidence/2026-05-10-tt-music-rights-dialog-shipped.md`, live verify pt 4523 handler fired ✅
+- [2026-05-10 11:30] ~~ig_gallery_no_video_candidate Mode A~~ | закрыто: 2026-05-10 16:36 | PR #26 `4643c7d`, Mode B closed pending re-occurrence
 
