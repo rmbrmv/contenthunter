@@ -99,11 +99,49 @@ TDD: red (5 fails по `AttributeError: ... has no attribute '_dismiss_camera_pe
 
 ---
 
-## Live verification pending
+## Live verification ✅ — task 4521 (re-queue 4477)
 
-Mode A trigger — Android random permission re-prompt. Repro не гарантирован.
+**Same task, was failing yesterday, published successfully today.**
 
-**Watch:** DB для events с `meta.category='ig_camera_permission_granted'` в ближайшие 24-48ч. Если такие events появятся И tasks с ними завершаются `done` — fix confirmed live.
+Re-queue path (memory `reference_publish_requeue_path.md`): `UPDATE publish_queue SET status='pending', publish_task_id=NULL WHERE id=1824` → dispatchPublishQueue 5min cycle создал pt 4521 (raspberry=9, clickpay_team).
+
+### Flow подтвердил Mode A fix (2026-05-10 15:55-16:09 UTC)
+
+| ts | event | meaning |
+|---|---|---|
+| 16:02:07 | Шаг 4 — открытие галереи | gallery navigation start |
+| 16:02:15 | blind-tap diag before/step4_initial | Mode B diag fired (см. ниже) |
+| 16:02:31 | blind-tap diag after/step4_initial | dialog persisted, blind-tap не помог |
+| **16:02:56** | **camera permission granted (while-in-use)** | **Mode A fix fired** |
+| **16:03:01** | **camera permission granted (while-in-use)** | **Mode A fix fired (2nd dialog instance, 5s later)** |
+| 16:05:25 | Шаг 6 — редактор Reels | gallery selected, video loaded |
+| 16:06:20 | caption ВЕРИФИЦИРОВАН (235 символов) | caption fill OK |
+| 16:06:31 | кнопка Поделиться нажата | Share triggered |
+| 16:06:50 | загрузка подтверждена — MainTabActivity | upload OK |
+| 16:07:09 | post_url_captured: clickpay_team/reels | URL captured ✅ |
+
+`status=awaiting_url`, `error_code=NULL`, `post_url=https://www.instagram.com/clickpay_team/reels/`.
+
+**Mode A fix confirmed working in production.** Re-queue test предсказательно подтвердил root cause.
+
+### Mode B — hijack hypothesis ❌ refuted (at blind-tap moment)
+
+`_log_blind_tap_diag` поймал topResumedActivity до и после blind-tap (95, 1995):
+
+```
+before: com.instagram.android/com.instagram.modal.ModalActivity t407
+after:  com.instagram.android/com.instagram.modal.ModalActivity t407
+```
+
+**Same activity, same task ID.** blind-tap (95, 1995) НЕ вызывает foreground hijack. ModalActivity — это IG's собственный screen (camera/composer + permission dialog overlay), не Play Store.
+
+**Что это значит:**
+- Гипотеза «blind-tap → Recents → Play Store» опровергнута для этого task'а.
+- Play Store-скриншоты в task'ах 4419/4425/4474 (вчера) появились не в момент blind-tap, а позже — скорее всего в момент `_save_debug_artifacts` ПОСЛЕ fail-fast (строка 1322 publisher_instagram.py).
+- Mechanism Play Store hijack пока неясен — возможно драйвится anti-bot, ad-deeplink или drift'ом во время parser-loop'а.
+- Followup diag: расширить capture на fail-moment (line 1322) и в parser-loop iteration'ах.
+
+### Outstanding query for fleet-wide Mode A confirmation
 
 ```sql
 SELECT id, account, raspberry, status, error_code, updated_at
