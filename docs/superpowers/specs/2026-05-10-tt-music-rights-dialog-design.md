@@ -194,7 +194,7 @@ def _handle_tt_music_rights_dialog(self, ui_xml: str) -> bool:
     return tapped
 ```
 
-`_find_strict_clickable(ui_xml, candidates) -> Optional[(cx, cy)]` и `_strict_tap_clickable(ui_xml, candidates) -> bool` — новые helpers рядом с существующими XML-парсерами в `publisher_base.py` или `publisher_tiktok.py` (file scope обсуждается в plan'е). Логика: parse XML, для каждого node искать `clickable='true'` AND (`text` OR `content-desc`) **exact-equals** одному из candidates. Никакого fallback на regex/find_element_bounds.
+`_strict_tap_clickable(ui_xml, candidates) -> bool` — новый helper в `publisher_tiktok.py` (TikTokMixin). Логика: parse XML, для каждого node искать `clickable='true'` AND (`text` OR `content-desc`) **exact-equals** одному из candidates → tap по center bounds. Никакого fallback на regex/find_element_bounds. Detector использует inline XML parsing (не требует отдельного `_find_*` helper'а).
 
 ### 3.4. Checkbox helper (handles label/checkbox split nodes)
 
@@ -249,13 +249,13 @@ def _tick_tt_music_rights_checkbox(self, ui_xml: str) -> bool:
     if not cb_nodes or not label_nodes:
         return False
     # Берём label с самым «обычным» bounds + ближайший checkbox
-    nearest = self._nearest_checkbox_to_label(cb_nodes, label_nodes)
+    nearest = self._nearest_node_to_labels(cb_nodes, label_nodes)
     if nearest is None:
         return False
     return self._tap_node_bounds(nearest)
 ```
 
-`_tap_node_bounds(n) -> bool` и `_nearest_checkbox_to_label(cbs, labels) -> Optional[node]` — внутренние helpers (parse bounds, compute center, return node с минимальной L2 distance). Реализация — детали plan'а.
+`_tap_node_bounds(n) -> bool` и `_nearest_node_to_labels(cbs, labels) -> Optional[node]` — внутренние helpers (parse bounds, compute center, return node с минимальной L2 distance). Реализация — детали plan'а.
 
 **Notes:**
 - `n.get('checked') != 'false'` пропускает уже отмеченный checkbox (idempotent на повторных hit'ах).
