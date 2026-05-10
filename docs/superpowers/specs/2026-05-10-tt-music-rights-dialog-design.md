@@ -45,7 +45,7 @@ Confirmed на 5 samples (4488, 4482, 4470, 4468, 4416, 4439, 4432, 4466, 4429),
 
 ## 2. Approach
 
-**Approach A** из 3 предложенных: handler в `wait_upload` loop рядом с `_tt_notif_markers` / `_tt_audio_markers`. Pure helper в TikTokMixin, returns True если dialog **успешно обработан** (title + checkbox tick + button tap). Caller делает `continue` **только при handled=True** — на False продолжает downstream handlers (audio dialog, still_on_editor re-tap, AI Unstuck).
+**Approach A** из 3 предложенных: handler в `wait_upload` loop рядом с `_tt_notif_markers` / `_tt_audio_markers`. Pure helper в TikTokMixin. **Returns True ТОЛЬКО если** structural detector сработал И strict-tap «Опубликовать видео» успешен (checkbox tick — best-effort, не влияет на return value). Caller делает `continue` **только при handled=True** — на False продолжает downstream handlers (audio dialog, still_on_editor re-tap, AI Unstuck).
 
 Альтернативы рассмотрены и отклонены:
 - *Approach B (handler в still_on_editor)*: dialog — overlay, не editor screen. Misidentified semantics.
@@ -66,15 +66,13 @@ MAX_MUSIC_RIGHTS_ITERATIONS = 5
 Class constants в `TikTokMixin`, рядом с `_tt_notif_markers` / `_tt_audio_markers` (которые тоже class-level в текущем коде):
 
 ```python
-# Codex round 2: split title vs body markers — detector требует title node,
-# не любой substring (body/link match — false-positive risk).
+# Codex round 2: title-EXACT-node как structural anchor (не substring).
+# Body markers удалены — detector не использует их (body match слишком
+# широкий, mistake-prone). Identity dialog'а = title-node + checkbox/button
+# структура.
 _TT_MUSIC_RIGHTS_TITLE_MARKERS = [
     'Подтвердить и опубликовать видео',
     'Confirm and publish video',
-]
-_TT_MUSIC_RIGHTS_BODY_MARKERS = [
-    'Подтверждение прав на использование музыки',
-    'music usage rights',
 ]
 _TT_MUSIC_RIGHTS_BUTTON = ['Опубликовать видео', 'Publish video']
 _TT_MUSIC_RIGHTS_CHECKBOX = [
@@ -83,7 +81,7 @@ _TT_MUSIC_RIGHTS_CHECKBOX = [
 ]
 ```
 
-Markers — class const (полиморфизм через mixin). Cap — module const (соответствует `MAX_AUDIO_DIALOG_ITERATIONS`). **Title vs body разделены**: detector использует title для structural identity, body — только supporting evidence (low-priority confirm если title не нашёлся в exact form).
+Markers — class const (полиморфизм через mixin). Cap — module const (соответствует `MAX_AUDIO_DIALOG_ITERATIONS`). **Title** — единственный structural identity anchor; checkbox/button — supporting structure для confirmation что это action-dialog а не info-banner.
 
 ### 3.2. Structured detection (anti-false-positive, button-may-be-disabled-safe)
 
@@ -334,7 +332,7 @@ Strict structural detection из 3.2 (требование button-node) дела
 
 1. **test_detect_returns_true_when_title_and_button_present** — UI с title-node EXACT «Подтвердить и опубликовать видео» + button-node «Опубликовать видео» (clickable=any) → True
 2. **test_detect_returns_true_when_title_and_disabled_button** — same UI но button `clickable='false'` → True (button может быть disabled до checkbox tick — round 2 fix)
-3. **test_detect_returns_false_when_only_body_substring_no_title_node** — UI содержит «music usage rights» в body/link (substring), но title как EXACT-node отсутствует → False (round 2: body markers не достаточны)
+3. **test_detect_returns_false_when_only_body_substring_no_title_node** — UI содержит «music usage rights» в body/link (substring), но title как EXACT-node отсутствует → False (body substring не идентифицирует dialog без title-node)
 4. **test_detect_returns_false_no_marker** — Empty UI / UI без title markers → False сразу
 
 ### 4.2. Handle/checkbox helper tests (5)
@@ -371,7 +369,8 @@ Strict structural detection из 3.2 (требование button-node) дела
 | Случай | Поведение |
 |---|---|
 | `dump_ui` returns пустую строку | `_detect_tt_music_rights_dialog('')` → False сразу (guard); main loop продолжает existing checks |
-| Title marker матчится но clickable button-node отсутствует (false-positive risk) | `_detect_*` returns False (structural check — Codex #2); handler не вызывается, downstream продолжает |
+| Title marker substring матчится но title как EXACT-node + checkbox/button-структура отсутствуют | `_detect_*` returns False (structural check — round 2 fix); handler не вызывается, downstream продолжает |
+| Title-node EXACT + button-node disabled (clickable=false) — TT enable'ит после checkbox tick | `_detect_*` returns True (button clickability игнорируется на detection — round 2 fix); handler ticks checkbox → re-dump → strict-tap button (теперь enabled) |
 | Detected, но button tap failed (race: dialog dismissed между detect и tap) | helper returns False, warning event logged. Loop **НЕ** continues — downstream handlers получают chance (Codex #1). Counter инкрементирован → защита от infinite loop |
 | TT поменял лейбл «Опубликовать видео» → «Post» (только English или новый текст) | EN markers (`'Publish video'`) в candidates list. Если лейбл новый — `tt_music_rights_button_not_found` event. Reactive expansion в follow-up PR на основе live evidence |
 | Persistence checkbox split: `class='android.widget.CheckBox'` + sibling label | Pattern B в `_tick_tt_music_rights_checkbox` (Codex #7) — match по checkable/CheckBox class + nearest label, tap по checkbox bounds |
@@ -429,7 +428,7 @@ Strict structural detection из 3.2 (требование button-node) дела
 | Risk | Mitigation |
 |---|---|
 | Music rights dialog имеет другие лейблы кнопки на части TT-инстансов | EN+RU markers покрывают основное; structural check + `tt_music_rights_button_not_found` event сигнализирует о расширении (reactive PR) |
-| Markers дают false-positive на feed/banner | Codex #2: structural detector требует И title И clickable button-node одновременно. `'music usage rights'` substring без button → dialog не считается detected |
+| Markers дают false-positive на feed/banner | Codex round 1+2: structural detector требует title-node EXACT + (checkbox-label OR button-node OR generic-checkable-with-title). Substring без structural anchor → dialog не считается detected |
 | Checkbox реально использует Switch/ToggleButton класс, не CheckBox | Pattern B покрывает любой `checkable=true` node, не только CheckBox class |
 | Cap 5 iter × ~3s loop interval = 15s доп latency на edge case | Acceptable; baseline TT publish ~30-60s, 15s = ~25% worst-case overhead. Cap критичен для anti-infinite-loop |
 | Auto-accept music rights юридически некорректен | User decision 2026-05-10: клиент дал consent через ToS использования сервиса; бот действует от имени клиента. Out of scope технического spec'а |
