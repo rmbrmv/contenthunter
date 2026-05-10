@@ -141,6 +141,34 @@ after:  com.instagram.android/com.instagram.modal.ModalActivity t407
 - Mechanism Play Store hijack пока неясен — возможно драйвится anti-bot, ad-deeplink или drift'ом во время parser-loop'а.
 - Followup diag: расширить capture на fail-moment (line 1322) и в parser-loop iteration'ах.
 
+## Sample 2 — task 4522 (re-queue 4474 click_and_pay) ✅
+
+**Контекст:** task 4474 yesterday показывал Play Store TT Studio screenshot. Re-queue UPDATE pq 1806.
+
+**Result:** `awaiting_url`, post_url=`https://www.instagram.com/click_and_pay/reels/`, error_code=NULL.
+
+**Mode A grants: 0** (helper НЕ зафайрил).
+**Mode B diag:** `before` + `after` = `com.instagram.android/com.instagram.modal.ModalActivity t326` (stays IG, hijack refuted).
+
+### Cascade effect — permission sticky после первого grant
+
+Sample 1 (4521) granted «При использовании приложения» в 16:02:56. Permanent grant within app → IG больше не показывает dialog на этом телефоне.
+
+Sample 2 (4522) на **том же raspberry=9** через 22 минуты — dialog не появился, gallery открылась напрямую через blind-tap. Mode A helper не сработал потому что **не было что dismissing**.
+
+**Implication для fleet:** После того как каждый из 19 телефонов получит хотя бы одну успешную публикацию IG через Mode A fix, camera permission осядет permanently. Текущая волна fails 2026-05-10 — one-off (видимо после OS update / IG app update / permission reset). Без regression-проблем permission не сбросится.
+
+### Mode B Play Store screenshots — transient device state
+
+Yesterday's tasks 4419/4425/4474 (Play Store TT Studio) — НЕ reproducible после Mode A fix. Возможные causes (не критично):
+- Recents stack contained Play Store from previous task / autonomous app activity
+- Anti-bot redirect (rare, transient)
+- IG app crash during gallery navigation → fell through to launcher → Recents → Play Store
+
+После Mode A fix gallery открывается чисто, blind-tap (95, 1995) не triggers state drift. Mode B как отдельный issue **closed pending re-occurrence** — если в next 24-48h `ig_gallery_no_video_candidate` count drop'ится >50%, считаем fixed. Если Play Store продолжает плодиться — extended diag (capture в parser-loop iterations + at fail-moment).
+
+---
+
 ### Outstanding query for fleet-wide Mode A confirmation
 
 ```sql
