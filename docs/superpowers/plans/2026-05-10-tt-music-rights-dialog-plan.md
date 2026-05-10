@@ -939,7 +939,9 @@ def test_loop_continues_only_on_handled_true():
     Source guard защищает от accidental refactor который убирает условие.
     """
     src = (ROOT / 'publisher_tiktok.py').read_text()
-    branch_idx = src.find('Music rights confirmation dialog')
+    # Anchor на `# === Music rights` — уникальная decorative marker только
+    # в loop-block (constants comment имеет другую wording).
+    branch_idx = src.find('=== Music rights confirmation dialog (новый TT UX')
     assert branch_idx > 0, 'music-rights branch not found in source'
     # Берём блок до начала следующего comment-marker `# ===` (audio-dialog)
     next_marker = src.find('=== TikTok: аудио-диалог', branch_idx)
@@ -1122,7 +1124,7 @@ def test_upload_ok_check_runs_before_music_rights():
     src = (ROOT / 'publisher_tiktok.py').read_text()
     uploadok_idx = src.find('matched_uploadok = [kw for kw in UPLOAD_OK')
     assert uploadok_idx > 0, 'UPLOAD_OK check not found'
-    music_branch_idx = src.find('Music rights confirmation dialog')
+    music_branch_idx = src.find('=== Music rights confirmation dialog (новый TT UX')
     assert music_branch_idx > 0, 'music-rights branch not found'
     assert uploadok_idx < music_branch_idx, (
         f'UPLOAD_OK check (idx {uploadok_idx}) must precede music-rights '
@@ -1147,7 +1149,7 @@ def test_existing_audio_dialog_handler_independent():
     """Source guard + behavior: audio-dialog branch не сломан music-rights
     insertion. Detector НЕ должен matched на pure audio-dialog UI."""
     src = (ROOT / 'publisher_tiktok.py').read_text()
-    music_idx = src.find('Music rights confirmation dialog')
+    music_idx = src.find('=== Music rights confirmation dialog (новый TT UX')
     audio_idx = src.find('=== TikTok: аудио-диалог после публикации ===')
     assert music_idx > 0
     assert audio_idx > 0
