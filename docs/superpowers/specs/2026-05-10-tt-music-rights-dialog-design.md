@@ -320,13 +320,13 @@ Cross-file:
 4. `_tt_audio_markers` — audio dialog
 5. `still_on_editor` re-tap
 
-Strict structural detection из 3.2 (требование button-node) делает невозможным false-match feed-content. Если post-success screen случайно содержит маркеры (банер с copyright info), без clickable button «Опубликовать видео» детектор вернёт False, UPLOAD_OK на следующей итерации поймает success.
+Strict structural detection из 3.2 (title-EXACT-node + checkbox/button structure) делает невозможным false-match feed-content без structural anchor. Если post-success screen случайно содержит body substring «music usage rights» в banner/copyright-info, без title-EXACT-node detector вернёт False, UPLOAD_OK на следующей итерации поймает success.
 
 ---
 
 ## 4. Тесты
 
-Файл: `tests/test_publisher_tt_music_rights.py` (новый, 18 тестов).
+Файл: `tests/test_publisher_tt_music_rights.py` (новый, 19 тестов).
 
 ### 4.1. Detector tests (4)
 
@@ -432,14 +432,14 @@ Strict structural detection из 3.2 (требование button-node) дела
 | Checkbox реально использует Switch/ToggleButton класс, не CheckBox | Pattern B покрывает любой `checkable=true` node, не только CheckBox class |
 | Cap 5 iter × ~3s loop interval = 15s доп latency на edge case | Acceptable; baseline TT publish ~30-60s, 15s = ~25% worst-case overhead. Cap критичен для anti-infinite-loop |
 | Auto-accept music rights юридически некорректен | User decision 2026-05-10: клиент дал consent через ToS использования сервиса; бот действует от имени клиента. Out of scope технического spec'а |
-| Detection строгая → пропустит variant dialog (e.g. без чекбокса, только button) | Acceptable: false-negative безопаснее false-positive (timeout fail vs ложный consume success state). Reactive expansion при live evidence |
+| Detection строгая → пропустит variant dialog (e.g. dialog с другим title-текстом) | Acceptable: false-negative безопаснее false-positive (timeout fail vs ложный consume success state). Reactive expansion title markers при live evidence |
 | Race: button tapped, но TT не зарегистрировал → loop iter 2 пытается снова | Detector check на следующей итерации поймёт что dialog исчез → handler не вызывается → cap не исчерпывается. Worst case — button был tapped дважды (TT идемпотентно для повторного tap «Опубликовать видео») |
 
 ---
 
 ## 9. Acceptance criteria
 
-1. Все 18 unit/integration тестов green
+1. Все 19 unit/integration тестов green
 2. Существующий TT publish suite зелёный (`tests/test_publisher_tt_*.py`, `tests/test_publish_*tiktok*.py`) — no regression
 3. Live verification: re-queue 1 known fail (e.g. 4488 clickpay_world через `UPDATE publish_queue SET status='pending', publish_task_id=NULL WHERE id=<qid>`) → ожидаем `tt_music_rights_accepted` event в новом publish_task + успешный post_url
 4. Dashboard може различать recovered (`tt_music_rights_accepted`) vs stuck (`tt_music_rights_stuck`)
