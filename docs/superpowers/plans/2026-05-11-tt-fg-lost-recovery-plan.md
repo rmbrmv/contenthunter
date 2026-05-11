@@ -293,17 +293,48 @@ git commit -m "feat(publisher-tt): _attempt_tt_fg_recovery helper (monkey reorde
 - [ ] **Step 1: Read current overlay branch context**
 
 ```bash
-sed -n '1035,1058p' /root/.openclaw/workspace-genri/autowarm/publisher_tiktok.py
+sed -n '988,1058p' /root/.openclaw/workspace-genri/autowarm/publisher_tiktok.py
 ```
 
 Confirm точная структура:
+- Line ~989-991: `log.info('  Ждём подтверждения загрузки TikTok ...'); overlay_streak = 0; for wait in range(60):`
 - Line ~1037-1042: `dismissed = self.dismiss_overlay_dialogs(ui); if dismissed: ... overlay_streak = 0; continue`
 - Line ~1045-1054: `if overlay_streak >= 3: ... self.log_event('error', ..., meta={'category': 'tt_fg_lost', ...}); break`
 - Line ~1054 (end): `continue # ждём ещё`
 
-Wire-in должно идти МЕЖДУ existing `if dismissed: continue` и `if overlay_streak >= 3:` check.
+Wire-in делается в 2 точках:
+1. **At loop start** (line ~990 рядом с `overlay_streak = 0`) — reset `_tt_fg_recovery_attempted` flag.
+2. **Inside overlay branch** МЕЖДУ existing `if dismissed: continue` и `if overlay_streak >= 3:` check — recovery dispatch.
 
-- [ ] **Step 2: Apply wire-in edit**
+> **Why reset at loop start (Codex round 1 P2 catch):** flag `_tt_fg_recovery_attempted` — instance attr на publisher object. Без explicit reset при новом upload-task он останется `True` от previous task → recovery skip'нется forever в long-lived worker process. Reset at `_wait_upload_confirmation` start даёт "one attempt per task" semantics.
+
+- [ ] **Step 2: Apply wire-in edits (2 places)**
+
+**Place 1 — at `_wait_upload_confirmation` start** (line ~990):
+
+Найти существующее:
+
+```python
+        log.info('  Ждём подтверждения загрузки TikTok (до 3 мин)...')
+        overlay_streak = 0  # сколько итераций подряд НЕ TikTok на переднем плане
+        for wait in range(60):  # 60 × ~8-9 сек = ~8-9 минут реально
+```
+
+Заменить middle line (или добавить новую перед `for`) чтобы выглядело:
+
+```python
+        log.info('  Ждём подтверждения загрузки TikTok (до 3 мин)...')
+        overlay_streak = 0  # сколько итераций подряд НЕ TikTok на переднем плане
+        # [tt_fg_recovery 2026-05-11] Reset per-task flag: long-lived worker
+        # переиспользует publisher instance → без reset flag remains True
+        # после first attempt → recovery skip'нется forever (Codex P2 catch).
+        self._tt_fg_recovery_attempted = False
+        for wait in range(60):  # 60 × ~8-9 сек = ~8-9 минут реально
+```
+
+**Place 2 — inside overlay branch** (между `if dismissed: continue` и `if overlay_streak >= 3:`):
+
+В `/root/.openclaw/workspace-genri/autowarm/publisher_tiktok.py`, между existing line ~1042 (`continue` после `if dismissed:`) и line ~1044 (`# Если TikTok не вернулся ...` comment + `if overlay_streak >= 3:`), вставить:
 
 В `/root/.openclaw/workspace-genri/autowarm/publisher_tiktok.py`, между existing line ~1042 (`continue` после `if dismissed:`) и line ~1044 (`# Если TikTok не вернулся ...` comment + `if overlay_streak >= 3:`), вставить:
 
