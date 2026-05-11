@@ -145,25 +145,31 @@ describe('calcDashboardRange — Europe/Moscow (UTC+3 fixed)', () => {
   });
 
   test('custom: to > today + 60 days → throws (per-date cutoff)', () => {
-    // today MSK = 2026-05-11; cutoff = 2026-07-10 (60 days later).
+    // today MSK = 2026-05-11; cutoff = 2026-07-10. Используем КОРОТКИЙ диапазон,
+    // где from ≤ cutoff, но to > cutoff — иначе срабатывает span-check раньше.
+    // from=2026-07-10 (на cutoff'е), to=2026-07-11 (за ним). Span = 2 дня — OK для span-check.
     assert.throws(
-      () => calcDashboardRange('custom', '2026-05-01', '2099-01-01', Date.UTC(2026, 4, 11)),
+      () => calcDashboardRange('custom', '2026-07-10', '2026-07-11', Date.UTC(2026, 4, 11)),
       /within \d+ days of today/
     );
   });
 
   test('custom: from > today + 60 days → throws (per-date cutoff)', () => {
+    // Короткий диапазон полностью ПОСЛЕ cutoff'а (2026-07-10). from=2026-07-11.
     assert.throws(
-      () => calcDashboardRange('custom', '2099-01-01', '2099-01-02', Date.UTC(2026, 4, 11)),
+      () => calcDashboardRange('custom', '2026-07-11', '2026-07-12', Date.UTC(2026, 4, 11)),
       /within \d+ days of today/
     );
   });
 
-  test('custom: to == today + 60 days exactly → OK', () => {
-    // today = 2026-05-11 MSK; +60 = 2026-07-10. Должно пройти.
-    const r = calcDashboardRange('custom', '2026-05-11', '2026-07-10', Date.UTC(2026, 4, 11));
+  test('custom: span exactly 60 days и to=cutoff → OK', () => {
+    // today MSK = 2026-05-11; cutoff = 2026-07-10. from=2026-05-12 даёт span=60 дней
+    // (exclusive toMsk = 2026-07-11 00:00 MSK), что = MAX_DASHBOARD_RANGE_DAYS — passes
+    // (`> MAX`, не `>=`). Per-date: to=2026-07-10 ≤ cutoff → OK.
+    const r = calcDashboardRange('custom', '2026-05-12', '2026-07-10', Date.UTC(2026, 4, 11));
     assert.equal(r.preset, 'custom');
-    assert.equal(r.to.toISOString(), '2026-07-10T21:00:00.000Z'); // 2026-07-11 00:00 MSK
+    assert.equal(r.from.toISOString(), '2026-05-11T21:00:00.000Z'); // 2026-05-12 00:00 MSK
+    assert.equal(r.to.toISOString(),   '2026-07-10T21:00:00.000Z'); // 2026-07-11 00:00 MSK
   });
 
   test('custom: invalid format → throws', () => {
