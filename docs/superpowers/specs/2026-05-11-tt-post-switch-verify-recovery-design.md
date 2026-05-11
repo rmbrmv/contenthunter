@@ -44,11 +44,13 @@ Caller (`account_switcher.py:2275-2287`) логирует `tt_post_switch_handle
 В TT switcher path в месте вызова `_post_switch_verify_handle` (`account_switcher.py:2257-2287`, ветка `if status == 'unknown'`) добавить recovery:
 
 1. Детектить TT feed-маркеры в XML top 260px.
-2. Если feed → log event `tt_post_switch_feed_after_pick` (warning) → вызвать `_navigate_to_profile_tab` (Phase 1 `tt_bound_nav`, уже работает) → re-dump → второй `_post_switch_verify_handle`.
-3. Если второй verify = `match` → log `tt_post_switch_recovered_via_renav` → break (success).
-4. Если второй verify = `mismatch` → проваливаемся в существующий mismatch-handler (line 2289+), который обработает MAX_PICK_ATTEMPTS retry.
-5. Если второй verify = `unknown` → `_fail` с error_code `tt_post_switch_verify_unrecoverable`.
-6. Если feed-маркеров **нет** в первом XML (т.е. unknown по причине FLAG_SECURE / sparse / другой UI) → также `_fail` с `tt_post_switch_verify_unrecoverable` (user decision, 2026-05-11).
+2. Если feed → log event `tt_post_switch_feed_after_pick` (warning) → вызвать `_navigate_to_profile_tab` (Phase 1 `tt_bound_nav`, уже работает).
+3. Если navigate вернул `False` (Phase 1 не нашёл profile-tab) → log `tt_post_switch_renav_failed` → `_fail` с `tt_post_switch_verify_unrecoverable`.
+4. Если navigate OK → re-dump → второй `_post_switch_verify_handle`.
+5. Если второй verify = `match` → log `tt_post_switch_recovered_via_renav` → break (success).
+6. Если второй verify = `mismatch` → проваливаемся в существующий mismatch-handler (line 2289+), который обработает MAX_PICK_ATTEMPTS retry.
+7. Если второй verify = `unknown` → `_fail` с error_code `tt_post_switch_verify_unrecoverable`.
+8. Если feed-маркеров **нет** в первом XML (т.е. unknown по причине FLAG_SECURE / sparse / другой UI) → также `_fail` с `tt_post_switch_verify_unrecoverable` (user decision, 2026-05-11).
 
 ### Why Approach A (vs B / C)
 
@@ -164,8 +166,9 @@ def _is_tt_feed_after_pick(self, xml: str, header_y_max: int = 260) -> bool:
 |---|---|---|---|
 | `tt_post_switch_handle_unknown` | warning | existing — first verify returned unknown | target, step, attempt |
 | `tt_post_switch_feed_after_pick` | warning | new — unknown + feed markers detected | target, step, attempt |
+| `tt_post_switch_renav_failed` | error | new — `_navigate_to_profile_tab()` returned False после feed-detect (Phase 1 bound-nav couldn't find profile tab) | target, step, attempt |
 | `tt_post_switch_recovered_via_renav` | account_switch | new — re-verify after navigate = match | target, current, attempt |
-| `tt_post_switch_verify_unrecoverable` | error | new — final fail (after recovery OR non-feed unknown) | target, step, was_feed |
+| `tt_post_switch_verify_unrecoverable` | error | new — final fail (after recovery OR non-feed unknown OR navigate fail) | target, step, was_feed |
 
 ### Error_code
 

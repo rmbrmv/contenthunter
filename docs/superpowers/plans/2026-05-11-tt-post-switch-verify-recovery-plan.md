@@ -384,6 +384,39 @@ def test_unknown_non_feed_fails_immediately():
     fail_msg = sw._fail.call_args.args[0]
     assert 'tt_post_switch_verify_unrecoverable' in fail_msg
     assert 'non-feed' in fail_msg.lower()
+
+
+def test_unknown_with_feed_renav_navigate_fails():
+    """feed-markers, но _navigate_to_profile_tab returns False → fail без verify call.
+
+    Defensive path — если bound-nav не нашёл profile-tab. Catches case
+    где Phase 1 fail на специфическом UI state.
+    """
+    feed_xml = _make_xml_with([
+        ('[100,96][300,200]', 'Смотреть', ''),
+        ('[300,96][500,200]', 'Подписки', ''),
+        ('[500,96][700,200]', 'Рекомендации', ''),
+    ])
+    sw = _build_switcher_for_recovery(
+        post_renav_verify_results=[],  # verify не вызывается — nav failed
+        feed_xml=feed_xml,
+        navigate_returns=False,
+    )
+    outcome, current = sw._tt_handle_post_switch_unknown(
+        target='targetuser', xml_after_pick=feed_xml,
+        header_y_max=260, label='tt_4_target_profile', attempt=0,
+    )
+    assert outcome == 'failed'
+    assert current is None
+    sw._navigate_to_profile_tab.assert_called_once()
+    sw._post_switch_verify_handle.assert_not_called()
+    fail_msg = sw._fail.call_args.args[0]
+    assert 'tt_post_switch_verify_unrecoverable' in fail_msg
+    emitted_categories = [
+        call.kwargs.get('meta', {}).get('category')
+        for call in sw.p.log_event.call_args_list
+    ]
+    assert 'tt_post_switch_renav_failed' in emitted_categories
 ```
 
 - [ ] **Step 3: Run tests, verify all red**
@@ -441,7 +474,22 @@ Expected: 4 FAILED — `AttributeError: ... '_tt_handle_post_switch_unknown'`.
                   'attempt': attempt + 1},
         )
         # Reuse Phase 1 bound-nav. Idempotent: no-op if уже на profile.
-        self._navigate_to_profile_tab()
+        nav_ok = self._navigate_to_profile_tab()
+        if not nav_ok:
+            # Defensive: navigate failed → нет смысла re-verify (мы всё ещё
+            # на feed). Fail с observability event.
+            self.p.log_event(
+                'error', 'tt_post_switch_renav_failed',
+                meta={'category': 'tt_post_switch_renav_failed',
+                      'target': target, 'step': label,
+                      'attempt': attempt + 1},
+            )
+            self._fail(
+                f'tt_post_switch_verify_unrecoverable: navigate_to_profile_tab '
+                f'failed после feed-detect (target={target!r})',
+                step=f'{label}_renav',
+            )
+            return ('failed', None)
         xml_after_renav = self.p.dump_ui(retries=1) or ''
         self._save_dump(f'{label}_renav', xml_after_renav)
         status, current = self._post_switch_verify_handle(
@@ -475,7 +523,7 @@ cd /root/.openclaw/workspace-genri/autowarm
 pytest tests/test_post_switch_renav.py -v 2>&1 | tail -20
 ```
 
-Expected: 9 PASSED (5 helper + 4 recovery).
+Expected: 10 PASSED (5 helper + 5 recovery).
 
 - [ ] **Step 6: Wire helper в существующую `if status == 'unknown'` ветку TT switcher**
 
@@ -619,7 +667,7 @@ cd /root/.openclaw/workspace-genri/autowarm
 pytest tests/test_post_switch_renav.py -v 2>&1 | tail -15
 ```
 
-Expected: 11 PASSED (5 helper + 4 recovery + 2 mapping).
+Expected: 12 PASSED (5 helper + 5 recovery + 2 mapping).
 
 - [ ] **Step 5: Commit**
 
@@ -801,7 +849,7 @@ Expected (1-2h после merge): какой-то pattern из `tt_post_switch_f
 - `_tt_handle_post_switch_unknown` recovery method
 - Wire в TT switcher unknown-branch (`account_switcher.py` ~line 2275)
 - `publisher_kernel.py` mapping (2 entries)
-- 11 unit tests (5 helper + 4 recovery + 2 mapping)
+- 12 unit tests (5 helper + 5 recovery + 2 mapping)
 - N commits на ветке, Codex CLEAN после <N> rounds
 
 ## Initial 1-2h smoke
@@ -859,7 +907,7 @@ type: project
 
 ## Definition of Done
 
-- 5 helper tests + 4 recovery tests + 2 mapping tests — 11 PASSED
+- 5 helper tests + 5 recovery tests + 2 mapping tests — 12 PASSED
 - Codex review CLEAN (0 P1) на full PR diff
 - PR merged, prod autowarm на новой sha
 - Evidence doc committed в `/home/claude-user/contenthunter`
