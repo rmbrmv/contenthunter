@@ -332,11 +332,7 @@ Wire-in делается в 2 точках:
         for wait in range(60):  # 60 × ~8-9 сек = ~8-9 минут реально
 ```
 
-**Place 2 — inside overlay branch** (между `if dismissed: continue` и `if overlay_streak >= 3:`):
-
-В `/root/.openclaw/workspace-genri/autowarm/publisher_tiktok.py`, между existing line ~1042 (`continue` после `if dismissed:`) и line ~1044 (`# Если TikTok не вернулся ...` comment + `if overlay_streak >= 3:`), вставить:
-
-В `/root/.openclaw/workspace-genri/autowarm/publisher_tiktok.py`, между existing line ~1042 (`continue` после `if dismissed:`) и line ~1044 (`# Если TikTok не вернулся ...` comment + `if overlay_streak >= 3:`), вставить:
+**Place 2 — inside overlay branch** (между existing line ~1042 `continue` после `if dismissed:` и existing line ~1044 `# Если TikTok не вернулся ...` comment + `if overlay_streak >= 3:`):
 
 ```python
                 # === NEW [tt_fg_recovery 2026-05-11]: app-switch recovery
