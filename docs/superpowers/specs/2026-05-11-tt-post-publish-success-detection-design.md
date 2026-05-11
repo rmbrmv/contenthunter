@@ -1,11 +1,11 @@
-# TT post-publish success detection in `wait_upload` — design v2
+# TT post-publish success detection in `wait_upload` — design v3
 
 **Date:** 2026-05-11
 **Author:** Claude (session с Danil Pavlov)
 **Repo:** `GenGo2/delivery-contenthunter` (autowarm publisher)
 **Trigger:** Post-mortem pt 4523 (clickpay_world raspberry=9, 2026-05-10) — frame-by-frame analysis screen recording'а показал что публикация успешно состоялась в ~19:42, но `_wait_tiktok_upload` не распознал post-publish auto-навигацию TT в feed/inbox и продолжил 12 минут вызывать AI Unstuck, который случайно тапнул «+» в bottom nav, открыл Camera, и в итоге устройство улетело в Launcher (`tt_fg_lost`).
 
-**Changelog v1→v2 (2026-05-11):** applied Codex design review (5 P1 + 6 P2 + 4 P3 finds). Major rewrites:
+**Changelog v1→v2 (2026-05-11):** applied Codex design review round 1 (5 P1 + 6 P2 + 4 P3 finds). Major rewrites:
 - Replaced raw substring `nav_hits` matching with bounds-scoped XML parsing + group-based label set with EN/RU variants
 - Added AI Unstuck pre-call guard into scope (was out-of-scope; cascade evidence показал что main-nav-skip критичен)
 - Activity blacklist помечен как seed (verified-from-code only `MainActivity`, `DetailActivity`, `SystemShareActivity`)
@@ -14,6 +14,16 @@
 - Fixed timing description (real wait=0 = ~11s after Поделиться tap)
 - Reworked test cases (Интересное, share-sheet, malformed XML, DetailActivity)
 - Detection extracted в pure helper `_tt_infer_post_publish_success`
+
+**Changelog v2→v3 (2026-05-11):** applied Codex design review round 2 (3 P1 + 5 P2 + 1 P3 finds). Critical fixes:
+- **P1.1** Added `inferred_path_used = False` flag initialization + explicit set on inferred path (was used but never set → silently miss URL classification path)
+- **P1.2** AI Unstuck composer guard NARROWED: только `CameraActivity` (был blanket composer skip → блокировал legit Permission/Music/Cover recovery)
+- **P1.3** Block placement: ПОСЛЕ generic dialog handler `tap_element(['Закрыть'...])`, ПЕРЕД `if wait % 10 == 0` logging branch
+- **P2.1** Data flow section переписан под реальный code order (early UPLOAD_OK first, не после blockers)
+- **P2.2** Helper label matching: `'Me'` removed (false-positive risk с Messages/Mentions); short-token labels требуют strict equality через `_matches_label` helper
+- **P2.3** Added source-level tests (state flag, placement, guard interactions, URL warning)
+- **P2.4** URL warning: supplements `tt_url_partial`, не replaces (existing event preserved)
+- **P3.1** Added edge case tests: empty UI, no bounds, zero-height bounds
 
 ## Контекст и evidence
 
@@ -73,7 +83,7 @@ TT_MAIN_NAV_LABEL_GROUPS = (
     ('Друзья', 'Интересное', 'Friends', 'Discover'),
     ('Создать', 'Create'),
     ('Входящие', 'Inbox'),
-    ('Профиль', 'Profile', 'Me'),
+    ('Профиль', 'Profile'),  # 'Me' removed (P2.2): substring 'Me' матчит 'Messages', 'Mentions'
 )
 
 # TT activities trustworthy from code grep (publisher_tiktok.py + tests):
@@ -101,9 +111,20 @@ TT_COMPOSER_ACTIVITIES_SEED = (
 # (main nav visible + non-composer + TT active), не через NOT-in-blacklist.
 ```
 
-### Pure helper для testability (P3.2)
+### Pure helpers для testability (P3.2 + P2.2)
 
 ```python
+def _matches_label(value: str, label: str) -> bool:
+    """Match label against text/desc value. Short tokens (<=3 chars) require
+    strict equality to avoid false-positives like 'Me' matching 'Messages'."""
+    value = (value or '').strip()
+    if not value:
+        return False
+    if len(label) <= 3:
+        return value == label
+    return label in value
+
+
 def _tt_infer_post_publish_success(
     ui: str,
     top_activity: str,
@@ -182,7 +203,8 @@ def _tt_infer_post_publish_success(
                 cy = (int(m.group(2)) + int(m.group(4))) // 2
                 if cy < bottom_threshold:
                     continue
-                if any(label in txt or label in desc for label in group):
+                if any(_matches_label(txt, label) or _matches_label(desc, label)
+                       for label in group):
                     groups_visible.append(group[0])
                     break
         meta['nav_groups_visible'] = groups_visible
@@ -196,41 +218,63 @@ def _tt_infer_post_publish_success(
         return False, meta
 ```
 
-### Block placement в `_wait_tiktok_upload`
+### Block placement в `_wait_tiktok_upload` (v3)
 
-**Order constraints (per Codex P2.1):** existing checks order in publisher_tiktok.py wait_upload loop is:
-foreground guard → notification modal → UPLOAD_OK → music-rights → audio-dialog → still_on_editor → share-sheet failure → retap → AI Unstuck.
+**Real code order (verified в /root/.openclaw/workspace-genri/autowarm/publisher_tiktok.py):**
+1. dump_ui (~line 711)
+2. foreground guard / notification modal / **early UPLOAD_OK string match** (~line 760)
+3. music-rights handler (~line 800)
+4. audio-dialog handler (~line 815)
+5. still_on_editor / retap (~line 856-947)
+6. share-sheet failure (~line 877)
+7. retap with XML parser (~line 889-947)
+8. геолокация (~line 949-954)
+9. **generic dialog handler `tap_element(['Закрыть','Пропустить',...])` (~line 956-958)**
+10. ⬇️ **NEW: post-publish success detection block ЗДЕСЬ** ⬇️
+11. logging branch `if wait % 10 == 0` (~line 961)
+12. AI Unstuck call site (~line 964-976)
 
-**New block placement:** **AFTER** music-rights/audio-dialog/still_on_editor/share-sheet checks (which are blocking dialogs that may render WITH main nav behind), **BEFORE** AI Unstuck. This avoids inferring success while a blocking dialog is still on screen.
+**Rationale:** все existing dialog/dialog-like blockers consume их screens first. К моменту нашего блока — если main nav видна, это действительно post-publish state, а не блокер с feed-нав behind.
+
+**State flag (P1.1):** `inferred_path_used` инициализируется ПЕРЕД loop'ом, set в success branch. Existing UPLOAD_OK paths оставляют `inferred_path_used = False`.
 
 ```python
-# After existing dialog/blocker checks (music-rights, audio-dialog, still_on_editor,
-# share-sheet failure), before AI Unstuck call site.
-# [POST-PUBLISH SUCCESS DETECTION 2026-05-11 v2]
-cur_act_post = self.adb(
-    'dumpsys activity activities 2>/dev/null | grep -m1 "topResumedActivity"',
-    timeout=8,
-) or ''
-success, meta = _tt_infer_post_publish_success(ui, cur_act_post, wait)
-if success:
-    log.info(f'  ✅ TikTok: post-publish success inferred '
-             f'(reason={meta["reason"]}, nav_groups={meta["nav_groups_visible"]}, '
-             f'wait={wait})')
-    self.log_event(
-        'info',
-        f'TikTok: post-publish success inferred — {meta["reason"]}',
-        meta={'category': 'tt_post_publish_success_inferred',
-              'platform': self.platform,
-              'wait_iteration': wait,
-              **meta},
-    )
-    upload_confirmed = True
-    break
+upload_confirmed = False
+inferred_path_used = False  # P1.1 — flag set ТОЛЬКО в inferred success branch
+# ...
+for wait in range(60):
+    time.sleep(4)
+    ui = self.dump_ui()
+    # ... existing checks 2-9 ...
+
+    # [POST-PUBLISH SUCCESS DETECTION 2026-05-11 v3]
+    # Placement: AFTER generic dialog handler (line ~958),
+    # BEFORE wait%10 logging (~line 961) and AI Unstuck guard (~line 964).
+    cur_act_post = self.adb(
+        'dumpsys activity activities 2>/dev/null | grep -m1 "topResumedActivity"',
+        timeout=8,
+    ) or ''
+    success, meta = _tt_infer_post_publish_success(ui, cur_act_post, wait)
+    if success:
+        log.info(f'  ✅ TikTok: post-publish success inferred '
+                 f'(reason={meta["reason"]}, nav_groups={meta["nav_groups_visible"]}, '
+                 f'wait={wait})')
+        self.log_event(
+            'info',
+            f'TikTok: post-publish success inferred — {meta["reason"]}',
+            meta={'category': 'tt_post_publish_success_inferred',
+                  'platform': self.platform,
+                  'wait_iteration': wait,
+                  **meta},
+        )
+        upload_confirmed = True
+        inferred_path_used = True  # P1.1 — set flag для post-success URL classification
+        break
 ```
 
-### AI Unstuck pre-call guard (NEW в scope, P1.5)
+### AI Unstuck pre-call guard (P1.5 v3 — NARROWED)
 
-В существующем коде на line ~966-976 — guard расширить **перед** вызовом AI Unstuck:
+В существующем коде на line ~966-976 — guard ПЕРЕД вызовом AI Unstuck. **v3 NARROWED (Codex round 2 P1.2):** убрали blanket composer skip — это блокировало legit Permission/Music/Cover recovery. Оставили ТОЛЬКО main-nav guard (cascade pt 4523) + CameraActivity hard-fail (post-share возврат в Camera = signal реального fail'а, не recovery).
 
 ```python
 if wait > 0 and wait % 5 == 4:
@@ -243,12 +287,12 @@ if wait > 0 and wait % 5 == 4:
         # AI только если TT активен (не ждём его возврата). Existing behavior preserved.
         continue
 
-    # [NEW P1.5 2026-05-11] Skip AI Unstuck когда видна main nav (мы уже
-    # на post-publish screen) или non-composer activity. Это предотвращает
-    # cascade pt 4523: AI на Inbox тапает «+» → открывает Camera.
+    # [P1.5 v3 2026-05-11] Main-nav guard: skip AI Unstuck когда видна main nav
+    # (мы уже на post-publish screen). Предотвращает cascade pt 4523: AI на
+    # Inbox тапает «+» → открывает Camera. Detection block в начале итерации
+    # ДОЛЖЕН был это поймать; этот guard — defense-in-depth safety net.
     success_check, gmeta = _tt_infer_post_publish_success(ui, _cur_act_tt, wait)
     if success_check:
-        # Already success-positive but somehow not caught earlier — skip AI
         log.info(f'  🛑 TikTok: skip AI Unstuck — main nav/DetailActivity '
                  f'visible (reason={gmeta["reason"]})')
         self.log_event(
@@ -261,20 +305,27 @@ if wait > 0 and wait % 5 == 4:
         )
         # don't infer success here — let next iter detection block handle it
         continue
-    # Composer/edit screen — also skip (we are on wrong screen для retry publishing)
-    if any(a in _cur_act_tt for a in TT_COMPOSER_ACTIVITIES_SEED):
-        log.info(f'  🛑 TikTok: skip AI Unstuck — composer activity '
-                 f'({_cur_act_tt[:80]})')
+
+    # [P1.5 v3 2026-05-11] CameraActivity hard-fail: после tap «Поделиться»
+    # возврат в Camera = signal что мы случайно открыли New Post (e.g. через
+    # «+» в bottom nav). НЕ "recovery" — fail-fast чем зацикливаться.
+    # NARROWED scope: только Camera, NOT все composer activities (Permission/
+    # Music/Cover screens — legit recovery candidates, AI should keep trying).
+    if 'CameraActivity' in _cur_act_tt:
+        log.error(f'  ❌ TikTok: returned to Camera after share tap — '
+                  f'unexpected state, fail-fast')
         self.log_event(
-            'info',
-            f'TikTok: skip AI Unstuck — composer activity',
-            meta={'category': 'tt_unstuck_skipped_composer',
+            'error',
+            'TikTok: returned to Camera after share tap (unexpected post-share state)',
+            meta={'category': 'tt_unexpected_camera_after_share',
                   'platform': self.platform,
                   'wait_iteration': wait,
                   'top_activity': _cur_act_tt[:160]},
         )
-        continue
+        break  # exit wait_upload loop → existing tt_upload_confirmation_timeout fires
 
+    # PermissionActivity / MusicSelectActivity / CutVideoActivity / CoverActivity —
+    # legit recovery scenarios; let AI Unstuck try (existing behavior preserved).
     log.info(f'  🤖 TikTok: неизвестное состояние {wait} итераций — AI Unstuck')
     _tt_goal = (
         f'Publish {self.media_type} on TikTok for account @{self.account}. '
@@ -285,29 +336,37 @@ if wait > 0 and wait % 5 == 4:
     self.ai_unstuck(_tt_goal, max_attempts=3)
 ```
 
-### Post-success URL classification (P1.4)
+### Post-success URL classification (P1.4 v3)
 
 После `upload_confirmed=True` (любая ветка), при попытке `_auto_get_tiktok_url`:
+
+**v3 (Codex round 2 P2.4):** новый event `tt_success_inferred_but_no_video_url` SUPPLEMENTS existing `tt_url_partial` (existing dashboards оставлены working), не replaces.
 
 ```python
 real_url = self._auto_get_tiktok_url(wait_secs=45)
 if real_url and '/video/' in real_url:
     self._update_post_url_final(real_url)
     log.info(f'  ✅ Реальный URL: {real_url}')
-    # existing tt_url_final event
-elif inferred_path_used:  # set True если success пришёл через _tt_infer_post_publish_success
-    log.warning(f'  ⚠️ TikTok: success inferred but no /video/ URL — '
-                f'возможно cancelled/no-op publish')
-    self.log_event(
-        'warning',
-        'TikTok: success inferred но specific URL не получен — '
-        'возможно cancelled publish (operator проверка нужна)',
-        meta={'category': 'tt_success_inferred_but_no_video_url',
-              'platform': self.platform,
-              'profile_url_fallback': profile_url},
-    )
-    # Status остаётся awaiting_url (не failed) для backwards-compat,
-    # но new event позволит дашборду показать distinct warning.
+    # existing tt_url_final event (line ~1009)
+else:
+    # Existing tt_url_partial path остаётся (line ~1019-1024) — backwards-compat.
+    # ... existing code logs tt_url_partial event ...
+
+    # [P1.4 v3 2026-05-11] Additionally, если success пришёл через inferred path —
+    # это сигнал operator'у что cancelled publish мог пройти как success.
+    if inferred_path_used:
+        log.warning(f'  ⚠️ TikTok: success inferred but no /video/ URL — '
+                    f'возможно cancelled/no-op publish')
+        self.log_event(
+            'warning',
+            'TikTok: success inferred но specific URL не получен — '
+            'возможно cancelled publish (operator проверка нужна)',
+            meta={'category': 'tt_success_inferred_but_no_video_url',
+                  'platform': self.platform,
+                  'profile_url_fallback': profile_url},
+        )
+        # Status остаётся awaiting_url (не failed) для backwards-compat,
+        # но new event позволит дашборду показать distinct warning.
 ```
 
 ### Why это работает (defensive layering)
@@ -328,94 +387,203 @@ elif inferred_path_used:  # set True если success пришёл через _t
 | `publisher_tiktok.py` | + 2 const groups (`TT_MAIN_NAV_LABEL_GROUPS`, `TT_COMPOSER_ACTIVITIES_SEED`) + helper `_tt_infer_post_publish_success` (~70 строк) + detection block в wait_upload (~15 строк) + AI Unstuck pre-call guard (~25 строк) + post-success URL classification (~15 строк) |
 | `tests/test_publisher_tt_post_publish_success.py` (новый) | 9 unit tests (см. ниже) |
 
-## Data flow
+## Data flow (v3 — fixed под реальный code order)
 
 1. `publish_tiktok` → tap Поделиться → enter `_wait_tiktok_upload` loop
-2. Each iter: dump_ui → existing blocker checks (music-rights, audio, etc.) → **NEW success detection block** → existing UPLOAD_OK string check → **NEW AI Unstuck guard** (если wait%5==4) → AI Unstuck (если guards passed)
+2. Each iter (порядок проверен в /root/.openclaw/workspace-genri/autowarm/publisher_tiktok.py):
+   - dump_ui
+   - foreground guard / notification modal
+   - **existing early UPLOAD_OK string match** (~line 760) → break если found
+   - music-rights handler
+   - audio-dialog handler
+   - still_on_editor / retap (включая XML-parser retap)
+   - share-sheet failure check
+   - geolocation handler
+   - generic dialog handler `tap_element(['Закрыть','Пропустить',...])`
+   - **NEW: post-publish success detection block** → `tt_post_publish_success_inferred` + `inferred_path_used=True` + break если success
+   - logging branch (`if wait % 10 == 0`)
+   - **NEW: AI Unstuck guards** (если `wait % 5 == 4`):
+     - main-nav guard → skip + `tt_unstuck_skipped_post_publish` event
+     - CameraActivity hard-fail → break + `tt_unexpected_camera_after_share` event
+     - else: existing AI Unstuck call (`max_attempts=3`)
 3. Success path:
-   - `_tt_infer_post_publish_success` → True → `tt_post_publish_success_inferred` event + `upload_confirmed=True` + break
-   - OR existing UPLOAD_OK match → break
+   - `_tt_infer_post_publish_success` → True → `tt_post_publish_success_inferred` event + `upload_confirmed=True` + `inferred_path_used=True` + break
+   - OR existing UPLOAD_OK match → break (`inferred_path_used` остаётся False)
 4. URL fetch:
    - `/video/<id>` URL → existing `tt_url_final` event
-   - profile fallback only AND inferred path used → `tt_success_inferred_but_no_video_url` warning event
+   - profile fallback only → existing `tt_url_partial` event ALWAYS
+   - profile fallback only AND `inferred_path_used=True` → ADDITIONALLY `tt_success_inferred_but_no_video_url` warning event
 5. Stuck path:
    - 60 итераций без upload_confirmed → existing `tt_upload_confirmation_timeout`
-   - AI Unstuck guards могут блокировать calls → если все iter'ы skipped → ai_unstuck call_count=0, that's OK
+   - CameraActivity hard-fail → early break → existing `tt_upload_confirmation_timeout` (with new event in chain)
+   - AI Unstuck guards skip calls → если все iter'ы skipped → ai_unstuck call_count=0, that's OK
 
 ## Error handling
 
-- **No new error_code.** Это success path + одна warning category.
-- **New event categories:**
+- **No new error_code.** Это success path + одна warning category + одна error category для CameraActivity hard-fail.
+- **New event categories (v3):**
   - `tt_post_publish_success_inferred` (info) — main success detection. Meta: top_activity, nav_groups_visible, on_tiktok, on_composer_seed, detail_activity, reason, wait_iteration.
-  - `tt_unstuck_skipped_post_publish` (info) — AI Unstuck guard fired due to main-nav. Meta: same as above + wait_iteration.
-  - `tt_unstuck_skipped_composer` (info) — AI Unstuck guard fired due to composer activity. Meta: top_activity, wait_iteration.
-  - `tt_success_inferred_but_no_video_url` (warning) — inferred success без specific video URL. Meta: profile_url_fallback.
+  - `tt_unstuck_skipped_post_publish` (info) — main-nav guard fired ПЕРЕД AI Unstuck. Meta: same as above + wait_iteration.
+  - `tt_unexpected_camera_after_share` (error) — CameraActivity detected post-share. Meta: top_activity, wait_iteration. Existing `tt_upload_confirmation_timeout` логически следует (loop break-нут).
+  - `tt_success_inferred_but_no_video_url` (warning) — inferred success без specific video URL, supplements existing `tt_url_partial`. Meta: profile_url_fallback.
+- **REMOVED v2→v3:** `tt_unstuck_skipped_composer` — guard был too broad (блокировал legit Permission/Music/Cover recovery).
 
-## Tests
+## Tests (v3 — extended per Codex round 2 P2.3 + P3.1)
 
-Файл `tests/test_publisher_tt_post_publish_success.py` (новый — pure helper testing).
+Two test files:
+- `tests/test_publisher_tt_post_publish_success_helper.py` — pure helper unit tests
+- `tests/test_publisher_tt_wait_upload_integration.py` — integration tests на wait_upload-level (state flag, placement, guards)
+
+### Pure helper tests
 
 ```python
 # Все тесты — pure call to _tt_infer_post_publish_success(ui, top_activity, wait).
 # Не нужны mock'и self.adb / log_event. Простая функция → простые тесты.
 
+TT_MAIN_ACT = 'topResumedActivity=ActivityRecord{... com.zhiliaoapp.musically/.main.app.MainActivity ...}'
+TT_DETAIL_ACT = 'topResumedActivity=ActivityRecord{... com.zhiliaoapp.musically/.detail.DetailActivity ...}'
+TT_CAMERA_ACT = 'topResumedActivity=ActivityRecord{... com.zhiliaoapp.musically/.video.CameraActivity ...}'
+LAUNCHER_ACT = 'topResumedActivity=ActivityRecord{... com.sec.android.app.launcher/.LauncherActivity ...}'
+
+# --- Activity-based ---
 def test_detail_activity_returns_success():
     """DetailActivity → True независимо от nav."""
-    ui = '<hierarchy/>'
-    act = 'topResumedActivity=ActivityRecord{... com.zhiliaoapp.musically/.detail.DetailActivity ...}'
-    ok, meta = _tt_infer_post_publish_success(ui, act, wait_iter=0)
+    ok, meta = _tt_infer_post_publish_success('<hierarchy/>', TT_DETAIL_ACT, wait_iter=0)
     assert ok and meta['reason'] == 'detail_activity'
 
+def test_launcher_activity_keeps_waiting():
+    """topResumedActivity = launcher → False (on_tiktok=False)."""
+    ok, meta = _tt_infer_post_publish_success('<hierarchy/>', LAUNCHER_ACT, 1)
+    assert not ok and meta['reason'] == 'not_on_tiktok'
+
+def test_composer_seed_keeps_waiting():
+    """topResumedActivity содержит 'CameraActivity' (composer seed) → False."""
+    ok, meta = _tt_infer_post_publish_success('<hierarchy/>', TT_CAMERA_ACT, 1)
+    assert not ok and meta['reason'] == 'on_composer_seed'
+
+# --- Nav-based ---
 def test_main_nav_5_groups_returns_success():
     """5/5 nav groups в bottom 20% + non-composer activity → True."""
     # Build XML with 5 nodes at y=2400-2520 (bottom of 2520-px screen)
-    ...
-    assert ok and meta['nav_groups_visible'] == ['Главная', 'Друзья', 'Создать', 'Входящие', 'Профиль']
+    ui = _build_bottom_nav_xml(['Главная', 'Друзья', 'Создать', 'Входящие', 'Профиль'])
+    ok, meta = _tt_infer_post_publish_success(ui, TT_MAIN_ACT, 1)
+    assert ok and len(meta['nav_groups_visible']) == 5
 
 def test_main_nav_3_groups_returns_success():
     """3/5 nav groups (минимум) → True."""
-    ...
+    ui = _build_bottom_nav_xml(['Главная', 'Входящие', 'Профиль'])  # 3 of 5
+    ok, meta = _tt_infer_post_publish_success(ui, TT_MAIN_ACT, 1)
     assert ok and len(meta['nav_groups_visible']) == 3
 
 def test_main_nav_2_groups_returns_keep_waiting():
     """2/5 nav groups (порог не достигнут) → False."""
-    ...
+    ui = _build_bottom_nav_xml(['Главная', 'Входящие'])
+    ok, meta = _tt_infer_post_publish_success(ui, TT_MAIN_ACT, 1)
     assert not ok and 'main_nav_only_2' in meta['reason']
 
-def test_diskoveru_variant_recognized():
-    """'Интересное' (RU вариант Discover/Friends) → group recognized."""
-    ...
-
-def test_composer_activity_keeps_waiting():
-    """topResumedActivity содержит 'PostActivity' → False."""
-    act = '... com.zhiliaoapp.musically/.post.PostActivity ...'
-    ...
-    assert not ok and meta['reason'] == 'on_composer_seed'
-
-def test_launcher_activity_keeps_waiting():
-    """topResumedActivity = launcher → False (on_tiktok=False)."""
-    act = '... com.sec.android.app.launcher/.LauncherActivity ...'
-    ...
-    assert not ok and meta['reason'] == 'not_on_tiktok'
+def test_interesnoe_variant_recognized():
+    """'Интересное' (RU вариант Discover) — алиас группы Друзья/Friends."""
+    ui = _build_bottom_nav_xml(['Главная', 'Интересное', 'Создать', 'Входящие', 'Профиль'])
+    ok, meta = _tt_infer_post_publish_success(ui, TT_MAIN_ACT, 1)
+    assert ok and 'Друзья' in meta['nav_groups_visible']  # group key normalized
 
 def test_main_nav_label_outside_bottom_band_ignored():
     """'Профиль' as section heading в content (cy=400 на 2520-px screen) → НЕ
        counts. Защита от false match в feed/profile content."""
-    ...
-    # 1 group in bottom + 'Профиль' высоко в content → only 1 group counts → False
+    # 1 group in bottom + 'Профиль' высоко в content → 1 group → False
+    ui = _build_xml([
+        ('Профиль', '[100,400][500,500]'),  # heading в content
+        ('Главная', '[0,2400][200,2520]'),  # bottom nav
+    ])
+    ok, meta = _tt_infer_post_publish_success(ui, TT_MAIN_ACT, 1)
+    assert not ok and len(meta['nav_groups_visible']) == 1
+
+def test_messages_does_not_match_me():
+    """P2.2 — 'Messages' не должен match 'Me' (group Профиль)."""
+    ui = _build_bottom_nav_xml(['Messages', 'Mentions', 'Notifications'])
+    ok, meta = _tt_infer_post_publish_success(ui, TT_MAIN_ACT, 1)
+    assert not ok  # nav_groups_visible should NOT include 'Профиль'
 
 def test_share_sheet_does_not_infer_success():
-    """Android share sheet 'Поделиться в TikTok / Видео / Сообщение' с main
-       activity → НЕ trigger success (composer-related path в нашем case;
-       или existing share-sheet failure handler сработает раньше)."""
-    # Existing checks ловят share-sheet до нашего блока — тест что наш блок
-    # не trigger'ится на share-sheet activity.
-    ...
+    """Android share sheet 'Поделиться в TikTok / Видео / Сообщение' — main
+       nav not visible → False."""
+    ui = _build_xml([
+        ('Поделиться в TikTok', '[0,500][720,600]'),
+        ('Видео', '[0,800][360,900]'),
+        ('Сообщение', '[360,800][720,900]'),
+    ])
+    ok, meta = _tt_infer_post_publish_success(ui, TT_MAIN_ACT, 1)
+    assert not ok and 'main_nav_only_0' in meta['reason']
+
+# --- Edge cases (P3.1 v3) ---
+def test_empty_ui_returns_screen_height_implausible():
+    """Empty string UI → screen_height_implausible (graceful)."""
+    ok, meta = _tt_infer_post_publish_success('', TT_MAIN_ACT, 1)
+    assert not ok and meta['reason'] == 'screen_height_implausible'
+
+def test_xml_without_bounds_returns_screen_height_implausible():
+    """XML без bounds nodes → screen_height_implausible."""
+    ok, meta = _tt_infer_post_publish_success(
+        '<hierarchy><node text="x"/></hierarchy>', TT_MAIN_ACT, 1)
+    assert not ok and meta['reason'] == 'screen_height_implausible'
+
+def test_zero_height_bounds_returns_screen_height_implausible():
+    """Zero-height bounds → max screen_h < 1000 → implausible."""
+    ok, meta = _tt_infer_post_publish_success(
+        '<hierarchy><node bounds="[0,0][0,0]"/></hierarchy>', TT_MAIN_ACT, 1)
+    assert not ok and meta['reason'] == 'screen_height_implausible'
 
 def test_malformed_xml_returns_keep_waiting():
-    """Empty/invalid XML → graceful False, не crash."""
-    ok, meta = _tt_infer_post_publish_success('<not-valid', 'com.zhiliaoapp.musically/.MainActivity', 1)
+    """Invalid XML → xml_parse_error reason."""
+    ok, meta = _tt_infer_post_publish_success('<not-valid', TT_MAIN_ACT, 1)
     assert not ok and 'xml_parse_error' in meta['reason']
+```
+
+### Integration tests (NEW v3 — Codex round 2 P2.3)
+
+```python
+# Mocking pattern — see tests/test_publisher_tt_*.py existing files.
+# Setup: mock self.adb (returns sequence dumpsys outputs), self.dump_ui
+# (returns sequence XMLs), self.log_event (capture). Run subset of wait_upload
+# loop (or extracted helper if refactored).
+
+def test_wait_upload_inferred_success_sets_inferred_path_used_and_logs_no_url_warning():
+    """Inferred success → inferred_path_used=True → если URL fetch вернул
+       profile fallback only → emit BOTH tt_url_partial AND
+       tt_success_inferred_but_no_video_url."""
+    # ...
+
+def test_wait_upload_existing_upload_ok_path_does_not_set_inferred_flag():
+    """Existing UPLOAD_OK match → inferred_path_used остаётся False →
+       НЕ emit tt_success_inferred_but_no_video_url даже если URL partial."""
+    # ...
+
+def test_post_publish_detection_block_runs_after_generic_dialog_handler():
+    """Если generic dialog handler tap_element(['Закрыть',...]) вернул True →
+       continue → detection block не достигнут в этой iter. Iter+1 → detection
+       block fires."""
+    # ...
+
+def test_ai_unstuck_skipped_when_main_nav_visible():
+    """wait%5==4, dump_ui показывает main nav → AI Unstuck NOT called →
+       tt_unstuck_skipped_post_publish event."""
+    # ...
+
+def test_ai_unstuck_still_runs_on_permission_activity():
+    """wait%5==4, topResumedActivity содержит 'PermissionActivity' →
+       AI Unstuck called normally (NOT skipped — это legit recovery)."""
+    # ...
+
+def test_ai_unstuck_still_runs_on_music_select_activity():
+    """wait%5==4, topResumedActivity содержит 'MusicSelectActivity' →
+       AI Unstuck called normally."""
+    # ...
+
+def test_camera_activity_after_share_breaks_loop_with_event():
+    """wait%5==4, topResumedActivity содержит 'CameraActivity' → emit
+       tt_unexpected_camera_after_share + break → existing
+       tt_upload_confirmation_timeout fires."""
+    # ...
 ```
 
 ## Live verification plan
@@ -465,7 +633,7 @@ def test_malformed_xml_returns_keep_waiting():
 | **TT UI evolution: activity названия меняются** | Средняя (TT агрессивно А/B-тестирует) | False negative: detection не сработает → behavior baseline (текущее) | Logging `top_activity` в каждом event позволит monitor'ить. Periodic audit query: `SELECT DISTINCT meta->>'top_activity' FROM events WHERE category LIKE 'tt_%'`|
 | **TT bottom nav текст меняется** (А/B локализация) | Средняя | False negative | Group-based markers с EN/RU вариантами. Bounds-scoped (only bottom 20%) защищает от false match с обычным текстом |
 | **screen_height detection fails** (некоторые devices give малый XML) | Низкая | Helper возвращает False с reason='screen_height_implausible' → keep waiting | sanity check 1000px минимум. Тест `test_malformed_xml_returns_keep_waiting` покрывает |
-| **AI Unstuck guard ломает legit AI-recovery scenarios** | Средняя | TT застрял в edge-case dialog где AI Unstuck сейчас помогает | Guards: skip только когда (success_check=True) ИЛИ composer activity. Other dialogs (audio/music-rights) consumed by existing blocker handlers до AI call — guards не trigger |
+| **AI Unstuck guard ломает legit AI-recovery scenarios** | Низкая (v3 narrowed) | TT застрял в edge-case где AI Unstuck помогает, но guard skip'нул | v3 NARROWED: skip только при main-nav visible (success_check=True) ИЛИ CameraActivity hard-fail. PermissionActivity/MusicSelectActivity/CutVideoActivity/CoverActivity — НЕ блокируются. Audio-dialog/music-rights/share-sheet consumed by existing blocker handlers до AI call. Tests `test_ai_unstuck_still_runs_on_permission_activity` / `test_ai_unstuck_still_runs_on_music_select_activity` защищают invariant. |
 | **dumpsys overhead** ~50-200ms × 60 итераций × 2 (detection + guard) = до 24s extra per task | Низкая | Slowdown | Net win: success detection экономит 8+ минут when triggered. Optimization: cache cur_act per iter (один call вместо двух) — defer |
 
 ## Out of scope (отдельный backlog)
@@ -497,6 +665,7 @@ def test_malformed_xml_returns_keep_waiting():
 
 ---
 
-**Status:** v2 ready for second-round Codex review + user review.
+**Status:** v3 ready for round 3 Codex re-review + user review.
 **Codex review history:**
-- v1 → v2 applied 5 P1 + 6 P2 + 4 P3 finds (2026-05-11). Re-review pending.
+- v1 → v2 applied round 1: 5 P1 + 6 P2 + 4 P3 finds (2026-05-11)
+- v2 → v3 applied round 2: 3 P1 + 5 P2 + 1 P3 finds (2026-05-11)
