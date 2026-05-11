@@ -45,7 +45,7 @@ Event `tt_music_rights_accepted` с `button_tapped=true` залогирован 
 **v7 scope-cut: RC-B success rate НЕ адресуется** — будет вторым раундом после XML evidence.
 
 Текущая итерация цели:
-- **RC-A coverage:** Доля task'ов с `tt_music_rights_accepted=true` среди failed RC-A-cases должна вырасти. Считаем `tt_music_rights_fallback_match` events за 24h — каждый event = ранее упускавшийся matcher case теперь покрыт. Целевое: **≥3 events за первые 24h** (calibration); если 0 за 24h — fallback слишком строгий ИЛИ TT уже стабилизировал title text.
+- **RC-A coverage:** Доля task'ов с `tt_music_rights_accepted=true` среди failed RC-A-cases должна вырасти. Считаем `tt_music_rights_fallback_match` events за 24h — каждый event = ранее упускавшийся matcher case теперь покрыт. Win condition: **≥1 event за первые 24h** (= новый покрытый case validated). Если 0 за 24h при наличии `tt_music_rights_unhandled_suspect` events → fallback слишком строгий, расследуем suspect XML. Если 0 за 24h и 0 suspect → TT стабилизировал title text (RC-A исчерпан, fix profilactic).
 - **RC-A false-positives:** 0 events `tt_music_rights_unhandled_suspect` followed by downstream `publish_failed_generic` с UI XML show no actual music-rights dialog. (Manual review evidence-only XML's за 24h.)
 - **RC-B.0 SEED hardening side-effect:** монитор `tt_post_publish_success_inferred` rate — не должен УПАСТЬ значительно (SEED expansion может убрать прежние false-positives). Если падение >10% — расследуем.
 - **Evidence для следующего раунда:** ≥5 XML dump'ов сохранены для failed tasks с `mr_accept=true, pp_inferred=false`. Это input для design'а RC-B.3 v2.
@@ -352,10 +352,11 @@ Default `false` (Codex round 1, P1#1) — opt-in активация в rollout s
 ### Smoke (phone #19 testbench)
 
 1. Cherry-pick fix-commit в worktree, deploy через PM2 restart.
-2. Запустить 2-3 re-queue для одного из недавних RC-A failed task'ов (4536) — проверить fallback fires; XML dump сохранён.
-3. Запустить re-queue для RC-B failed task (4542) — **только validation что spec не сломал normal flow** (publish либо прошёл через PR #29 detector как раньше, либо timed out — оба ожидаемы; main цель — сохранить XML dump'ы для следующего раунда).
+2. **Перед smoke включить флаги на testbench** (иначе fallback не сработает): set `TT_MUSIC_RIGHTS_FALLBACK_ENABLED=true` и `TT_DUMP_POST_MUSIC_RIGHTS_XML=true` в testbench .env, restart PM2. (Codex v9 round 1, P2: prod flags ≠ testbench flags.)
+3. Запустить 2-3 re-queue для одного из недавних RC-A failed task'ов (4536) — проверить `tt_music_rights_fallback_match` ИЛИ `tt_music_rights_unhandled_suspect` event fires; XML dump сохранён.
+4. Запустить re-queue для RC-B failed task (4542) — **только validation что spec не сломал normal flow** (publish либо прошёл через PR #29 detector как раньше, либо timed out — оба ожидаемы; main цель — сохранить `tt_post_music_rights_*.xml` dumps).
 
-Если testbench недоступен / Pi 9 orphan не resolved — деплой сразу в prod за flag'ом `false`, активация через `pm2 set` после smoke на следующий же publish с music-rights detected треком.
+Если testbench недоступен / Pi 9 orphan не resolved — деплой сразу в prod за flag'ом `false`, активация через `.env` + `pm2 restart --update-env` после deploy.
 
 ### Прод-rollout
 
@@ -406,14 +407,17 @@ Exit rollout, читаем suspect XML, итерируем title/checkbox/button
 
 ## Rollback
 
-- Симметричный к rollout — через `.env` + `pm2 restart --update-env` (Codex round 3, P2#2: `pm2 set` не влияет на `os.environ`, а код читает оттуда). Для каждого flag'а:
+- Симметричный к rollout — через `.env` + `pm2 restart --update-env` (Codex round 3, P2#2: `pm2 set` не влияет на `os.environ`). Disable **оба** flag'а (Codex v9 round 1, P3#1: dump-flag тоже надо disable, иначе оставим instrumentation on after rollback):
   ```bash
   cd /root/.openclaw/workspace-genri/autowarm
-  # idempotent toggle: if key exists, replace; if not, append
+  # idempotent: для обоих flag'ов
   sed -i '/^TT_MUSIC_RIGHTS_FALLBACK_ENABLED=/d' .env
   echo "TT_MUSIC_RIGHTS_FALLBACK_ENABLED=false" >> .env
+  sed -i '/^TT_DUMP_POST_MUSIC_RIGHTS_XML=/d' .env
+  echo "TT_DUMP_POST_MUSIC_RIGHTS_XML=false" >> .env
   pm2 restart autowarm --update-env
   ```
+  **Note:** RC-B.0 SEED expansion (always-on) НЕ откатывается через flag'и — для полного rollback требуется `git revert`.
 - Если код-баг (например, исключение в fallback ломает publish целиком) — `git revert <commit>`, push, prod re-pull через auto-push hook.
 - XML dump'ы остаются на `/tmp/` (одноразовые артефакты, не критично).
 
