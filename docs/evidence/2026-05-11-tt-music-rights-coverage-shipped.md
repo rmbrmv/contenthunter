@@ -64,6 +64,23 @@ Deploy уже выполнен (prod pulled f9315cd, PM2 restarted). Все 3 fl
    ```
 3. **TT_SEED_HARDENING_SAASCENE_ENABLED=true** ТОЛЬКО после evidence query показал `SAASceneWrapperActivity` в `top_activity` для failed post-accept tasks (см. spec Rollout Step 3a SQL).
 
+## Activation log (Rollout Step 1 + Step 2)
+
+| Flag | Activated at (UTC) | PM2 restart | Notes |
+|---|---|---|---|
+| `TT_DUMP_POST_MUSIC_RIGHTS_XML=true` | 2026-05-11 ~14:18 | id=34 restart=12 | Step 1 — evidence collection |
+| `TT_MUSIC_RIGHTS_FALLBACK_ENABLED=true` | 2026-05-11 ~14:21 | id=34 restart=14 | Step 2 — RC-A coverage |
+
+**Baseline events (24h pre-activation):**
+- `tt_music_rights_accepted`: 13/24h (last 10:25 UTC) — strict matcher working
+- `tt_music_rights_fallback_match`: 0 (новое поведение — ждём ≥1 за 24h)
+- `tt_music_rights_unhandled_suspect`: 0 (FP guard target: 0 followed by `publish_failed_generic`)
+- `tt_post_music_rights_dump`: 0 (evidence target: ≥5 от failed `mr_accept=true, pp_inferred=false`)
+
+Прод TT публикации за 7 days: **277 failed / 1 done** (Top error_code: `tt_upload_confirmation_timeout` 26/48h). RC-A targets ~40% этих fails (handler не fires из-за обновлённого title-node).
+
+`TT_SEED_HARDENING_SAASCENE_ENABLED` — пока **НЕ активирован**, ждёт XML evidence для подтверждения `SAASceneWrapperActivity` в top_activity.
+
 ## Success metrics
 
 - **RC-A win condition:** ≥1 event `tt_music_rights_fallback_match` за первые 24h после activation.

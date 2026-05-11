@@ -1,5 +1,9 @@
 # TT publish stabilization Phase 1.5 — audio-dialog fix + inventory
 
+> **STATUS 2026-05-11: SUPERSEDED — already shipped via commits `99caf34`, `0a14c18`, `7212e6c`, `49aa346` (merge `fix/tt-bound-nav-phase1` Phase 1+1.5+2 на 2026-05-08).** Audio-dialog detector работает в проде — за 24h до 2026-05-11 zero events `tt_audio_dialog_stuck`. Memory: `project_tt_publish_phases_shipped.md`.
+>
+> Не запускать exec — реальная горящая проблема `tt_upload_confirmation_timeout` теперь имеет другой root cause: 6/9 fails за 24h имеют `tt_music_rights_accepted`, но post-accept screen не появляется. См. PR #32 RC-B path и `TT_DUMP_POST_MUSIC_RIGHTS_XML` activation 2026-05-11.
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development to implement this plan.
 
 **Goal:** Закрыть `tt_upload_confirmation_timeout` audio-dialog stuck loop (corrupt main publish-stage failure mode после Phase-1 unblock'а switcher) и почистить inventory `gennadiya4` на phone #19. Цель — TT smoke на phone #19 даёт ≥80%/5 done через user70415121188138.
