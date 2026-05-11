@@ -426,7 +426,7 @@ cd /root/.openclaw/workspace-genri/autowarm
 pytest tests/test_post_switch_renav.py -v -k 'recovery or unknown_with or unknown_non' 2>&1 | tail -20
 ```
 
-Expected: 4 FAILED — `AttributeError: ... '_tt_handle_post_switch_unknown'`.
+Expected: 5 FAILED — `AttributeError: ... '_tt_handle_post_switch_unknown'` (4 recovery-path + 1 navigate-fail).
 
 - [ ] **Step 4: Implement `_tt_handle_post_switch_unknown` method**
 
