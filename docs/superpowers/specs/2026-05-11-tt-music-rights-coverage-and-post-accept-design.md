@@ -273,13 +273,15 @@ def _tt_infer_post_publish_success(ui, top_activity, wait_iter):
 Failed tasks (4643, 4641, 4636 после PR #29 deploy) показывают что детектор возвращает False на post-music-rights screen — наш gate не может это починить, он работает только на True результатах.
 
 **Что делаем вместо:**
-- RC-B.0 (всегда on): `SAASceneWrapperActivity` → SEED. Закрывает known hole.
+- RC-B.0 (flag-gated, evidence-guarded): `SAASceneWrapperActivity` → SEED через `TT_SEED_HARDENING_SAASCENE_ENABLED`. Default false; активация только после RC-B.4 evidence.
 - RC-B.4 (opt-in flag): per-iteration XML dump после accept. Собирает evidence (что именно за screen TT показывает).
 - Через 24-48h после rollout анализируем dump'ы; второй раунд spec'а проектирует positive-path detection с реальными данными.
 
 Backlog item: после сбора dump'ов от ≥5 failed task'ов → analyze + design `_tt_infer_post_publish_success` extension (новые activities / nav-threshold lowering / supplemental detection path в music-rights context).
 
-### RC-B.4: Per-iteration XML dump
+### RC-B.4: Per-iteration XML dump + metadata
+
+Codex v11 round 1, P2: XML без top_activity недостаточно для SEED-activation decision. Сохраняем XML файл И log_event с meta содержащим `top_activity` (read via dumpsys).
 
 ```python
 if (os.environ.get('TT_DUMP_POST_MUSIC_RIGHTS_XML', 'false').lower() == 'true'
@@ -287,22 +289,38 @@ if (os.environ.get('TT_DUMP_POST_MUSIC_RIGHTS_XML', 'false').lower() == 'true'
 
     iters_since = wait - self._music_rights_just_accepted_iter
     if iters_since in (1, 3, 5, 10, 20, 40):  # логарифмическая частота
+        # Capture top_activity сейчас (свежий read) — это критично для
+        # SEED evidence decision'а: nужно знать активити на конкретной iter.
+        cur_act_dump = self.adb(
+            'dumpsys activity activities 2>/dev/null | grep -m1 "topResumedActivity"',
+            timeout=8) or ''
         try:
             os.makedirs('/tmp/autowarm_ui_dumps', exist_ok=True)  # Codex round 1, P2#7
             # ms-timestamp + uuid suffix — защита от коллизии при retries
             # в той же секунде (Codex round 1, P3#9; Codex round 2, P3#1)
+            ts_ms = int(time.time() * 1000)
+            uid8 = uuid.uuid4().hex[:8]
             path = (f'/tmp/autowarm_ui_dumps/'
                     f'tt_post_music_rights_{self.task_id}'
-                    f'_iter{iters_since}_{int(time.time() * 1000)}'
-                    f'_{uuid.uuid4().hex[:8]}.xml')
+                    f'_iter{iters_since}_{ts_ms}_{uid8}.xml')
             with open(path, 'w', encoding='utf-8') as f:
                 f.write(ui or '')
             log.info(f'  💾 post-music-rights dump (iter+{iters_since}): {path}')
+            # Logged event обязателен для grep'а top_activity:
+            # `SELECT events FROM publish_tasks WHERE ...
+            #  AND events @> '[{"meta":{"category":"tt_post_music_rights_dump"}}]'`
+            self.log_event('info',
+                f'TikTok: post-music-rights dump saved (iter+{iters_since})',
+                meta={'category': 'tt_post_music_rights_dump',
+                      'iters_after_accept': iters_since,
+                      'dump_path': path,
+                      'top_activity': cur_act_dump.strip()[:200],
+                      'platform': self.platform})
         except Exception as e:
             log.warning(f'  ⚠️ Не удалось сохранить post-music-rights dump: {e}')
 ```
 
-Default `false` (Codex round 1, P1#1) — opt-in активация в rollout step 2. Цель — собрать XML evidence для следующей итерации RC-B.3 design'а.
+Default `false` (Codex round 1, P1#1) — opt-in активация в rollout step 2. Цель — собрать XML evidence + top_activity meta для SEED-activation decision (RC-B.0 evidence-guarded gate) и следующего раунда RC-B.3 design'а.
 
 ---
 
@@ -344,6 +362,7 @@ Default `false` (Codex round 1, P1#1) — opt-in активация в rollout s
 | `test_seed_hardening_flag_on_adds_saascene` | flag=true, тот же mock | `on_composer_seed=True`, `reason='on_composer_seed'` |
 | `test_evidence_only_fires_when_button_exists_but_strict_and_fallback_fail` | XML с substring + generic checkbox + button EXACT, НО checkbox-label НЕ EXACT и title НЕ EXACT | strict=False, fallback=False, evidence-only=True → dump |
 | `test_dump_at_iters_with_ms_timestamp_uuid` | mock: проходим iter 1,3,5 с music_rights_accepted; `TT_DUMP_POST_MUSIC_RIGHTS_XML=true` | dump-файлы созданы для каждого; filename содержит ms-timestamp + uuid suffix |
+| `test_dump_logs_event_with_top_activity_meta` | mock: dump fires, mocked `dumpsys` returns `'topResumedActivity=...SAASceneWrapperActivity ...'` | log_event с `category='tt_post_music_rights_dump'` И `meta['top_activity']` содержит `'SAASceneWrapperActivity'` (Codex v11 round 1, P2: для SEED-activation evidence) |
 | `test_dump_flag_off_no_writes` | `TT_DUMP_POST_MUSIC_RIGHTS_XML=false` (default) | dump-файлы не создаются |
 | `test_dump_only_after_music_rights_accept` | mock: publish_tiktok без music_rights detection + flag on | dump-файлы не создаются (gated `_music_rights_just_accepted_iter is not None`) |
 | `test_feature_flag_off_fallback_skipped` | `TT_MUSIC_RIGHTS_FALLBACK_ENABLED=false` | fallback не вызывается даже при substring match; evidence-only тоже |
@@ -389,7 +408,16 @@ Default `false` (Codex round 1, P1#1) — opt-in активация в rollout s
    echo "TT_MUSIC_RIGHTS_FALLBACK_ENABLED=true" >> .env
    pm2 restart autowarm --update-env
    ```
-3a. **Evidence-guarded** SEED hardening — активируется ТОЛЬКО после того как dump от step 2 покажет `SAASceneWrapperActivity` в `top_activity` на failed post-accept screen (= confirmed composer use-case, не feed/profile). Затем:
+3a. **Evidence-guarded** SEED hardening — активируется ТОЛЬКО после того как `tt_post_music_rights_dump` events (от RC-B.4 instrumentation) покажут `meta.top_activity LIKE '%SAASceneWrapperActivity%'` для failed post-accept tasks. Query:
+   ```sql
+   SELECT id, e->'meta'->>'top_activity' AS act
+   FROM publish_tasks, jsonb_array_elements(events) e
+   WHERE platform='TikTok' AND error_code='tt_upload_confirmation_timeout'
+     AND e->'meta'->>'category' = 'tt_post_music_rights_dump'
+     AND created_at > NOW() - INTERVAL '48 hours'
+   ORDER BY id DESC;
+   ```
+   Если ≥1 запись содержит SAASceneWrapperActivity → активируем flag:
    ```bash
    sed -i '/^TT_SEED_HARDENING_SAASCENE_ENABLED=/d' .env 2>/dev/null || true
    echo "TT_SEED_HARDENING_SAASCENE_ENABLED=true" >> .env
