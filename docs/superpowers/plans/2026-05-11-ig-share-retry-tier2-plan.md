@@ -16,13 +16,19 @@
 
 **Files:** none yet — git ops.
 
-- [ ] **Step 1: Fetch latest main**
+- [ ] **Step 1: Verify autowarm-testbench main clean + fetch (Codex P1.1 fix)**
 
 ```bash
 cd /home/claude-user/autowarm-testbench
+git fetch origin main
+# Safety guard: abort если есть uncommitted changes на main
+git status --porcelain | head -5
+# Expected empty output. Если непустой — stash или resolve manually ДО продолжения.
 git checkout main
 git pull --ff-only origin main
 ```
+
+Expected: `git status --porcelain` empty before checkout, no merge conflict on `git pull`.
 
 - [ ] **Step 2: Create feature branch + worktree**
 
@@ -47,7 +53,7 @@ Expected: All existing Tier 1 tests PASS (baseline для regression detection).
 ## Task 1: Helper `_long_press_share_button` (TDD, 4 tests)
 
 **Files:**
-- Modify: `publisher_instagram.py` (после line 470 — после `_is_ig_editor_still_visible`)
+- Modify: `publisher_instagram.py` — добавить method ПОСЛЕ существующего `def _is_ig_editor_still_visible(self, ui_xml: str) -> bool:` (использовать grep-anchor, не line number: `grep -n 'def _is_ig_editor_still_visible' publisher_instagram.py` — текущая позиция ≈ line 400, может сдвинуться при предыдущих правках). **Codex P1.2 fix: anchor by symbol name, not numeric line.**
 - Create: `tests/test_ig_long_press_helper.py`
 
 ### Test 1.1: cmd shape
@@ -107,7 +113,7 @@ Expected: FAIL with `AttributeError: 'DevicePublisher' object has no attribute '
 
 - [ ] **Step 3: Write minimal implementation**
 
-В `publisher_instagram.py` после метода `_is_ig_editor_still_visible` (line ~470) добавить:
+В `publisher_instagram.py` после метода `_is_ig_editor_still_visible` (locate via `grep -n '^    def _is_ig_editor_still_visible\|^    def ' publisher_instagram.py` чтобы найти следующий method и вставить перед ним) добавить:
 
 ```python
     def _long_press_share_button(self, ui_xml: str, hold_ms: int = 200) -> bool:
@@ -220,7 +226,7 @@ git commit -m "test(ig-share-tier2): helper edge cases (no button / malformed bo
 ## Task 2: Tier 1 telemetry downgrade (1-line mod + 1 test)
 
 **Files:**
-- Modify: `publisher_instagram.py:1907-1912` (Tier 1 final emit)
+- Modify: `publisher_instagram.py` — Tier 1 final emit block (locate via `grep -n "'ig_share_tap_no_progress'" publisher_instagram.py` — should return единственный match в `_wait_instagram_upload`, line ≈1907 на текущем main). **Codex P1.2 fix: locate by string content, not numeric line.**
 - Create: `tests/test_ig_tier1_telemetry_downgrade.py`
 
 ### Test 2.1: Tier 1 emit assertion
@@ -254,15 +260,19 @@ from tests.test_publisher_instagram_share_retry import _editor_xml, _make_publis
 def test_tier1_exhausted_emits_warning_not_error():
     """After Tier 1 retries fail and final check confirms editor, emit
     warning/'ig_share_tier1_exhausted' (NOT error/'ig_share_tap_no_progress').
-    
-    `ig_share_tap_no_progress` error остаётся для Tier 2 fail (test 4.2.8).
+
+    Codex P3.1 fix: Note — этот тест run'ится в Task 2 ДО реализации Tier 2 ladder.
+    На том этапе `if share_no_progress: return False` всё ещё активен, Tier 2 helper
+    ещё не вызывается. Тест ассертит ТОЛЬКО Tier 1 emit (warning category).
+    Mock helper установлен заранее на случай если test run'ится также после Task 3
+    (Tier 2 ladder уже на месте) — в этом сценарии helper вернёт False, ladder
+    пойдёт в button_not_found path, итог error ig_share_tap_no_progress будет,
+    но тест проверяет только что Tier 1 эмитит warning (separate assertion).
     """
     dump_responses = [_editor_xml()] * 50
     stub = _make_publisher_stub(dump_ui_responses=dump_responses)
-    # _long_press_share_button returns False (no Tier 2 progress) — но ladder фейлит,
-    # значит Tier 2 emit error/ig_share_tap_no_progress сработает. Mock helper
-    # чтобы вернуть False (=button vanishes) — Tier 2 button_not_found path,
-    # still ends in fail emit. Тест проверяет Tier 1 emit ВНУТРИ pipeline.
+    # Pre-emptive mock — после Task 3 ladder появится; при run в Task 2 mock не
+    # используется (helper ещё не invoked в коде).
     stub._long_press_share_button = MagicMock(return_value=False)
 
     with patch('time.sleep'):
@@ -296,7 +306,7 @@ Expected: FAIL — текущий код эмитит `error/ig_share_tap_no_pro
 
 - [ ] **Step 3: Apply Tier 1 mod**
 
-В `publisher_instagram.py:1906-1912`, заменить:
+В `publisher_instagram.py`, найти блок через `grep -B 1 -A 6 "'ig_share_tap_no_progress'" publisher_instagram.py` (должен возвращать ровно 1 match — Tier 1 final emit). Заменить:
 
 ```python
                 if not progressed and self._is_ig_editor_still_visible(self.dump_ui()):
@@ -338,15 +348,11 @@ pytest tests/test_publisher_instagram_share_retry.py -v
 
 Expected: некоторые ассерты сломаются (любой тест, ассертирующий event category `ig_share_tap_no_progress` от Tier 1 path).
 
-- [ ] **Step 5: Update existing Tier 1 tests если ассерт сломался**
+- [ ] **Step 5: Update specific Tier 1 test (Codex P2.1 fix — named test, not "if asserts break")**
 
-Поиск:
+Конкретно затрагивается `tests/test_publisher_instagram_share_retry.py::test_share_retry_exhausted_emits_no_progress` (verified `grep -n 'ig_share_tap_no_progress' tests/test_publisher_instagram_share_retry.py` returns эту функцию). После Tier 1 downgrade сценарий «editor visible везде» эмитит `warning/ig_share_tier1_exhausted` — но тест ещё ассертит `ig_share_tap_no_progress` (count=1). Поскольку Tier 2 ladder в этой Task ещё НЕ реализован, поведение: Tier 1 эмитит `tier1_exhausted` (warning), затем `_wait_instagram_upload` возвращает False БЕЗ Tier 2 (поскольку Task 3 ещё не сделан) → НО Tier 2 ladder WRAP'ит `if share_no_progress: return False` (Task 3). Сейчас (после Task 2 только) код всё ещё имеет `if share_no_progress: return False`, поэтому test всё ещё проходит чтобы возвращало False, но ассерт category поменялся.
 
-```bash
-grep -n "ig_share_tap_no_progress" tests/test_publisher_instagram_share_retry.py
-```
-
-Найти затрагиваемые ассерты. Например `test_share_retry_exhausted_emits_no_progress` — теперь должен ассертить `ig_share_tier1_exhausted` (warning), не `ig_share_tap_no_progress` (error). Обновить тест:
+Заменить в `test_share_retry_exhausted_emits_no_progress` (около line 145-155 файла):
 
 ```python
 # было:
@@ -355,14 +361,23 @@ no_progress_calls = [
     if c.kwargs.get('meta', {}).get('category') == 'ig_share_tap_no_progress'
 ]
 assert len(no_progress_calls) == 1
-# стало:
+# стало (Task 2):
 tier1_warns = [
     c for c in stub.log_event.call_args_list
     if c.kwargs.get('meta', {}).get('category') == 'ig_share_tier1_exhausted'
 ]
 assert len(tier1_warns) == 1
-# Tier 2 fail emit ig_share_tap_no_progress будет asserted в Task 3 tests
+# NOTE: после Task 3 (Tier 2 ladder) этот же сценарий продолжит fail в Tier 2 →
+# дополнительно появится 1 error 'ig_share_tap_no_progress' с tier2_attempted=True.
+# Тогда же добавим:
+# tier2_errs = [c for c in stub.log_event.call_args_list
+#               if c.args[0] == 'error'
+#                  and c.kwargs.get('meta',{}).get('category') == 'ig_share_tap_no_progress'
+#                  and c.kwargs.get('meta',{}).get('tier2_attempted')]
+# assert len(tier2_errs) == 1
 ```
+
+(После Task 3 финальный update этого ассерта — см. Task 3 Step 7.)
 
 - [ ] **Step 6: Re-run all share-retry tests**
 
@@ -388,10 +403,10 @@ EOF
 
 ---
 
-## Task 3: Tier 2 ladder integration (6 ladder tests + 2 regression)
+## Task 3: Tier 2 ladder integration (6 ladder tests + 2 regression + 1 retry telemetry test)
 
 **Files:**
-- Modify: `publisher_instagram.py:1921-1922` (заменить `if share_no_progress: return False` на Tier 2 ladder)
+- Modify: `publisher_instagram.py` — `if share_no_progress: return False` block (locate via `grep -n 'if share_no_progress' publisher_instagram.py` — должен возвращать единственный match в `_wait_instagram_upload`). **Codex P1.2 fix.**
 - Create: `tests/test_ig_share_tier2_ladder.py`
 
 ### Test 3.1: Ladder behavior tests (6 tests)
@@ -452,6 +467,36 @@ def test_tier2_progressed_on_attempt_1_pre_check():
     assert pre_lp[0].kwargs['meta']['attempts_used'] == 0
     # Long-press helper НЕ должен зваться:
     stub._long_press_share_button.assert_not_called()
+
+
+def test_long_press_retry_telemetry():
+    """Codex round 1 plan-review P2.2: assert ig_share_long_press_retry event emitted
+    per fired long-press с правильными meta keys (attempt, hold_ms, platform, step).
+    """
+    dump_responses = [
+        _editor_xml(),  # iter0
+        _editor_xml(), _editor_xml(),  # Tier 1 retries
+        _editor_xml(),  # Tier 1 final
+        _editor_xml(),  # Tier 2 attempt 1 pre-check (visible → fire long-press)
+        _editor_xml(),  # Tier 2 attempt 2 pre-check (visible → fire long-press)
+        _editor_xml(),  # post-loop final check (still visible → fail)
+    ] + [_editor_xml()] * 30
+
+    stub = _make_publisher_stub(dump_ui_responses=dump_responses)
+    stub._long_press_share_button = MagicMock(return_value=True)
+
+    with patch('time.sleep'):
+        stub._wait_instagram_upload()
+
+    retry_events = [c for c in stub.log_event.call_args_list
+                    if c.kwargs.get('meta', {}).get('category') == 'ig_share_long_press_retry']
+    assert len(retry_events) == 2, f'expected 2 retry events, got {len(retry_events)}'
+    for i, ev in enumerate(retry_events, start=1):
+        meta = ev.kwargs['meta']
+        assert meta['attempt'] == i
+        assert meta['hold_ms'] == 200
+        assert meta['platform'] == 'Instagram'
+        assert meta['step'] == 'wait_upload'
 
 
 def test_tier2_progressed_on_attempt_2_after_long_press():
@@ -611,13 +656,18 @@ def test_no_stuck_skips_both_tiers():
     assert len(retries) == 0
 ```
 
-- [ ] **Step 2: Run all 8 tests, verify they fail**
+- [ ] **Step 2: Run all 9 tests, verify expected split (Codex P1.3 fix)**
 
 ```bash
 pytest tests/test_ig_share_tier2_ladder.py -v
 ```
 
-Expected: 8 FAIL — Tier 2 ladder ещё не реализован (current code: `if share_no_progress: return False`).
+**Expected baseline (Tier 2 ladder NOT yet implemented):**
+- **6 FAIL** — ladder behavior tests (1, 2, 3, 4, 5, 6 в файле — assertions ladder events ladder events не появятся): `test_tier2_progressed_on_attempt_1_pre_check`, `test_tier2_progressed_on_attempt_2_after_long_press`, `test_tier2_progressed_on_postloop_check`, `test_tier2_exhausted_fail`, `test_tier2_button_not_found_all`, `test_tier2_button_not_found_partial`.
+- **1 FAIL** — `test_long_press_retry_telemetry` (новый retry-telemetry test — Codex P2.2 fix).
+- **2 PASS** — regression tests (`test_tier1_success_skips_tier2`, `test_no_stuck_skips_both_tiers`) — они проверяют что Tier 2 *не* invoked в этих сценариях. До Task 3 ladder helper не зовётся вообще → assertions сразу green.
+
+Это валидный TDD-RED state: 7 fail (ladder logic missing), 2 pass (negative-path regressions).
 
 - [ ] **Step 3: Implement Tier 2 ladder**
 
@@ -769,19 +819,20 @@ cd /home/claude-user/autowarm-testbench-feat-ig-share-tier2-20260511
 
 Expected: codex анализирует diff против main, возвращает P1/P2/P3 finds для **кода** (не для spec).
 
-- [ ] **Step 2: Если есть P1 — применить, commit, повторить**
+- [ ] **Step 2: Если есть P1 — применить, commit, повторить (Codex P1.4 + P2.3 fix)**
 
 ```bash
-cat /tmp/codex-tier2-impl-review.txt | tail -60
-# Apply findings inline; new commit per round
-git commit -am "$(cat <<'EOF'
-feat(ig-share-tier2): apply Codex code-review round 1 (N finds)
-EOF
-)"
+cat /tmp/codex-tier2-impl-review.txt | tail -80
+# Apply findings inline.
+# IMPORTANT: use explicit file list или `git add -A` (НЕ `git commit -am` — пропустит новые файлы).
+git status --short
+git add -A
+# Заполнить commit message конкретным count'ом, например: «3 P1 + 2 P2»; убрать placeholder
+git commit -m "feat(ig-share-tier2): apply Codex code-review round 1 (X P1 + Y P2)"
 ~/.local/bin/codex review --base main > /tmp/codex-tier2-impl-review-2.txt 2>&1
 ```
 
-Итерировать пока 0 P1 + ≤1 P2.
+Итерировать пока 0 P1 + ≤1 P2. На каждом round'е считать X, Y и подставлять явные числа.
 
 - [ ] **Step 3: Final full-suite green**
 
@@ -835,9 +886,59 @@ EOF
 )"
 ```
 
-- [ ] **Step 3: Present к user**
+- [ ] **Step 3: Update memory + present to user (Codex P3.2 fix — exact path)**
 
-Update memory `project_ig_share_tier2_design.md` со status «PR open: #NN, awaiting user merge». Hand off.
+```bash
+# Update memory с конкретным PR номером + commit SHA
+# File: /home/claude-user/.claude/projects/-home-claude-user-contenthunter/memory/project_ig_share_tier2_design.md
+# Меняем status секцию на: "PR #NN open, HEAD <sha>, awaiting user merge"
+```
+
+Edit с `Edit` tool, не shell — раздел `**Статус:**` обновляется на актуальный PR.
+
+- [ ] **Step 4: Worktree cleanup decision (Codex P2.4 fix)**
+
+Не удалять worktree сразу:
+- **Если user merge'ает PR через GitHub UI**: после merge зайти в worktree, `git fetch origin main && git checkout main && git pull --ff-only`, потом `cd .. && git worktree remove autowarm-testbench-feat-ig-share-tier2-20260511 && git branch -d feat/ig-share-tier2-20260511`.
+- **Если user просит изменения**: оставить worktree, итерировать там.
+
+Не делать teardown сразу после PR open — user может попросить правки.
+
+- [ ] **Step 5: Rollback criteria (Codex P2.5 fix)**
+
+**Live verify SQL (24h post-deploy):**
+```sql
+SELECT
+  count(*) FILTER (WHERE e->'meta'->>'category' = 'ig_share_long_press_progressed') AS lp_rescued,
+  count(*) FILTER (WHERE e->'meta'->>'category' = 'ig_share_progressed_pre_long_press') AS pre_lp_auto,
+  count(*) FILTER (WHERE e->'meta'->>'category' = 'ig_share_long_press_retry') AS lp_fired,
+  count(DISTINCT pt.id) FILTER (
+    WHERE pt.error_code = 'ig_share_tap_no_progress'
+      AND e->'meta'->>'category' = 'ig_share_tap_no_progress'
+      AND (e->'meta'->>'tier2_attempted')::boolean = true
+  ) AS tier2_exhausted_tasks
+FROM publish_tasks pt, jsonb_array_elements(pt.events::jsonb) e
+WHERE pt.started_at >= '2026-05-11 18:00:00';  -- adjust к moment деплоя
+```
+
+**Rollback triggers (revert PR + restart autowarm):**
+1. **Total IG fail rate** идёт ↑ vs предыдущие 7д baseline (Spec §1.1: 6 unique Tier 1 tasks / 7д = ~1/день). Если >3/день в первые 24h — investigate.
+2. **`tier2_exhausted_tasks` >= 80%** от total `ig_share_tap_no_progress` tasks → Tier 2 не помогает, обмыслить (но не auto-revert).
+3. **New error_codes emerging** (категория не в pre-deploy listing) появляются >5/день — может быть regression от ladder logic.
+4. **Subprocess hangs** (`error_code='watchdog_subprocess_hang'` рост) — Tier 2 latency может пушнуть subprocess к timeout.
+
+**Rollback command:**
+```bash
+cd /home/claude-user/autowarm-testbench
+git fetch origin main
+# Find merge commit (e.g. ABC123) для feat/ig-share-tier2-20260511
+git log --oneline --merges main | grep tier2 | head -1
+# Revert merge commit с -m 1 (mainline):
+git revert -m 1 <merge-sha>
+git push origin main
+# auto-push hook задеплоит prod
+sudo pm2 restart autowarm
+```
 
 ---
 
@@ -848,10 +949,10 @@ Update memory `project_ig_share_tier2_design.md` со status «PR open: #NN, awa
 | `publisher_instagram.py` | Modify | +1 helper method (~30 lines) + 1-line Tier 1 emit mod (level/category swap) + Tier 2 ladder replacing `if share_no_progress: return False` (~70 lines) |
 | `tests/test_ig_long_press_helper.py` | Create | 4 tests |
 | `tests/test_ig_tier1_telemetry_downgrade.py` | Create | 1 test |
-| `tests/test_ig_share_tier2_ladder.py` | Create | 8 tests (6 ladder + 2 regression) |
-| `tests/test_publisher_instagram_share_retry.py` | Modify | Update ассертов `ig_share_tap_no_progress` → `ig_share_tier1_exhausted` для Tier 1 path |
+| `tests/test_ig_share_tier2_ladder.py` | Create | 9 tests (6 ladder behavior + 1 retry-telemetry + 2 regression) |
+| `tests/test_publisher_instagram_share_retry.py` | Modify | Update `test_share_retry_exhausted_emits_no_progress` ассерт: category `ig_share_tap_no_progress` → `ig_share_tier1_exhausted` (Task 2 Step 5); после Task 3 добавить assertion на Tier 2 fail emit |
 
-Total new tests: **13** (соответствует Spec §9.1 acceptance criterion).
+Total new tests: **14** (4 helper + 1 Tier 1 mod + 6 ladder + 1 retry-telemetry + 2 regression — Spec §9.1 укажет 13, retry-telemetry plan-level Codex P2.2 add).
 
 ---
 
