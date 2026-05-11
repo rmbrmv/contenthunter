@@ -16,7 +16,13 @@
 - MediaStore double-query check работает на Android 15 (cmd shape + filename basename)
 - Tier 1 IG share retry активен в проде
 
-Distribution IG за ~21h после Tier 1 deploy сильно искажена outage'ем (17/21 IG fails = MediaStore). Tier 1 fail-fast зафиксирован 1 раз. Sample недостаточен для precise B.1/B.2/B.3 distribution, но достаточен для решения mode-agnostic Tier 2 (user decision).
+**Live evidence Tier 1 effectiveness (7 дней, 2026-05-04→11):**
+- `ig_share_retry` events: **12** (Tier 1 actual taps)
+- Unique IG tasks где Tier 1 fired: **6** (2 retry events per task)
+- Из них `status=done`: **0**
+- Из них `status=failed`: **6**
+
+**Tier 1 retry rescue rate: 0/6 = 0%.** Zero-duration tap-retry не помогает в этом scenario'ии — strong justification для Tier 2 long-press. Sample достаточен для решения mode-agnostic Tier 2.
 
 ### 1.2. Что Tier 1 делает сейчас
 
@@ -181,6 +187,23 @@ if share_no_progress:
         )
         time.sleep(TIER2_LP_POST_DELAY_S)
 
+    # P1.1 round 2 fix: post-loop final progress check.
+    # Без этого финальный (N-й) long-press attempt никогда не проверяется на
+    # progressed — даже если он сработал, цикл выходит и мы летим в fail.
+    if not tier2_progressed:
+        final_ui = self.dump_ui()
+        if not self._is_ig_editor_still_visible(final_ui):
+            tier2_progressed = True
+            self.log_event(
+                'info',
+                f'Instagram: long-press Share PROGRESSED after attempt {TIER2_LP_ATTEMPTS}',
+                meta={'category': 'ig_share_long_press_progressed',
+                      'platform': self.platform,
+                      'step': 'wait_upload',
+                      'attempts_used': TIER2_LP_ATTEMPTS,
+                      'hold_ms': TIER2_LP_HOLD_MS},
+            )
+
     if not tier2_progressed:
         err_meta = {
             'category': 'ig_share_tap_no_progress',
@@ -192,7 +215,7 @@ if share_no_progress:
             'tier2_attempts_used': tier2_attempts_used,
             'hold_ms': TIER2_LP_HOLD_MS,
         }
-        # P2.1 fix: flag только если ВСЕ attempts не нашли button
+        # P2.1 round 1 fix: flag только если ВСЕ attempts не нашли button
         if tier2_button_not_found_count == TIER2_LP_ATTEMPTS:
             err_meta['tier2_button_not_found'] = True
         self.log_event(
@@ -204,11 +227,38 @@ if share_no_progress:
     # tier2_progressed: fall through в existing main wait loop ниже
 ```
 
+**Codex round 2 P2.1 mitigation — Tier 1 pre-Tier-2 error event:**
+
+Tier 1 currently emits `error` `ig_share_tap_no_progress` BEFORE Tier 2 ladder runs (см. `publisher_instagram.py:1907`). Если Tier 2 progressed — этот event остаётся в `events.jsonb` и может сбить event-only triage.
+
+**Mitigation (1-line Tier 1 modification, в scope этого spec'а):**
+
+В `publisher_instagram.py:1907`, изменить:
+```python
+# Было:
+self.log_event('error', 'Instagram: Share tap не прогрессировал после retries',
+               meta={'category': 'ig_share_tap_no_progress', ...})
+# Стало:
+self.log_event('warning', 'Instagram: Tier 1 Share retries exhausted — escalating to Tier 2',
+               meta={'category': 'ig_share_tier1_exhausted',
+                     'platform': self.platform,
+                     'step': 'wait_upload',
+                     'retries_exhausted': 2})
+```
+
+Финальный `error` `ig_share_tap_no_progress` теперь эмитится **только** в Tier 2 fail-блоке. Семантика error_code улучшается: post-deploy `ig_share_tap_no_progress` означает «Tier 1 + Tier 2 оба исчерпаны», pre-deploy означало «Tier 1 исчерпан». Это легитимный semantic-rename + одно-строчная правка Tier 1.
+
+**Triage импликации:** dashboards SQL из §6 остаются valid (фильтр по error_code + tier2_attempted=true). Pre-Tier-2 deploy данных хвост (raw error events with `ig_share_tap_no_progress`) до 2026-05-11 остаётся в исторических данных, разделим по `started_at` cutoff.
+
 **Замечание:** существующий event `ig_share_tap_no_progress` от Tier 1 (line 1907) остаётся — он логируется ДО Tier 2 ladder. Tier 2 exhausted эмитит ВТОРОЙ event того же `category` с обогащённым meta. На стороне triage / `_set_error_code_from_events` это: 2 события одной категории → error_code = ig_share_tap_no_progress (идемпотентно). Дашборд читает meta с `tier2_attempted=True` для split (см. §6).
 
-### 3.3. Точка вмешательства
+### 3.3. Точки вмешательства
 
-Единственная: `_wait_instagram_upload` в `publisher_instagram.py:1850` (NOT `publisher_base.py` — Codex round 1 fix P1.3). `_long_press_share_button` — новый instance helper рядом с `_is_ig_editor_still_visible:400`. Tier 1 код **не трогается** — Tier 2 ladder wrap'ит существующий `if share_no_progress: return False` block (см. §3.2).
+Файл — `publisher_instagram.py` (NOT `publisher_base.py` — Codex round 1 fix P1.3). Изменения:
+
+1. **`_long_press_share_button` (новый)** — instance helper рядом с `_is_ig_editor_still_visible:400`.
+2. **`_wait_instagram_upload:1850`** — Tier 2 ladder wrap'ит существующий `if share_no_progress: return False` block (см. §3.2).
+3. **`_wait_instagram_upload:1907`** — Tier 1 final emit меняется с `level='error', category='ig_share_tap_no_progress'` на `level='warning', category='ig_share_tier1_exhausted'` (Codex round 2 P2.1 mitigation; cm. §3.2 footer).
 
 ### 3.4. Время escalation
 
@@ -234,17 +284,25 @@ Main 30-iter wait loop **остаётся** в случае Tier 2 progressed �
 3. **test_long_press_helper_returns_false_no_button** — UI без share_button → returns False, `self.adb` не зовётся.
 4. **test_long_press_helper_returns_false_malformed_bounds** — share_button присутствует, но bounds bad-format → returns False, no adb call.
 
-### 4.2. Tier 2 ladder behavior tests (4)
+### 4.2. Tier 2 ladder behavior tests (6)
 
-5. **test_tier2_progressed_on_attempt_1** — `_is_ig_editor_still_visible` returns [True (Tier 1 baseline), True×2 (Tier 1 retries fail), False (Tier 2 attempt 1)] → tier2_progressed; no error event; main wait loop entered.
-6. **test_tier2_progressed_on_attempt_2** — editor visible на всех Tier 1 + Tier 2 attempt 1, не visible на attempt 2 → tier2_progressed; `ig_share_long_press_progressed` info event с `attempts_used=1`.
-7. **test_tier2_exhausted_fail** — editor visible везде → `ig_share_tap_no_progress` error event с `tier2_attempted=True, lp_attempts=2, tier2_attempts_used=2, hold_ms=200, step='wait_upload', retries_exhausted=2`. **`_last_push_err` НЕ ставится** (consistent с Tier 1, который тоже не ставит — verified `publisher_instagram.py:1907-1922`).
-8. **test_tier2_button_not_found** — `_long_press_share_button` returns False на ВСЕХ 2 attempts → fail с `tier2_button_not_found=True` в meta. **Дополнительный тест:** `_long_press_share_button` returns False на attempt 1, True на attempt 2 → `tier2_button_not_found` НЕ в meta (Codex round 1 fix P2.1).
+5. **test_tier2_progressed_on_attempt_1** — `_is_ig_editor_still_visible` returns [True (Tier 1 baseline), True×2 (Tier 1 retries fail), False (Tier 2 pre-attempt-1 check)] → tier2_progressed на attempt 1 pre-check; `ig_share_long_press_progressed` info event с `attempts_used=0`; main wait loop entered.
+6. **test_tier2_progressed_on_attempt_2_precheck** — editor visible на attempt 1 pre-check, не visible на attempt 2 pre-check → tier2_progressed; `attempts_used=1`.
+7. **test_tier2_progressed_on_postloop_check** — editor visible на всех pre-checks attempt 1+2, не visible на final post-loop check → tier2_progressed; `attempts_used=2` (P1.1 round 2 fix coverage).
+8. **test_tier2_exhausted_fail** — editor visible везде (включая post-loop) → `ig_share_tap_no_progress` error event с `tier2_attempted=True, lp_attempts=2, tier2_attempts_used=2, hold_ms=200, step='wait_upload', retries_exhausted=2`. **`_last_push_err` НЕ ставится** (consistent с Tier 1, который тоже не ставит — verified `publisher_instagram.py:1907-1922`).
+9. **test_tier2_button_not_found_all** — `_long_press_share_button` returns False на ВСЕХ 2 attempts → fail с `tier2_button_not_found=True` в meta.
+10. **test_tier2_button_not_found_partial** — `_long_press_share_button` returns False на attempt 1, True на attempt 2 → `tier2_button_not_found` НЕ в meta (Codex round 1 P2.1 fix coverage).
 
 ### 4.3. Regression tests (2)
 
-9. **test_tier1_success_skips_tier2** — Tier 1 retry-1 progresses → `_long_press_share_button` НЕ зовётся (`stub.adb` not called с `input swipe`-pattern). Защита: Tier 2 не запускается когда не нужен.
-10. **test_no_stuck_skips_both_tiers** — `_is_ig_editor_still_visible` returns False сразу после iter0 → ни Tier 1 ни Tier 2 не invoked, main wait loop сразу.
+11. **test_tier1_success_skips_tier2** — Tier 1 retry-1 progresses → `_long_press_share_button` НЕ зовётся (`stub.adb` not called с `input swipe`-pattern). Защита: Tier 2 не запускается когда не нужен.
+12. **test_no_stuck_skips_both_tiers** — `_is_ig_editor_still_visible` returns False сразу после iter0 → ни Tier 1 ни Tier 2 не invoked, main wait loop сразу.
+
+### 4.4. Tier 1 telemetry mod regression (1)
+
+13. **test_tier1_exhausted_emits_warning_not_error** — после Codex round 2 P2.1 mitigation Tier 1 final emit стал `warning` с `category=ig_share_tier1_exhausted`. Тест проверяет: при share_no_progress event[level]='warning' AND meta.category='ig_share_tier1_exhausted' (NOT 'ig_share_tap_no_progress'). Final `ig_share_tap_no_progress` теперь приходит только из Tier 2 fail.
+
+**Total: 4 + 6 + 2 + 1 = 13 tests.**
 
 ---
 
@@ -325,7 +383,7 @@ Main 30-iter wait loop **остаётся** в случае Tier 2 progressed �
 
 ## 9. Acceptance criteria
 
-1. Все 10 unit tests green (4 helper + 4 ladder + 2 regression)
+1. Все 13 unit tests green (4 helper + 6 ladder + 2 regression + 1 Tier 1 mod)
 2. Existing 24 tests `test_ig_gallery_picker_hardening.py` green (no regression)
 3. Live verification: re-queue 1 IG задачу с известным `ig_share_tap_no_progress` history; observe meta `tier2_attempted=True` в final fail OR success path с `ig_share_long_press_progressed` event
 4. Dashboard может различать Tier 1-only vs Tier 2-also fails (через meta keys)
