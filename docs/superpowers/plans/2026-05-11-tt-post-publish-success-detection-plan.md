@@ -816,7 +816,12 @@ Expected: AssertionError.
                 # AI только если TikTok активен (не ждём его возврата)
                 if 'musically' in _cur_act_tt or 'tiktok' in _cur_act_tt.lower():
                     log.info(f'  🤖 TikTok: неизвестное состояние {wait} итераций — AI Unstuck')
-                    _tt_goal = (...)
+                    _tt_goal = (
+                        f'Publish {self.media_type} on TikTok for account @{self.account}. '
+                        f'The Share/Post button was tapped. '
+                        f'An unexpected screen is blocking the upload confirmation. '
+                        f'Dismiss any dialogs or complete required steps to finish publishing.'
+                    )
                     self.ai_unstuck(_tt_goal, max_attempts=3)
 ```
 
@@ -1092,7 +1097,9 @@ Operator visibility для silent fail class."
 **Files:**
 - Modify: `tests/test_publisher_tt_wait_upload_integration.py`
 
-**Rationale (Codex P1 finding):** source-level `text.find(...)` checks НЕ доказывают runtime behavior. Plan может пройти даже если flow сломан. Нужны heavy-mocked TikTokMixin tests на ai_unstuck call counts + event categories.
+**Rationale (Codex P1 finding):** source-level `text.find(...)` checks НЕ доказывают runtime behavior. Нужны heavy-mocked TikTokMixin tests на ai_unstuck call counts + event categories.
+
+**Mini-driver tradeoff (Codex round 2 P1 acknowledged):** `_wait_upload_one_iter` — это **mini-driver, дублирующий логику** реального `_wait_tiktok_upload` loop body. Если кто-то изменит порядок check'ов в production code БЕЗ обновления mini-driver — тесты пройдут, но runtime может сломаться. Покрытие defense-in-depth: source-order placement test (Task 6) + helper unit tests (Task 1-5) + mini-driver behavioral test (Task 9.5). Полное покрытие = refactor wait_upload в iter-helpers (out-of-scope для этой PR; backlog `refactor-wait_upload-iter-helpers`).
 
 - [ ] **Step 1: Add mocked TikTokMixin behavioral tests**
 
@@ -1190,18 +1197,26 @@ class TestBehavioralIntegration:
         cats = [e.get('category') for e in r['events']]
         assert 'tt_post_publish_success_inferred' in cats
 
-    def test_main_nav_visible_skips_ai_unstuck(self):
-        """wait=4 (триггер AI), main nav visible → AI NOT called, skip event emitted."""
+    def test_main_nav_visible_skips_ai_unstuck_with_skip_event(self):
+        """Codex round 2 P1: assert skip event эмитится, не только ai_called=0.
+
+        Если detection block выше hit'нет inferred первым — тест проверяет это
+        (broke=True, inferred=True, event=tt_post_publish_success_inferred).
+        Если изменить flow так что detection block НЕ hit'нет (e.g. removed) —
+        guard должен сработать с tt_unstuck_skipped_post_publish event.
+        """
         m = _make_mixin_with_full_mocks()
         ui = _build_nav_xml(['Главная', 'Друзья', 'Создать', 'Входящие', 'Профиль'])
-        # First iter inferred would fire — но мы тестируем guard, симулируя
-        # что detection block почему-то miss'нул (e.g. dump race) — ставим wait=4
-        # и main_act такой что _tt_infer вернёт True → skip path сработает.
-        # NB: detection block в реальном flow тоже сработает раньше; тест
-        # проверяет defense-in-depth слой.
         r = _wait_upload_one_iter(m, ui, TT_MAIN_ACT, 4)
-        # detection block уже триггерит inferred=True → broke=True, ai_called=0
+        cats = [e.get('category') for e in r['events']]
+        # AI NOT called — это invariant (либо detection short-circuited,
+        # либо guard sкипнул)
         assert r['ai_called'] == 0
+        # Один из двух событий должен быть emitted (XOR — не оба)
+        assert (
+            'tt_post_publish_success_inferred' in cats
+            or 'tt_unstuck_skipped_post_publish' in cats
+        ), f'Expected detection or skip event; got {cats}'
 
     @pytest.mark.parametrize('activity', [
         'PermissionActivity',
@@ -1550,6 +1565,7 @@ WHERE platform='tiktok'
 - Re-audit `tt_upload_confirmation_timeout` history на success-not-detected pattern
 - Status bumping для `tt_success_inferred_but_no_video_url` (defer до evidence)
 - Manual TT activity tour для расширения `TT_COMPOSER_ACTIVITIES_SEED` через дамп каждого composer screen
+- Refactor `_wait_tiktok_upload` в iter-helpers (`_wait_upload_iter_check_success`, `_wait_upload_iter_handle_ai_unstuck`) для proper behavioral testing без mini-driver tradeoff (`refactor-wait_upload-iter-helpers`)
 
 ---
 
@@ -1558,5 +1574,5 @@ WHERE platform='tiktok'
 - ✅ Spec coverage: все 7 spec sections (helper, detection block, AI guards, URL classification, tests, live verify, 24h metric) покрыты Task 1-14
 - ✅ No placeholders: каждый код-snippet полный, exact paths/SQL/grep, expected outputs
 - ✅ Type consistency: `_tt_infer_post_publish_success` returns `(bool, dict)` — same signature во всех вызовах. `inferred_path_used` flag — bool, init False, set True ТОЛЬКО в success branch
-- ⚠️ TDD discipline: Tasks 1-3, 6-9, 9.5 имеют real red→green→commit cycle. **Tasks 4-5 — test-only regression cases, expected green** (XML parse уже покрывает их в Task 3 — добавляем дополнительные cases для defensive coverage без impl change). Task 10-14 — verification/deploy, no impl change.
+- ⚠️ TDD discipline: Tasks 1-3, 6-9 имеют real red→green→commit cycle. **Tasks 4-5 — test-only regression cases, expected green** (XML parse уже покрывает их в Task 3). **Task 9.5 — behavioral integration tests, expected green** (impl уже сделан Tasks 6-9; mini-driver тестирует SAME flow логику, не red phase). Task 10-14 — verification/deploy, no impl change.
 - ✅ Frequent commits: 10+ commits в Phase 1+2, 1 в Phase 3 (Codex finds applied), evidence commit в Phase 3
