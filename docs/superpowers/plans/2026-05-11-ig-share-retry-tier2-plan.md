@@ -770,13 +770,13 @@ pytest tests/test_ig_share_tier2_ladder.py -v
             # tier2_progressed: fall through в existing main wait loop ниже
 ```
 
-- [ ] **Step 4: Run all 8 tests, verify they pass**
+- [ ] **Step 4: Run all 9 tests, verify they pass**
 
 ```bash
 pytest tests/test_ig_share_tier2_ladder.py -v
 ```
 
-Expected: 8 PASS.
+Expected: 9 PASS (6 ladder behavior + 1 retry telemetry + 2 regression).
 
 - [ ] **Step 5: Run full IG test suite (regression check)**
 
@@ -799,7 +799,7 @@ final progress check. Telemetry: ig_share_long_press_retry / _progressed /
 _progressed_pre_long_press + Tier 2 fail обогащает существующий
 ig_share_tap_no_progress meta'ой tier2_attempted/long_press_sent_count/lp_attempts.
 
-Spec §3.2. 8 tests (6 ladder behavior + 2 regression) green.
+Spec §3.2. 9 tests (6 ladder behavior + 1 retry telemetry + 2 regression) green.
 EOF
 )"
 ```
@@ -819,20 +819,26 @@ cd /home/claude-user/autowarm-testbench-feat-ig-share-tier2-20260511
 
 Expected: codex анализирует diff против main, возвращает P1/P2/P3 finds для **кода** (не для spec).
 
-- [ ] **Step 2: Если есть P1 — применить, commit, повторить (Codex P1.4 + P2.3 fix)**
+- [ ] **Step 2: Apply P1 findings AND enough P2 findings — gate = 0 P1 + ≤1 P2 (Codex plan-review v2 P2 fix)**
 
 ```bash
 cat /tmp/codex-tier2-impl-review.txt | tail -80
-# Apply findings inline.
-# IMPORTANT: use explicit file list или `git add -A` (НЕ `git commit -am` — пропустит новые файлы).
+```
+
+**Gate для перехода к Step 3 = 0 P1 AND ≤1 P2 remaining.** Если round возвращает 0 P1 но 2+ P2 — применить достаточно P2 findings чтобы выйти на gate (приоритет P2: ambiguity > scope-drift > missing-test > minor). P3 — opt-in, не блокирует.
+
+Apply findings inline, затем:
+
+```bash
+# IMPORTANT: use `git add -A` (НЕ `git commit -am` — пропустит новые файлы)
 git status --short
 git add -A
-# Заполнить commit message конкретным count'ом, например: «3 P1 + 2 P2»; убрать placeholder
-git commit -m "feat(ig-share-tier2): apply Codex code-review round 1 (X P1 + Y P2)"
+# Заполнить commit message конкретным count'ом, убрать placeholder
+git commit -m "feat(ig-share-tier2): apply Codex code-review round N (X P1 + Y P2)"
 ~/.local/bin/codex review --base main > /tmp/codex-tier2-impl-review-2.txt 2>&1
 ```
 
-Итерировать пока 0 P1 + ≤1 P2. На каждом round'е считать X, Y и подставлять явные числа.
+Итерировать пока 0 P1 + ≤1 P2. На каждом round'е считать X, Y и подставлять явные числа в commit message.
 
 - [ ] **Step 3: Final full-suite green**
 
@@ -873,7 +879,7 @@ Closes IG share rescue gap (current Tier 1 rate: 0/6 = 0% за 7 дней).
 `docs/superpowers/specs/2026-05-09-ig-share-retry-tier2-design.md` v5 (Codex 4 rounds: 3 P1 + 8 P2 + 1 P3 closed, VERDICT ready for plan)
 
 ## Test plan
-- [ ] 13 new unit tests green (4 helper + 6 ladder + 2 regression + 1 Tier 1 mod)
+- [ ] 14 new unit tests green (4 helper + 1 Tier 1 mod + 6 ladder + 1 retry telemetry + 2 regression)
 - [ ] existing Tier 1 retry tests adapted (warning category)
 - [ ] live verify: re-queue 1 IG задачу с known `ig_share_tap_no_progress` history → observe meta `tier2_attempted=True` в fail OR success path с `ig_share_long_press_progressed`
 - [ ] 24h post-deploy: count `meta.category='ig_share_long_press_progressed'` vs `tier2_attempted=true` exhausted → decision for Tier 3 design
