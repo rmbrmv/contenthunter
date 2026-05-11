@@ -1,5 +1,50 @@
 # BACKLOG — Генри
 
+## 🔴 TT 24h verify — PRs #32, #33, #34 (2026-05-12)
+**Приоритет:** высокий
+**Статус:** ожидает 24ч окно (≈ 2026-05-12 18:00 UTC)
+
+3 TT-PR'а merged 2026-05-11; SQL для проверки готовы в evidence-доках.
+
+**PR #32 (music-rights coverage, flags активированы 14:21 UTC):**
+- `tt_music_rights_fallback_match` events за 24ч → expect ≥1 (RC-A win)
+- `tt_music_rights_unhandled_suspect` → 0 followed by `publish_failed_generic` (FP guard)
+- ≥5 `tt_post_music_rights_dump` XML для evidence RC-B следующего раунда
+- `TT_SEED_HARDENING_SAASCENE_ENABLED` activation решение: ≥1 dump с `SAASceneWrapperActivity` в top_activity → активировать; иначе wait
+
+**PR #33 (switch_failed_unspecified, prod с 13:50 UTC):**
+- `switch_failed_unspecified` count 2026-05-12 vs baseline 8/24ч — expect drop
+- Если 0 — fully verified
+- Если non-zero — копать новый pattern (другой root cause unmasked)
+
+**PR #34 (post-switch renav, prod с 17:45 UTC):**
+- `tt_post_switch_recovered_via_renav` ≥1 → recovery работает на real traffic
+- `tt_post_switch_verify_unrecoverable` baseline measured
+- `tt_upload_confirmation_timeout` count 2026-05-12 vs 2026-05-11 (~26/48ч pre-deploy)
+- TT `done` count 2026-05-12 vs baseline (1/7д)
+
+Все SQL — `docs/evidence/2026-05-11-tt-{music-rights-coverage,switch-failed-unspecified,post-publish-success-detection,post-switch-renav}-shipped.md`
+
+---
+
+## 🔴 TT followups (после 24ч verify)
+**Приоритет:** средний
+**Статус:** discovery → spec → impl
+
+**Известные открытые TT проблемы:**
+
+1. **`tt_fg_lost` downstream music-rights accept** — AI Unstuck кликает nav buttons после accept → TikTok уходит в background. Pattern из pt 4523 / 4624. Discovery: events sequence для 2/24ч кейсов + анализ AI Unstuck timing. Нужен spec.
+
+2. **RC-B (60% music-rights post-accept timeouts)** — `_tt_infer_post_publish_success` возвращает False для post-music-rights state. Ждёт ≥5 XML dump'ов от только что активированного `TT_DUMP_POST_MUSIC_RIGHTS_XML`. После evidence — design positive-path detector.
+
+3. **`TT_SEED_HARDENING_SAASCENE_ENABLED` activation** — flag-gated SAASceneWrapperActivity SEED ext в `_tt_infer_post_publish_success`. Activation conditional: ≥1 XML dump с `SAASceneWrapperActivity` в top_activity meta (PR #32).
+
+4. **`was_feed` structured meta field** на `tt_post_switch_verify_unrecoverable` events — сейчас implicit в reason string. Structured field нужен только если automated triage parsing появится. Note из final code review PR #34.
+
+5. **IG/YT same pick→feed pattern check** — если когда-то возникнет на других платформах, Approach A generalized в Approach B candidate (shared `_post_switch_verify_handle` recovery вместо TT-specific dispatcher).
+
+---
+
 ## 🟢 Publish dup incident 2026-05-08 — Phase 2 (через 2-4 нед observation)
 **Приоритет:** средний
 **Статус:** waiting for verification window
