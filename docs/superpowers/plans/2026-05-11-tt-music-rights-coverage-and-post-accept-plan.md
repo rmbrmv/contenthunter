@@ -272,11 +272,14 @@ _FALLBACK_NO_SUBSTRING = '''<?xml version="1.0"?>
     <node text="Confirm publishing" bounds="[100,600][980,700]"/>
     <node class="android.widget.CheckBox" checkable="true" checked="false" clickable="true"
           bounds="[100,800][980,900]"
-          text="Я принимаю Подтверждение прав на использование музыки"/>
+          text="I accept terms"/>
     <node text="Опубликовать видео" clickable="true"
           bounds="[100,1300][980,1400]" class="android.widget.Button"/>
   </node>
 </hierarchy>'''
+# (Codex v2 round 1, P1: nothing in this XML matches _TT_MUSIC_RIGHTS_FALLBACK_TITLE_SUBSTRINGS —
+#  ни 'music rights', ни 'music usage rights', ни 'rights confirmation',
+#  ни 'подтверждение прав', ни 'права на использование музыки'.)
 
 _FALLBACK_NO_DIALOG_ANCESTOR = '''<?xml version="1.0"?>
 <hierarchy>
@@ -1158,11 +1161,12 @@ Expected: 5 FAIL (AttributeError).
         iters_since = wait - self._music_rights_just_accepted_iter
         if iters_since not in (1, 3, 5, 10, 20, 40):
             return
-        # Capture top_activity сейчас (fresh read).
-        cur_act_dump = self.adb(
-            'dumpsys activity activities 2>/dev/null | grep -m1 "topResumedActivity"',
-            timeout=8) or ''
+        # All side effects внутри try — best-effort instrumentation
+        # (Codex v2 round 1, P2: adb() exception раньше escape'ил try)
         try:
+            cur_act_dump = self.adb(
+                'dumpsys activity activities 2>/dev/null | grep -m1 "topResumedActivity"',
+                timeout=8) or ''
             os.makedirs('/tmp/autowarm_ui_dumps', exist_ok=True)
             ts_ms = int(time.time() * 1000)
             uid8 = uuid.uuid4().hex[:8]
