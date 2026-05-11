@@ -155,36 +155,34 @@ if share_no_progress:
     # === Tier 2 long-press escalation ===
     tier2_progressed = False
     tier2_button_not_found_count = 0
-    tier2_attempts_used = 0
+    long_press_sent_count = 0  # Codex round 4 P2 fix: считает РЕАЛЬНО отправленные swipe,
+                               # не вход в attempt. Используется для attempts_used в meta.
     for lp_attempt in range(1, TIER2_LP_ATTEMPTS + 1):
         time.sleep(TIER2_LP_PRE_DELAY_S)
         lp_ui = self.dump_ui()
         if not self._is_ig_editor_still_visible(lp_ui):
             tier2_progressed = True
             # Codex round 3 P2.3 fix: разделить «editor пропал без нашего тапа» от
-            # «long-press помог». attempts_used=0 на pre-attempt-1 check = первый
-            # сценарий, остальные = effectiveness long-press.
-            if lp_attempt == 1:
-                # Editor исчез между Tier 1 fail и Tier 2 entry — long-press НЕ
-                # фигурировал, метрики не должны считать это как rescue
+            # «long-press помог». long_press_sent_count=0 = первый сценарий.
+            if long_press_sent_count == 0:
                 category = 'ig_share_progressed_pre_long_press'
             else:
                 category = 'ig_share_long_press_progressed'
             self.log_event(
                 'info',
-                f'Instagram: Share PROGRESSED before attempt {lp_attempt}',
+                f'Instagram: Share PROGRESSED before attempt {lp_attempt} (long_press_sent={long_press_sent_count})',
                 meta={'category': category,
                       'platform': self.platform,
                       'step': 'wait_upload',
-                      'attempts_used': lp_attempt - 1,
+                      'attempts_used': long_press_sent_count,
                       'hold_ms': TIER2_LP_HOLD_MS},
             )
             break
-        tier2_attempts_used = lp_attempt
         if not self._long_press_share_button(lp_ui, hold_ms=TIER2_LP_HOLD_MS):
             tier2_button_not_found_count += 1
-            # button gone — продолжаем next attempt с новым dump
+            # button gone — продолжаем next attempt с новым dump (НЕ инкрементируем long_press_sent_count)
             continue
+        long_press_sent_count += 1
         self.log_event(
             'info',
             f'Instagram: long-press Share retry {lp_attempt}',
@@ -199,21 +197,24 @@ if share_no_progress:
     # P1.1 round 2 fix: post-loop final progress check.
     # Без этого финальный (N-й) long-press attempt никогда не проверяется на
     # progressed — даже если он сработал, цикл выходит и мы летим в fail.
-    # NB: attempts_used = tier2_attempts_used (фактически выполненных long-press),
-    # т.к. может быть меньше TIER2_LP_ATTEMPTS если на некоторых button_not_found.
     if not tier2_progressed:
         final_ui = self.dump_ui()
         if not self._is_ig_editor_still_visible(final_ui):
             tier2_progressed = True
-            # tier2_attempts_used > 0 после loop body (per Codex round 3 P2.3
-            # categorization) — точно `ig_share_long_press_progressed`, не pre.
+            # Codex round 4 P2 fix: категория зависит от ФАКТА long-press, не от вход в loop.
+            # Если все attempts были button_not_found (long_press_sent_count=0)
+            # но editor пропал ПОСЛЕ loop'а — это auto-recovery, не Tier 2 заслуга.
+            if long_press_sent_count == 0:
+                category = 'ig_share_progressed_pre_long_press'
+            else:
+                category = 'ig_share_long_press_progressed'
             self.log_event(
                 'info',
-                f'Instagram: long-press Share PROGRESSED after attempt {tier2_attempts_used}',
-                meta={'category': 'ig_share_long_press_progressed',
+                f'Instagram: Share PROGRESSED post-loop (long_press_sent={long_press_sent_count})',
+                meta={'category': category,
                       'platform': self.platform,
                       'step': 'wait_upload',
-                      'attempts_used': tier2_attempts_used,
+                      'attempts_used': long_press_sent_count,
                       'hold_ms': TIER2_LP_HOLD_MS},
             )
 
@@ -225,7 +226,7 @@ if share_no_progress:
             'retries_exhausted': 2,        # Tier 1 (preserve существующий ключ)
             'tier2_attempted': True,
             'lp_attempts': TIER2_LP_ATTEMPTS,
-            'tier2_attempts_used': tier2_attempts_used,
+            'long_press_sent_count': long_press_sent_count,
             'hold_ms': TIER2_LP_HOLD_MS,
         }
         # P2.1 round 1 fix: flag только если ВСЕ attempts не нашли button
