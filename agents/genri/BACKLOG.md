@@ -33,15 +33,22 @@
 
 **Известные открытые TT проблемы:**
 
-1. **`tt_fg_lost` downstream music-rights accept** — AI Unstuck кликает nav buttons после accept → TikTok уходит в background. Pattern из pt 4523 / 4624. Discovery: events sequence для 2/24ч кейсов + анализ AI Unstuck timing. Нужен spec.
+1. ~~**`tt_fg_lost` downstream music-rights accept**~~ — ✅ SHIPPED PR #35 (`a5bbd30`, merged 2026-05-11 19:11 UTC). Discovery скорректирован: на самом деле НЕ downstream music-rights, а downstream AI Unstuck → app-switch (Samsung Launcher/Camera). Fix: `_attempt_tt_fg_recovery` (pm list + monkey reorder-to-front) + outer `tiktok_active` trill recognition.
 
-2. **RC-B (60% music-rights post-accept timeouts)** — `_tt_infer_post_publish_success` возвращает False для post-music-rights state. Ждёт ≥5 XML dump'ов от только что активированного `TT_DUMP_POST_MUSIC_RIGHTS_XML`. После evidence — design positive-path detector.
+2. **AI Unstuck `tiktok_active_for_ai` trill recognition** (followup из final review PR #35) — `publisher_tiktok.py:~1421` использует pre-trill check `'musically' in X or 'tiktok' in X.lower()`. One-liner: add `or 'ugc.trill' in X`. Caveat — не блок (trill-only devices редко), bundle с next nearby TT PR.
 
-3. **`TT_SEED_HARDENING_SAASCENE_ENABLED` activation** — flag-gated SAASceneWrapperActivity SEED ext в `_tt_infer_post_publish_success`. Activation conditional: ≥1 XML dump с `SAASceneWrapperActivity` в top_activity meta (PR #32).
+3. **RC-B (60% music-rights post-accept timeouts)** — `_tt_infer_post_publish_success` возвращает False для post-music-rights state. Ждёт ≥5 XML dump'ов от активированного `TT_DUMP_POST_MUSIC_RIGHTS_XML` (с 2026-05-11 14:21 UTC). После evidence — design positive-path detector.
 
-4. **`was_feed` structured meta field** на `tt_post_switch_verify_unrecoverable` events — сейчас implicit в reason string. Structured field нужен только если automated triage parsing появится. Note из final code review PR #34.
+4. **`TT_SEED_HARDENING_SAASCENE_ENABLED` activation** — flag-gated SAASceneWrapperActivity SEED ext в `_tt_infer_post_publish_success`. Activation conditional: ≥1 XML dump с `SAASceneWrapperActivity` в top_activity meta (PR #32).
 
-5. **IG/YT same pick→feed pattern check** — если когда-то возникнет на других платформах, Approach A generalized в Approach B candidate (shared `_post_switch_verify_handle` recovery вместо TT-specific dispatcher).
+5. **`was_feed` structured meta field** на `tt_post_switch_verify_unrecoverable` events — сейчас implicit в reason string. Structured field нужен только если automated triage parsing появится. Note из final code review PR #34.
+
+6. **Approach B/C для tt_fg_lost prevention** (после 24ч verify recovery rate):
+   - **B:** clamp blind FALLBACK coords + AI Unstuck taps от edge zones (y<100, y>2270, x<30, x>1050)
+   - **C:** AI Unstuck post-tap topResumedActivity check + abort если не TikTok
+   - **Cold-restart fallback** в `_attempt_tt_fg_recovery` если recovery_rate <30% observed
+
+7. **IG/YT same pick→feed pattern check** — если когда-то возникнет на других платформах, Approach A generalized в Approach B candidate (shared `_post_switch_verify_handle` recovery вместо TT-specific dispatcher).
 
 ---
 
