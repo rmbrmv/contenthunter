@@ -10,33 +10,44 @@
 
 ---
 
+## Worktree path
+
+**Canonical path (use everywhere — Codex v1 round 1, P1#1 fix):**
+```
+WORKTREE=/home/claude-user/autowarm-testbench-feat-tt-mr-cov-20260511
+```
+Все file paths и команды ниже относятся к этому worktree, не к базовому `/home/claude-user/autowarm-testbench/`.
+
 ## Files Affected
 
-- **Modify:** `/home/claude-user/autowarm-testbench/publisher_tiktok.py`
-  - Module-level (стр. 78-150): `_tt_infer_post_publish_success` — gate'инг SEED через flag
-  - Class `TikTokMixin` (стр. 153+):
-    - стр. 159-169: добавить constant `_TT_MUSIC_RIGHTS_FALLBACK_TITLE_SUBSTRINGS`
-    - стр. 209-257: `_detect_tt_music_rights_dialog` остаётся, рядом добавляются `_detect_tt_music_rights_dialog_fallback` и `_detect_tt_music_rights_dialog_evidence_only` + `_save_dump_for_fallback_review`
-    - стр. 347-389: `_handle_tt_music_rights_dialog` обновляется
-    - стр. 391+: `publish_tiktok` — добавить инициализацию state vars
-    - стр. 922-924: где `handled = self._handle_tt_music_rights_dialog(ui)`, добавить set state + reset counter
-    - upload-confirmation loop (стр. ~770-1200): добавить RC-B.4 dump блок
-- **Modify:** `/home/claude-user/autowarm-testbench/tests/test_publisher_tt_music_rights.py` (расширяем 19 тестами)
+(Anchors over line numbers — Codex v1 round 1, P3#3: line numbers stale-prone после merge'ей.)
+
+- **Modify:** `$WORKTREE/publisher_tiktok.py`
+  - Module-level: `_tt_infer_post_publish_success` (anchor: `def _tt_infer_post_publish_success`) — gate'инг SEED через flag (Task 8)
+  - Class `TikTokMixin`:
+    - constants block (anchor: `_TT_MUSIC_RIGHTS_CHECKBOX = [`): добавить `_TT_MUSIC_RIGHTS_FALLBACK_TITLE_SUBSTRINGS` (Task 1)
+    - после `_handle_tt_music_rights_dialog` (anchor: `def _handle_tt_music_rights_dialog`): добавить `_detect_tt_music_rights_dialog_fallback`, `_detect_tt_music_rights_dialog_evidence_only`, `_save_dump_for_fallback_review` (Tasks 2-4)
+    - `_handle_tt_music_rights_dialog` (anchor): hybrid + evidence-only + throttle (Task 5)
+    - `publish_tiktok` start (anchor: `self._music_rights_iter = 0`): init state vars (Task 6)
+    - new helpers `_after_music_rights_handled`, `_maybe_dump_post_music_rights_xml` (anchors below): added для test'абельности RC-B.2/B.4 (Tasks 7, 9)
+    - `publish_tiktok` upload-confirmation loop в `if handled:` block (anchor: `handled = self._handle_tt_music_rights_dialog`): вызов `_after_music_rights_handled` (Task 7)
+    - `publish_tiktok` upload-confirmation loop после audio-dialog handler (anchor: `# === TikTok: аудио-диалог после публикации ===` end): вызов `_maybe_dump_post_music_rights_xml` (Task 9)
+- **Modify:** `$WORKTREE/tests/test_publisher_tt_music_rights.py` (расширяем 22 тестами)
 
 ---
 
 ## Task 0: Setup worktree + baseline pytest green
 
 **Files:**
-- Create worktree: `/home/claude-user/autowarm-testbench-feat-tt-music-rights-coverage-20260511/`
+- Create worktree: `/home/claude-user/autowarm-testbench-feat-tt-mr-cov-20260511/`
 
 - [ ] **Step 1: Fetch latest main + create worktree**
 
 ```bash
 cd /home/claude-user/autowarm-testbench
 git fetch origin
-git worktree add /home/claude-user/autowarm-testbench-feat-tt-music-rights-coverage-20260511 -b feat/tt-music-rights-coverage-and-post-accept-20260511 origin/main
-cd /home/claude-user/autowarm-testbench-feat-tt-music-rights-coverage-20260511
+git worktree add /home/claude-user/autowarm-testbench-feat-tt-mr-cov-20260511 -b feat/tt-mr-cov-20260511 origin/main
+cd /home/claude-user/autowarm-testbench-feat-tt-mr-cov-20260511
 ```
 
 - [ ] **Step 2: Verify baseline pytest green**
@@ -88,7 +99,7 @@ In `class TikTokMixin:`, immediately after existing `_TT_MUSIC_RIGHTS_CHECKBOX =
 
 - [ ] **Step 3: Run import-smoke**
 
-Run: `cd /home/claude-user/autowarm-testbench-feat-tt-music-rights-coverage-and-post-accept-20260511 && python3 -c "from publisher_tiktok import TikTokMixin; print(TikTokMixin._TT_MUSIC_RIGHTS_FALLBACK_TITLE_SUBSTRINGS)"`
+Run: `cd /home/claude-user/autowarm-testbench-feat-tt-mr-cov-20260511 && python3 -c "from publisher_tiktok import TikTokMixin; print(TikTokMixin._TT_MUSIC_RIGHTS_FALLBACK_TITLE_SUBSTRINGS)"`
 Expected: list printed.
 
 - [ ] **Step 4: Commit**
@@ -113,33 +124,39 @@ Append to `tests/test_publisher_tt_music_rights.py`:
 ```python
 # ====== v12 RC-A: dump helper ======
 
-def test_save_dump_for_fallback_review_writes_file(tmp_path, monkeypatch):
-    """Dump-helper saves XML с ms-timestamp + uuid8 suffix в filename."""
+def test_save_dump_for_fallback_review_writes_file_into_redirected_dir(tmp_path, monkeypatch):
+    """Dump-helper writes XML into target dir с ms-timestamp + uuid8 suffix
+    в filename. Real implementation called (not monkeypatched) — Codex v1
+    round 1, P2#1: validate behavior, не сам метод заменять."""
     m = TikTokMixin()
     m.task_id = 42
-    monkeypatch.setattr('publisher_tiktok.os.makedirs', lambda *a, **kw: None)
-    # Redirect /tmp path to tmp_path via monkeypatch on open
-    dumps_dir = tmp_path / 'autowarm_ui_dumps'
-    dumps_dir.mkdir()
+
+    # Redirect /tmp/autowarm_ui_dumps → tmp_path для изоляции теста.
+    target = tmp_path / 'dumps'
     import publisher_tiktok as pt
-    original_save = pt.TikTokMixin._save_dump_for_fallback_review
-    # Inject custom DUMP_DIR
-    def patched(self, ui_xml, suffix):
-        try:
-            dumps_dir.mkdir(parents=True, exist_ok=True)
-            ts_ms = int(pt.time.time() * 1000)
-            uid8 = pt.uuid.uuid4().hex[:8]
-            path = dumps_dir / f'tt_music_rights_{suffix}_{self.task_id}_{ts_ms}_{uid8}.xml'
-            path.write_text(ui_xml or '', encoding='utf-8')
-            return str(path)
-        except Exception:
-            return 'write_failed'
-    monkeypatch.setattr(pt.TikTokMixin, '_save_dump_for_fallback_review', patched)
+    original_open = open
+
+    def patched_open(path, *a, **kw):
+        # Если код пишет в /tmp/autowarm_ui_dumps — redirect to tmp_path
+        if isinstance(path, str) and path.startswith('/tmp/autowarm_ui_dumps/'):
+            new_path = str(target / path.split('/tmp/autowarm_ui_dumps/')[1])
+            return original_open(new_path, *a, **kw)
+        return original_open(path, *a, **kw)
+
+    target.mkdir()
+    monkeypatch.setattr('builtins.open', patched_open)
+    monkeypatch.setattr(pt.os, 'makedirs',
+                        lambda p, **kw: target.mkdir(parents=True, exist_ok=True))
 
     result = m._save_dump_for_fallback_review('<xml>data</xml>', suffix='fallback')
-    files = list(dumps_dir.glob('tt_music_rights_fallback_42_*_*.xml'))
-    assert len(files) == 1
+    files = list(target.glob('tt_music_rights_fallback_42_*_*.xml'))
+    assert len(files) == 1, f'Expected 1 file, found: {[f.name for f in files]}'
     assert files[0].read_text() == '<xml>data</xml>'
+    # Filename содержит ms-timestamp + uuid8
+    parts = files[0].name.replace('.xml', '').split('_')
+    assert len(parts) >= 6  # tt_music_rights_fallback_42_<ms>_<uuid>
+    assert parts[-1].isalnum() and len(parts[-1]) == 8  # uuid suffix
+    assert parts[-2].isdigit() and len(parts[-2]) >= 10  # ms-timestamp
 
 
 def test_save_dump_for_fallback_review_returns_write_failed_on_exception(monkeypatch):
@@ -147,7 +164,7 @@ def test_save_dump_for_fallback_review_returns_write_failed_on_exception(monkeyp
     m = TikTokMixin()
     m.task_id = 1
     import publisher_tiktok as pt
-    # Force write to fail by monkeypatching `open` to raise
+
     def broken_open(*a, **kw):
         raise OSError('disk full')
     monkeypatch.setattr('builtins.open', broken_open)
@@ -158,8 +175,8 @@ def test_save_dump_for_fallback_review_returns_write_failed_on_exception(monkeyp
 
 - [ ] **Step 2: Run tests to verify FAIL**
 
-Run: `pytest tests/test_publisher_tt_music_rights.py::test_save_dump_for_fallback_review_writes_file tests/test_publisher_tt_music_rights.py::test_save_dump_for_fallback_review_returns_write_failed_on_exception -v`
-Expected: FAIL with `AttributeError: 'TikTokMixin' object has no attribute '_save_dump_for_fallback_review'` (или подобное).
+Run: `pytest tests/test_publisher_tt_music_rights.py::test_save_dump_for_fallback_review_writes_file_into_redirected_dir tests/test_publisher_tt_music_rights.py::test_save_dump_for_fallback_review_returns_write_failed_on_exception -v`
+Expected: FAIL with `AttributeError: 'TikTokMixin' object has no attribute '_save_dump_for_fallback_review'`.
 
 - [ ] **Step 3: Implement `_save_dump_for_fallback_review`**
 
@@ -189,7 +206,7 @@ Add to `TikTokMixin` (after `_handle_tt_music_rights_dialog`, before `publish_ti
 
 - [ ] **Step 4: Run tests to verify PASS**
 
-Run: `pytest tests/test_publisher_tt_music_rights.py::test_save_dump_for_fallback_review_writes_file tests/test_publisher_tt_music_rights.py::test_save_dump_for_fallback_review_returns_write_failed_on_exception -v`
+Run: `pytest tests/test_publisher_tt_music_rights.py::test_save_dump_for_fallback_review_writes_file_into_redirected_dir tests/test_publisher_tt_music_rights.py::test_save_dump_for_fallback_review_returns_write_failed_on_exception -v`
 Expected: 2 PASS.
 
 - [ ] **Step 5: Commit**
@@ -322,7 +339,7 @@ def test_detect_fallback_rejects_generic_layout_ancestor():
 
 - [ ] **Step 2: Run tests to verify FAIL**
 
-Run: `pytest tests/test_publisher_tt_music_rights.py -k "fallback" -v 2>&1 | tail -20`
+Run: `pytest tests/test_publisher_tt_music_rights.py -k "detect_fallback" -v 2>&1 | tail -20`
 Expected: All FAIL with `AttributeError: '_detect_tt_music_rights_dialog_fallback'`.
 
 - [ ] **Step 3: Implement detector**
@@ -401,7 +418,7 @@ Add to `TikTokMixin` (immediately after `_detect_tt_music_rights_dialog`):
 
 - [ ] **Step 4: Run tests to verify PASS**
 
-Run: `pytest tests/test_publisher_tt_music_rights.py -k "fallback" -v 2>&1 | tail -20`
+Run: `pytest tests/test_publisher_tt_music_rights.py -k "detect_fallback" -v 2>&1 | tail -20`
 Expected: 6 PASS.
 
 - [ ] **Step 5: Run full test file to verify no regression**
@@ -564,8 +581,20 @@ def test_handle_fallback_match_when_flag_enabled(monkeypatch, tmp_path):
     # Fallback XML (см. _FALLBACK_VALID_DIALOG из Task 3)
     result = m._handle_tt_music_rights_dialog(_FALLBACK_VALID_DIALOG)
     assert result is True
-    # 2 saves: fallback + (after tap), but spec only requires fallback dump
+    # Dump fired с suffix='fallback'
     assert any(s == 'fallback' for s, _ in saved_paths)
+    # log_event'ы содержат matched_via='fallback' в meta для accepted event
+    calls_with_matched_via = [
+        c for c in m.log_event.call_args_list
+        if c.kwargs.get('meta', {}).get('matched_via') == 'fallback'
+    ]
+    assert len(calls_with_matched_via) >= 1, (
+        'Ожидался хотя бы 1 log_event с meta[\'matched_via\']=\'fallback\'. '
+        f'Видим: {[c.kwargs.get(\"meta\", {}).get(\"matched_via\") for c in m.log_event.call_args_list]}'
+    )
+    # И event с category=tt_music_rights_fallback_match (на fallback-detect)
+    categories = [c.kwargs.get('meta', {}).get('category') for c in m.log_event.call_args_list]
+    assert 'tt_music_rights_fallback_match' in categories
 
 
 def test_handle_fallback_skipped_when_flag_off(monkeypatch):
@@ -715,159 +744,187 @@ git commit -m "feat(tt-music-rights): hybrid handler (strict→fallback→eviden
 
 ---
 
-## Task 6: Initialize publisher state vars in `publish_tiktok` (RC-B.1)
+## Task 6: Init state vars + helper `_init_music_rights_state` (RC-B.1)
 
 **Files:**
-- Modify: `publisher_tiktok.py` `publish_tiktok` method (стр. 391+)
+- Modify: `publisher_tiktok.py` — add helper method + call в `publish_tiktok`
 - Test: `tests/test_publisher_tt_music_rights.py`
+
+**Why refactor:** Codex v1 round 1, P2#5 — раньше state-init test вызывал весь `publish_tiktok` с try-except — brittle. Извлекаем init в helper для real unit-теста.
 
 - [ ] **Step 1: Write failing test**
 
 Append:
 
 ```python
-# ====== v12 RC-B.1/B.2: state initialization ======
+# ====== v12 RC-B.1: state init helper ======
 
-def test_state_init_at_publish_tiktok_start(monkeypatch):
-    """publish_tiktok start — resets _music_rights_just_accepted_iter,
-    _music_rights_accepted_ts, _music_rights_evidence_dumped."""
-    from publisher_tiktok import TikTokMixin as _TM
-    m = _make_mixin_with_mock_adb()
-    # Симулируем что state установился в предыдущем publish'е
+def test_init_music_rights_state_resets_all_vars():
+    """_init_music_rights_state сбрасывает 4 state-переменные."""
+    m = TikTokMixin()
+    # Симулируем dirty state из предыдущего publish'а
+    m._music_rights_iter = 5
     m._music_rights_just_accepted_iter = 42
     m._music_rights_accepted_ts = 1234567890
     m._music_rights_evidence_dumped = True
-    m._music_rights_iter = 3
-    # publish_tiktok внутри инициализирует state, мы протестим только начало.
-    # Stub'ает остальной flow через монипатчинг.
-    monkeypatch.setattr(_TM, 'platform_cfg', {'package': 'com.zhiliaoapp.musically'},
-                        raising=False)
-    monkeypatch.setattr(m, 'adb', MagicMock(return_value=''))
-    monkeypatch.setattr(m, 'dump_ui', MagicMock(return_value='<hierarchy/>'))
-    monkeypatch.setattr(m, 'log_event', MagicMock())
-    # Ранний exit — заменим основной flow на raise после init blocks
-    # Здесь test'им только что после публикации call'а state == defaults.
-    # Best-effort: вызываем функцию, catch'аем, проверяем state.
-    try:
-        m.publish_tiktok('/tmp/fake.mp4')
-    except Exception:
-        pass  # Любое падение OK — нам важна только initialization.
+    # Reset
+    m._init_music_rights_state()
+    assert m._music_rights_iter == 0
     assert m._music_rights_just_accepted_iter is None
     assert m._music_rights_accepted_ts is None
     assert m._music_rights_evidence_dumped is False
+
+
+def test_publish_tiktok_calls_init_music_rights_state(monkeypatch):
+    """publish_tiktok start вызывает _init_music_rights_state."""
+    m = _make_mixin_with_mock_adb()
+    called = []
+    monkeypatch.setattr(TikTokMixin, '_init_music_rights_state',
+                        lambda self: called.append('init'))
+    monkeypatch.setattr(m, 'log_event', MagicMock())
+    monkeypatch.setattr(m, 'adb', MagicMock(return_value=''))
+    monkeypatch.setattr(m, 'dump_ui', MagicMock(return_value=''))
+    monkeypatch.setattr(TikTokMixin, 'platform_cfg',
+                        {'package': 'com.zhiliaoapp.musically'}, raising=False)
+    try:
+        m.publish_tiktok('/tmp/fake.mp4')
+    except Exception:
+        pass  # OK — мы тестим только что helper вызывается в начале
+    assert called == ['init'], f'_init_music_rights_state must be called once at start, got: {called}'
 ```
 
-- [ ] **Step 2: Run test FAIL**
+- [ ] **Step 2: Run tests FAIL**
 
-Run: `pytest tests/test_publisher_tt_music_rights.py::test_state_init_at_publish_tiktok_start -v 2>&1 | tail -10`
-Expected: FAIL (state not reset).
+Run: `pytest tests/test_publisher_tt_music_rights.py -k "init_music_rights" -v 2>&1 | tail -10`
+Expected: 2 FAIL (AttributeError).
 
-- [ ] **Step 3: Add init in `publish_tiktok`**
+- [ ] **Step 3: Add helper + call в `publish_tiktok`**
 
-Find existing line (around стр. 397):
+В `TikTokMixin` (ANCHOR: после `_save_dump_for_fallback_review`, перед `publish_tiktok`):
+
 ```python
+    def _init_music_rights_state(self) -> None:
+        """v12 RC-B.1: reset all music-rights state в начале publish_tiktok.
+
+        Сбрасывает 4 переменные:
+        - _music_rights_iter (counter для MAX_MUSIC_RIGHTS_ITERATIONS cap)
+        - _music_rights_just_accepted_iter (флаг post-accept фазы)
+        - _music_rights_accepted_ts (timestamp accept'а для diagnostics)
+        - _music_rights_evidence_dumped (throttle flag для evidence-only path)
+        """
         self._music_rights_iter = 0
-```
-
-Add immediately after:
-```python
-        # v12 RC-B.1: state for post-accept tracking + evidence throttle.
         self._music_rights_just_accepted_iter = None
         self._music_rights_accepted_ts = None
         self._music_rights_evidence_dumped = False
 ```
 
-- [ ] **Step 4: Run test PASS**
+В `publish_tiktok` (ANCHOR: existing `self._music_rights_iter = 0` line), **replace** the single line with:
+```python
+        self._init_music_rights_state()
+```
 
-Run: `pytest tests/test_publisher_tt_music_rights.py::test_state_init_at_publish_tiktok_start -v 2>&1 | tail -10`
-Expected: PASS.
+- [ ] **Step 4: Run tests PASS**
+
+Run: `pytest tests/test_publisher_tt_music_rights.py -k "init_music_rights" -v 2>&1 | tail -10`
+Expected: 2 PASS.
 
 - [ ] **Step 5: Commit**
 
 ```bash
 git add publisher_tiktok.py tests/test_publisher_tt_music_rights.py
-git commit -m "feat(tt-music-rights): initialize post-accept state vars in publish_tiktok (RC-B.1)"
+git commit -m "feat(tt-music-rights): extract _init_music_rights_state helper + 2 tests (RC-B.1)"
 ```
 
 ---
 
-## Task 7: Set state + reset music_rights_iter after handled=True (RC-B.2)
+## Task 7: Helper `_after_music_rights_handled` (RC-B.2)
 
 **Files:**
-- Modify: `publisher_tiktok.py` upload-confirmation loop (стр. 922-924)
+- Modify: `publisher_tiktok.py` — add helper + call в music-rights branch
 - Test: `tests/test_publisher_tt_music_rights.py`
+
+**Why refactor:** Codex v1 round 1, P2#5 — inline-в-loop логику невозможно протестить без полного loop'а. Извлекаем в helper, тестируем напрямую.
 
 - [ ] **Step 1: Write failing test**
 
 Append:
 
 ```python
-def test_music_rights_iter_reset_after_handled():
-    """После handled=True _music_rights_iter сбрасывается + state set'ится."""
-    # Этот тест требует mock'нуть весь upload-confirmation loop. Используем
-    # surgical-strategy: вызываем helper, проверяем что after-handled block
-    # выставляет нужные поля.
-    # Реальное место в коде — около стр. 922:
-    #   if handled: time.sleep(2); continue;
-    # → after fix:
-    #   if handled:
-    #     self._music_rights_just_accepted_iter = wait
-    #     self._music_rights_accepted_ts = time.time()
-    #     self._music_rights_iter = 0  # reset counter после handle
-    #     time.sleep(2); continue;
-    #
-    # Тестируем через grep исходник + sanity-check переменных.
+# ====== v12 RC-B.2: post-accept state helper ======
+
+def test_after_music_rights_handled_sets_state_and_resets_counter(monkeypatch):
+    """_after_music_rights_handled(wait) sets _music_rights_just_accepted_iter,
+    _music_rights_accepted_ts, resets _music_rights_iter."""
+    import publisher_tiktok as pt
+    monkeypatch.setattr(pt.time, 'time', lambda: 9999.5)
+    m = TikTokMixin()
+    m._music_rights_iter = 3  # будто было 3 detections
+    m._music_rights_just_accepted_iter = None
+    m._music_rights_accepted_ts = None
+    m._after_music_rights_handled(wait=17)
+    assert m._music_rights_just_accepted_iter == 17
+    assert m._music_rights_accepted_ts == 9999.5
+    assert m._music_rights_iter == 0
+
+
+def test_publish_tiktok_calls_after_music_rights_handled_on_handled_true():
+    """В publish_tiktok после handled=True вызывается _after_music_rights_handled.
+    Source-grep — структурная проверка (т.к. полный loop сложно симулировать)."""
     import inspect
-    from publisher_tiktok import TikTokMixin
     src = inspect.getsource(TikTokMixin.publish_tiktok)
-    # Find the music-rights `if handled:` block (анкер — _handle_tt_music_rights_dialog)
-    assert 'self._music_rights_just_accepted_iter = wait' in src
-    assert 'self._music_rights_accepted_ts = time.time()' in src
-    # Counter reset должен быть рядом
-    assert 'self._music_rights_iter = 0  # reset after handle' in src
+    # Поиск pattern: после `if handled:` вызывается our helper
+    # Точная строка: 'self._after_music_rights_handled(wait)'
+    assert 'self._after_music_rights_handled(wait)' in src, (
+        '_after_music_rights_handled must be called after handled=True'
+    )
 ```
 
-- [ ] **Step 2: Run test FAIL**
+- [ ] **Step 2: Run tests FAIL**
 
-Run: `pytest tests/test_publisher_tt_music_rights.py::test_music_rights_iter_reset_after_handled -v 2>&1 | tail -10`
-Expected: FAIL.
+Run: `pytest tests/test_publisher_tt_music_rights.py -k "after_music_rights_handled" -v 2>&1 | tail -10`
+Expected: 2 FAIL.
 
-- [ ] **Step 3: Update `publish_tiktok` upload-confirmation loop**
+- [ ] **Step 3: Add helper + update loop**
 
-Find existing block (around стр. 918-924):
+В `TikTokMixin` (ANCHOR: после `_init_music_rights_state`):
+
 ```python
-                handled = self._handle_tt_music_rights_dialog(ui)
-                log.info(f'  🎵 TikTok: music rights dialog (wait {wait}, '
-                         f'iter {self._music_rights_iter}/{MAX_MUSIC_RIGHTS_ITERATIONS}) '
-                         f'handled={handled}')
+    def _after_music_rights_handled(self, wait: int) -> None:
+        """v12 RC-B.2: post-accept tracking + counter decouple.
+
+        Codex v6 round 1, P1#3: MAX_MUSIC_RIGHTS_ITERATIONS не должен
+        preempt'ить post-accept фазу. Counter reset после успешного handle.
+        """
+        self._music_rights_just_accepted_iter = wait
+        self._music_rights_accepted_ts = time.time()
+        self._music_rights_iter = 0  # decouple counter from post-accept phase
+```
+
+Обновить в `publish_tiktok` (ANCHOR: `handled = self._handle_tt_music_rights_dialog(ui)`), find:
+```python
                 if handled:
                     time.sleep(2)
                     continue
 ```
 
-Replace `if handled:` block:
+Replace:
 ```python
                 if handled:
-                    # v12 RC-B.2: track post-accept state + decouple counter
-                    # (Codex round 1, P1#3: MAX_MUSIC_RIGHTS_ITERATIONS не должен
-                    # preempt'ить post-accept фазу).
-                    self._music_rights_just_accepted_iter = wait
-                    self._music_rights_accepted_ts = time.time()
-                    self._music_rights_iter = 0  # reset after handle
+                    self._after_music_rights_handled(wait)
                     time.sleep(2)
                     continue
 ```
 
-- [ ] **Step 4: Run test PASS**
+- [ ] **Step 4: Run tests PASS**
 
-Run: `pytest tests/test_publisher_tt_music_rights.py::test_music_rights_iter_reset_after_handled -v 2>&1 | tail -10`
-Expected: PASS.
+Run: `pytest tests/test_publisher_tt_music_rights.py -k "after_music_rights_handled" -v 2>&1 | tail -10`
+Expected: 2 PASS.
 
 - [ ] **Step 5: Commit**
 
 ```bash
 git add publisher_tiktok.py tests/test_publisher_tt_music_rights.py
-git commit -m "feat(tt-music-rights): set post-accept state + reset counter after handled (RC-B.2)"
+git commit -m "feat(tt-music-rights): _after_music_rights_handled helper + 2 tests (RC-B.2)"
 ```
 
 ---
@@ -963,94 +1020,191 @@ git commit -m "feat(tt-music-rights): flag-gated SAASceneWrapperActivity SEED ha
 
 ---
 
-## Task 9: Per-iter XML dump + top_activity event (RC-B.4)
+## Task 9: Helper `_maybe_dump_post_music_rights_xml` + per-iter call (RC-B.4)
 
 **Files:**
-- Modify: `publisher_tiktok.py` upload-confirmation loop (after audio-dialog handler, before UPLOAD_OK substring check OR at the end of each iter — выберите место наиболее logical)
+- Modify: `publisher_tiktok.py` — add helper method + call в loop (anchor: after audio-dialog handler block end, before UPLOAD_OK substring check)
 - Test: `tests/test_publisher_tt_music_rights.py`
+
+**Why refactor:** Codex v1 round 1, P2#6 + P3#2 — раньше Task 9 имел source-grep тест и vague "выберите место". Извлекаем в helper для real unit-теста + точный anchor.
 
 - [ ] **Step 1: Write failing tests**
 
 Append:
 
 ```python
-# ====== v12 RC-B.4: per-iter XML dump + top_activity event ======
+# ====== v12 RC-B.4: per-iter dump helper ======
 
-def test_dump_flag_off_no_writes(monkeypatch):
-    """flag=false → dump-блок не пишет файлы."""
+def test_maybe_dump_post_music_rights_xml_flag_off_no_op(monkeypatch, tmp_path):
+    """flag=false → helper returns без записи."""
     monkeypatch.setenv('TT_DUMP_POST_MUSIC_RIGHTS_XML', 'false')
-    monkeypatch.delenv('TT_MUSIC_RIGHTS_FALLBACK_ENABLED', raising=False)
-    # Sanity: проверяем что переменная env не вызывает дам
-    import inspect
-    src = inspect.getsource(TikTokMixin.publish_tiktok)
-    # Pattern должен иметь env check
-    assert "os.environ.get('TT_DUMP_POST_MUSIC_RIGHTS_XML'" in src
+    m = TikTokMixin()
+    m.task_id = 1
+    m.platform = 'TikTok'
+    m._music_rights_just_accepted_iter = 5
+    m.log_event = MagicMock()
+    m.adb = MagicMock(return_value='topResumedActivity=...')
+
+    files_before = set(tmp_path.glob('*'))
+    m._maybe_dump_post_music_rights_xml(wait=6, ui='<x/>')
+    files_after = set(tmp_path.glob('*'))
+    assert files_before == files_after
+    m.log_event.assert_not_called()
 
 
-def test_dump_at_iters_with_ms_timestamp_uuid_and_event(monkeypatch):
-    """flag=true + music_rights_accepted: dump fires на iter 1,3,5,10,20,40
-    с ms-timestamp + uuid в filename, и log_event с top_activity meta."""
-    # Грубый test через source-grep — pattern должен присутствовать.
+def test_maybe_dump_post_music_rights_xml_no_accept_state_no_op(monkeypatch):
+    """_music_rights_just_accepted_iter=None → helper returns без записи (даже при flag=true)."""
+    monkeypatch.setenv('TT_DUMP_POST_MUSIC_RIGHTS_XML', 'true')
+    m = TikTokMixin()
+    m._music_rights_just_accepted_iter = None
+    m.log_event = MagicMock()
+    m.adb = MagicMock(return_value='')
+    m._maybe_dump_post_music_rights_xml(wait=6, ui='<x/>')
+    m.log_event.assert_not_called()
+
+
+def test_maybe_dump_at_iters_creates_file_and_logs_event(monkeypatch, tmp_path):
+    """flag=true + accept state + iters_since in (1,3,5,10,20,40):
+    создаёт файл с ms+uuid suffix И log_event с top_activity meta."""
+    monkeypatch.setenv('TT_DUMP_POST_MUSIC_RIGHTS_XML', 'true')
+    import publisher_tiktok as pt
+    # Redirect /tmp/autowarm_ui_dumps → tmp_path
+    target = tmp_path / 'dumps'
+    target.mkdir()
+    original_open = open
+    def patched_open(path, *a, **kw):
+        if isinstance(path, str) and path.startswith('/tmp/autowarm_ui_dumps/'):
+            new_path = str(target / path.split('/tmp/autowarm_ui_dumps/')[1])
+            return original_open(new_path, *a, **kw)
+        return original_open(path, *a, **kw)
+    monkeypatch.setattr('builtins.open', patched_open)
+    monkeypatch.setattr(pt.os, 'makedirs',
+                        lambda p, **kw: target.mkdir(parents=True, exist_ok=True))
+
+    m = TikTokMixin()
+    m.task_id = 99
+    m.platform = 'TikTok'
+    m._music_rights_just_accepted_iter = 4  # accept на iter 4
+    m.log_event = MagicMock()
+    m.adb = MagicMock(return_value='topResumedActivity=ActivityRecord{com.zhiliaoapp.musically/.SAASceneWrapperActivity}')
+
+    # wait=5: iters_since = 5-4 = 1 (in dump schedule)
+    m._maybe_dump_post_music_rights_xml(wait=5, ui='<hierarchy>dump_iter1</hierarchy>')
+
+    files = list(target.glob('tt_post_music_rights_99_iter1_*_*.xml'))
+    assert len(files) == 1, f'Expected 1 dump file, got: {[f.name for f in target.iterdir()]}'
+    assert files[0].read_text() == '<hierarchy>dump_iter1</hierarchy>'
+
+    m.log_event.assert_called_once()
+    args, kwargs = m.log_event.call_args
+    meta = kwargs.get('meta', {})
+    assert meta.get('category') == 'tt_post_music_rights_dump'
+    assert meta.get('iters_after_accept') == 1
+    assert 'SAASceneWrapperActivity' in meta.get('top_activity', '')
+
+
+def test_maybe_dump_skips_non_schedule_iters(monkeypatch, tmp_path):
+    """iters_since=2 (НЕ в schedule 1,3,5,10,20,40) → no dump."""
+    monkeypatch.setenv('TT_DUMP_POST_MUSIC_RIGHTS_XML', 'true')
+    import publisher_tiktok as pt
+    monkeypatch.setattr(pt.os, 'makedirs', lambda *a, **kw: None)
+
+    m = TikTokMixin()
+    m.task_id = 1
+    m._music_rights_just_accepted_iter = 4
+    m.log_event = MagicMock()
+    m.adb = MagicMock(return_value='')
+
+    # wait=6: iters_since = 6-4 = 2 (NOT in schedule)
+    m._maybe_dump_post_music_rights_xml(wait=6, ui='<x/>')
+    m.log_event.assert_not_called()
+
+
+def test_publish_tiktok_calls_maybe_dump_post_music_rights_xml():
+    """publish_tiktok upload-confirmation loop вызывает helper. Source-grep
+    как структурный smoke (loop сложно exercise напрямую)."""
     import inspect
     src = inspect.getsource(TikTokMixin.publish_tiktok)
-    assert 'tt_post_music_rights_dump' in src  # event category
-    assert "iters_since in (1, 3, 5, 10, 20, 40)" in src or \
-           "iters_since in [1, 3, 5, 10, 20, 40]" in src
-    assert "int(time.time() * 1000)" in src
-    assert "uuid.uuid4().hex[:8]" in src
-    assert "'top_activity':" in src  # meta key
+    assert 'self._maybe_dump_post_music_rights_xml(wait, ui)' in src, (
+        '_maybe_dump_post_music_rights_xml must be called inside loop'
+    )
 ```
 
 - [ ] **Step 2: Run tests FAIL**
 
-Run: `pytest tests/test_publisher_tt_music_rights.py -k "dump_flag_off_no_writes or dump_at_iters" -v 2>&1 | tail -10`
-Expected: 2 FAIL.
+Run: `pytest tests/test_publisher_tt_music_rights.py -k "maybe_dump or test_publish_tiktok_calls_maybe_dump" -v 2>&1 | tail -10`
+Expected: 5 FAIL (AttributeError).
 
-- [ ] **Step 3: Add dump block in `publish_tiktok` upload-confirmation loop**
+- [ ] **Step 3: Add helper method**
 
-Find an appropriate location в loop'е — после `audio-dialog handler` block (около стр. 990, ПЕРЕД `# Признаки УСПЕХА: ищем сообщение/индикатор после публикации` блока), insert:
+В `TikTokMixin` (ANCHOR: после `_after_music_rights_handled`):
 
 ```python
-            # v12 RC-B.4: per-iteration XML dump после music_rights accept
-            # Spec: docs/superpowers/specs/2026-05-11-tt-music-rights-coverage-and-post-accept-design.md
-            if (os.environ.get('TT_DUMP_POST_MUSIC_RIGHTS_XML', 'false').lower() == 'true'
-                and self._music_rights_just_accepted_iter is not None):
-                iters_since = wait - self._music_rights_just_accepted_iter
-                if iters_since in (1, 3, 5, 10, 20, 40):
-                    cur_act_dump = self.adb(
-                        'dumpsys activity activities 2>/dev/null | grep -m1 "topResumedActivity"',
-                        timeout=8) or ''
-                    try:
-                        os.makedirs('/tmp/autowarm_ui_dumps', exist_ok=True)
-                        ts_ms = int(time.time() * 1000)
-                        uid8 = uuid.uuid4().hex[:8]
-                        path = (f'/tmp/autowarm_ui_dumps/'
-                                f'tt_post_music_rights_{self.task_id}'
-                                f'_iter{iters_since}_{ts_ms}_{uid8}.xml')
-                        with open(path, 'w', encoding='utf-8') as f:
-                            f.write(ui or '')
-                        log.info(f'  💾 post-music-rights dump (iter+{iters_since}): {path}')
-                        self.log_event('info',
-                            f'TikTok: post-music-rights dump saved (iter+{iters_since})',
-                            meta={'category': 'tt_post_music_rights_dump',
-                                  'iters_after_accept': iters_since,
-                                  'dump_path': path,
-                                  'top_activity': cur_act_dump.strip()[:200],
-                                  'platform': self.platform})
-                    except Exception as e:
-                        log.warning(f'  ⚠️ Не удалось сохранить post-music-rights dump: {e}')
+    def _maybe_dump_post_music_rights_xml(self, wait: int, ui: str) -> None:
+        """v12 RC-B.4: per-iter XML dump после music_rights accept.
+
+        Срабатывает only при:
+        - TT_DUMP_POST_MUSIC_RIGHTS_XML=true (env flag, default false)
+        - _music_rights_just_accepted_iter is not None (= music_rights ранее accepted)
+        - iters_since in (1, 3, 5, 10, 20, 40) (logarithmic schedule)
+
+        Сохраняет ui XML на disk + log_event'ит с top_activity meta для
+        SEED-activation evidence (RC-B.0 decision input).
+        """
+        if os.environ.get('TT_DUMP_POST_MUSIC_RIGHTS_XML', 'false').lower() != 'true':
+            return
+        if self._music_rights_just_accepted_iter is None:
+            return
+        iters_since = wait - self._music_rights_just_accepted_iter
+        if iters_since not in (1, 3, 5, 10, 20, 40):
+            return
+        # Capture top_activity сейчас (fresh read).
+        cur_act_dump = self.adb(
+            'dumpsys activity activities 2>/dev/null | grep -m1 "topResumedActivity"',
+            timeout=8) or ''
+        try:
+            os.makedirs('/tmp/autowarm_ui_dumps', exist_ok=True)
+            ts_ms = int(time.time() * 1000)
+            uid8 = uuid.uuid4().hex[:8]
+            path = (f'/tmp/autowarm_ui_dumps/'
+                    f'tt_post_music_rights_{self.task_id}'
+                    f'_iter{iters_since}_{ts_ms}_{uid8}.xml')
+            with open(path, 'w', encoding='utf-8') as f:
+                f.write(ui or '')
+            log.info(f'  💾 post-music-rights dump (iter+{iters_since}): {path}')
+            self.log_event('info',
+                f'TikTok: post-music-rights dump saved (iter+{iters_since})',
+                meta={'category': 'tt_post_music_rights_dump',
+                      'iters_after_accept': iters_since,
+                      'dump_path': path,
+                      'top_activity': cur_act_dump.strip()[:200],
+                      'platform': self.platform})
+        except Exception as e:
+            log.warning(f'  ⚠️ Не удалось сохранить post-music-rights dump: {e}')
 ```
 
-- [ ] **Step 4: Run tests PASS**
+- [ ] **Step 4: Add helper invocation в loop**
 
-Run: `pytest tests/test_publisher_tt_music_rights.py -k "dump_flag_off_no_writes or dump_at_iters" -v 2>&1 | tail -10`
-Expected: 2 PASS.
+В `publish_tiktok` upload-confirmation loop, **ANCHOR**: find existing block ending audio-dialog handler — последняя строка которого `time.sleep(2); continue` после audio-dialog detect block. Сразу после audio-dialog handler (когда audio-dialog НЕ обнаружен или handled), **в каждой iter перед UPLOAD_OK substring check** (anchor: line that does `matched = [kw for kw in UPLOAD_OK if kw in ui]`), insert:
 
-- [ ] **Step 5: Commit**
+```python
+            # v12 RC-B.4: per-iter XML dump после music_rights accept
+            # Spec: docs/superpowers/specs/2026-05-11-tt-music-rights-coverage-and-post-accept-design.md
+            self._maybe_dump_post_music_rights_xml(wait, ui)
+```
+
+(Helper internally gates на flag + state — если flag off ИЛИ accept не was, no-op.)
+
+- [ ] **Step 5: Run tests PASS**
+
+Run: `pytest tests/test_publisher_tt_music_rights.py -k "maybe_dump or test_publish_tiktok_calls_maybe_dump" -v 2>&1 | tail -10`
+Expected: 5 PASS.
+
+- [ ] **Step 6: Commit**
 
 ```bash
 git add publisher_tiktok.py tests/test_publisher_tt_music_rights.py
-git commit -m "feat(tt-music-rights): per-iter XML dump + top_activity event (RC-B.4)"
+git commit -m "feat(tt-music-rights): _maybe_dump_post_music_rights_xml helper + 5 tests (RC-B.4)"
 ```
 
 ---
@@ -1062,7 +1216,7 @@ git commit -m "feat(tt-music-rights): per-iter XML dump + top_activity event (RC
 - [ ] **Step 1: Run full music-rights test file**
 
 Run: `pytest tests/test_publisher_tt_music_rights.py -v 2>&1 | tail -30`
-Expected: All tests PASS (19+ tests).
+Expected: All tests PASS (existing PR #28 baseline + 27 new tests from this plan).
 
 - [ ] **Step 2: Run full publisher_tiktok-related tests**
 
@@ -1106,9 +1260,9 @@ Expected: `no-op rollout verified`.
 - [ ] **Step 1: Push branch**
 
 ```bash
-cd /home/claude-user/autowarm-testbench-feat-tt-music-rights-coverage-and-post-accept-20260511
+cd /home/claude-user/autowarm-testbench-feat-tt-mr-cov-20260511
 source ~/secrets/github-gengo2.env
-git push -u origin feat/tt-music-rights-coverage-and-post-accept-20260511
+git push -u origin feat/tt-mr-cov-20260511
 ```
 
 - [ ] **Step 2: Create PR**
@@ -1133,7 +1287,7 @@ gh pr create --title "TT music-rights coverage + post-accept instrumentation (RC
 
 ## Test plan
 
-- [x] pytest tests/test_publisher_tt_music_rights.py -v (19+ tests pass)
+- [x] pytest tests/test_publisher_tt_music_rights.py -v (27 new tests pass)
 - [x] No-op rollout sanity (all flags false → behavior identical to prod)
 - [ ] After merge: deploy + enable TT_DUMP_POST_MUSIC_RIGHTS_XML=true → collect dumps 1-2h
 - [ ] After merge: enable TT_MUSIC_RIGHTS_FALLBACK_ENABLED=true → monitor `tt_music_rights_fallback_match` events
@@ -1154,17 +1308,22 @@ After `gh pr create` succeeds, return the PR URL printed.
 ## Self-Review Notes
 
 **Spec coverage check:**
-- RC-A.1 (fallback matcher) → Task 3
-- RC-A.1b (evidence-only) → Task 4
-- RC-A.2 (hybrid handler + throttle) → Task 5
-- RC-B.0 (flag-gated SEED) → Task 8
-- RC-B.1 (state init) → Task 6
-- RC-B.2 (set state + reset counter) → Task 7
-- RC-B.4 (per-iter dump + event) → Task 9
-- All 18 tests from spec covered (Tasks 3-9)
+- RC-A.1 (fallback matcher) → Task 3 (6 tests)
+- RC-A.1b (evidence-only) → Task 4 (3 tests)
+- RC-A.2 (hybrid handler + throttle) → Task 5 (5 tests)
+- RC-B.0 (flag-gated SEED) → Task 8 (2 tests)
+- RC-B.1 (state init helper) → Task 6 (2 tests)
+- RC-B.2 (after_handled helper) → Task 7 (2 tests)
+- RC-B.4 (dump helper + invocation) → Task 9 (5 tests)
+- Task 2 dump-helper itself → 2 tests
+- **Total: 27 new tests** (Codex v1 round 1, P3#1 accounting fixed)
 
 **Не покрыто** (намеренно out-of-scope per v7 scope-cut):
 - RC-B.3 streak-gate — отложено до XML evidence
+
+**Refactor decisions:**
+- Extracted 3 helpers from inline-в-loop code: `_init_music_rights_state`, `_after_music_rights_handled`, `_maybe_dump_post_music_rights_xml`. Это позволяет real unit-test'ить логику без полного `publish_tiktok` flow (Codex v1 round 1, P2#5/#6: inline тестируется только через source-grep, что слабо).
+- Source-grep тесты ОСТАВЛЕНЫ как структурный smoke (2 шт: Task 7 + Task 9) — гарантируют что helper'ы реально вызваны из loop'а. Real behavior verified через helper unit tests.
 
 **Open items for impl:**
 - Phone #19 / Pi 9 smoke — see spec Open Questions; defer until impl complete
