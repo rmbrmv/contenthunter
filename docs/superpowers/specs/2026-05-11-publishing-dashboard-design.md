@@ -65,11 +65,16 @@ Validation: для `custom` `from` и `to` обязательны, `from <= to`,
 
 ### 3.2 SQL
 
-Один проход по `publish_queue` через `GROUPING SETS` (платформы + итого), фильтр по `scheduled_at`:
+Один проход по `publish_queue` через `GROUPING SETS` (платформы + итого), фильтр по `scheduled_at`. Critical: `GROUPING(platform)` нужен, чтобы отличить grand-total ряд от **реального** ряда с `platform IS NULL` (в БД таких сейчас 4 за 30 дней — `past_slot_dropped` audit-вставки из `assignUnicResultsToQueue` clamp, см. `.ai-factory/specs/spec-a-past-slot-backfill-fix.md:169`).
 
 ```sql
 SELECT
-  COALESCE(platform, 'all')                                            AS bucket,
+  CASE
+    WHEN GROUPING(platform) = 1 THEN 'all'                -- grand total row
+    WHEN platform IS NULL THEN 'unknown'                  -- real rows with NULL platform
+    ELSE platform                                         -- per-platform row
+  END                                                                   AS bucket,
+  GROUPING(platform)                                                    AS is_grand_total,
   COUNT(*)                                                              AS total,
   COUNT(*) FILTER (WHERE status = 'pending')                            AS pending,
   COUNT(*) FILTER (WHERE status = 'running')                            AS running,
@@ -82,10 +87,15 @@ GROUP BY GROUPING SETS ((platform), ());
 ```
 
 `GROUPING SETS ((platform), ())` даёт:
-- N строк с группировкой по платформе
-- 1 строку с `platform IS NULL` = общий итог
+- N строк с группировкой по платформе (`is_grand_total=0`), включая отдельную для `platform IS NULL` → `bucket='unknown'`.
+- 1 строку grand total (`is_grand_total=1`) → `bucket='all'`.
 
-В Node-маппинге `platform IS NULL` → `bucket='all'`.
+В Node-маппинге:
+- `row.is_grand_total === 1` → `overall`.
+- `row.bucket` in `{'instagram','tiktok','youtube'}` → `by_platform[bucket]`.
+- `row.bucket` in `{'unknown','vk','pinterest','likee',...}` → отбрасывается из `by_platform` (включено в `overall` через grand-total).
+
+**Observed platform values in DB** (последние 30д): `instagram`, `tiktok`, `youtube`, `vk`, `pinterest`, `likee`, NULL. Все lowercase — case-fold не нужен. VK/Pinterest/Likee/NULL включаются в `overall.total`, но не показываются как отдельный блок (out of scope per memory `project_autowarm_scope`).
 
 ### 3.3 Response shape
 
@@ -122,10 +132,10 @@ GROUP BY GROUPING SETS ((platform), ());
 
 ### 3.4 Edge cases
 
-- **Незнакомая платформа в БД** (например `vk`): аггрегируется в `overall`, но в `by_platform` НЕ попадает (мы рисуем только IG/TT/YT). Будет видна как «дельта» между overall.total и сумма платформ — в первой версии не визуализируем, в backlog можно добавить блок «Прочее».
-- **`platform IS NULL`** в записи: попадает в overall, но не в by_platform — то же поведение.
+- **Незнакомая платформа в БД** (`vk`, `pinterest`, `likee`): bucket-row `is_grand_total=0` отбрасывается mapping'ом, но grand-total `is_grand_total=1` всё равно их учёл. В UI: `overall.total > sum(by_platform.total)` — дельта = задачи на нерисуемых платформах. В первой версии не визуализируем; в backlog — блок «Прочие платформы».
+- **`platform IS NULL`** в записи (`past_slot_dropped` audit rows): bucket=`unknown`, аналогично — в `overall`, не в `by_platform`. Отделено от grand-total через `GROUPING(platform)`.
 - **Пустой диапазон**: все нули, `success_rate: null`.
-- **`scheduled_at IS NULL`**: исключаются фильтром `scheduled_at >= $1` (NULL не сравнивается).
+- **`scheduled_at IS NULL`**: исключаются фильтром `scheduled_at >= $1` (NULL не проходит сравнение).
 
 ## 4. Frontend
 
