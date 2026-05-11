@@ -564,19 +564,35 @@ def test_post_publish_detection_block_runs_after_generic_dialog_handler():
        block fires."""
     # ...
 
+def test_post_publish_detection_source_order():
+    """Source-order guard (P3.1 v3): detection block должен быть после generic
+       dialog handler, перед wait%10 logging и AI Unstuck call site.
+       Защита от accidental misplacement при будущих edit'ах publisher_tiktok.py."""
+    src = Path(__file__).resolve().parent.parent / 'publisher_tiktok.py'
+    text = src.read_text()
+    dialog_idx = text.find("tap_element(ui, ['Закрыть', 'Пропустить'")
+    detect_idx = text.find('POST-PUBLISH SUCCESS DETECTION')
+    log_idx = text.find('if wait % 10 == 0', dialog_idx)
+    ai_idx = text.find('wait > 0 and wait % 5 == 4', dialog_idx)
+    assert -1 < dialog_idx < detect_idx < log_idx < ai_idx, (
+        f'Block order broken: dialog={dialog_idx}, detect={detect_idx}, '
+        f'log={log_idx}, ai={ai_idx}'
+    )
+
 def test_ai_unstuck_skipped_when_main_nav_visible():
     """wait%5==4, dump_ui показывает main nav → AI Unstuck NOT called →
        tt_unstuck_skipped_post_publish event."""
     # ...
 
-def test_ai_unstuck_still_runs_on_permission_activity():
-    """wait%5==4, topResumedActivity содержит 'PermissionActivity' →
-       AI Unstuck called normally (NOT skipped — это legit recovery)."""
-    # ...
-
-def test_ai_unstuck_still_runs_on_music_select_activity():
-    """wait%5==4, topResumedActivity содержит 'MusicSelectActivity' →
-       AI Unstuck called normally."""
+@pytest.mark.parametrize('activity', [
+    'PermissionActivity',
+    'MusicSelectActivity',
+    'CutVideoActivity',
+    'CoverActivity',
+])
+def test_ai_unstuck_still_runs_on_legit_recovery_activities(activity):
+    """wait%5==4, topResumedActivity содержит legit recovery activity →
+       AI Unstuck called normally. Только CameraActivity hard-fails."""
     # ...
 
 def test_camera_activity_after_share_breaks_loop_with_event():
@@ -632,7 +648,7 @@ def test_camera_activity_after_share_breaks_loop_with_event():
 | **False positive — TT показывает feed-нав ДО реальной публикации** (e.g. composer crash → fallback) | Низкая | Publisher запишет success → `_auto_get_tiktok_url` вернёт profile fallback → `tt_success_inferred_but_no_video_url` warning event для operator visibility | P1.4 fix: distinct warning event. Backlog: bumping status to 'failed' if URL absent — defer until live evidence |
 | **TT UI evolution: activity названия меняются** | Средняя (TT агрессивно А/B-тестирует) | False negative: detection не сработает → behavior baseline (текущее) | Logging `top_activity` в каждом event позволит monitor'ить. Periodic audit query: `SELECT DISTINCT meta->>'top_activity' FROM events WHERE category LIKE 'tt_%'`|
 | **TT bottom nav текст меняется** (А/B локализация) | Средняя | False negative | Group-based markers с EN/RU вариантами. Bounds-scoped (only bottom 20%) защищает от false match с обычным текстом |
-| **screen_height detection fails** (некоторые devices give малый XML) | Низкая | Helper возвращает False с reason='screen_height_implausible' → keep waiting | sanity check 1000px минимум. Тест `test_malformed_xml_returns_keep_waiting` покрывает |
+| **screen_height detection fails** (некоторые devices give малый XML) | Низкая | Helper возвращает False с reason='screen_height_implausible' → keep waiting | sanity check 1000px минимум. Tests `test_empty_ui_returns_screen_height_implausible`, `test_xml_without_bounds_returns_screen_height_implausible`, `test_zero_height_bounds_returns_screen_height_implausible` покрывают; malformed XML отдельно через `test_malformed_xml_returns_keep_waiting` (xml_parse_error reason) |
 | **AI Unstuck guard ломает legit AI-recovery scenarios** | Низкая (v3 narrowed) | TT застрял в edge-case где AI Unstuck помогает, но guard skip'нул | v3 NARROWED: skip только при main-nav visible (success_check=True) ИЛИ CameraActivity hard-fail. PermissionActivity/MusicSelectActivity/CutVideoActivity/CoverActivity — НЕ блокируются. Audio-dialog/music-rights/share-sheet consumed by existing blocker handlers до AI call. Tests `test_ai_unstuck_still_runs_on_permission_activity` / `test_ai_unstuck_still_runs_on_music_select_activity` защищают invariant. |
 | **dumpsys overhead** ~50-200ms × 60 итераций × 2 (detection + guard) = до 24s extra per task | Низкая | Slowdown | Net win: success detection экономит 8+ минут when triggered. Optimization: cache cur_act per iter (один call вместо двух) — defer |
 
@@ -665,7 +681,8 @@ def test_camera_activity_after_share_breaks_loop_with_event():
 
 ---
 
-**Status:** v3 ready for round 3 Codex re-review + user review.
+**Status:** v3 ready for user review (round 3 Codex passed: no critical/blocking findings).
 **Codex review history:**
 - v1 → v2 applied round 1: 5 P1 + 6 P2 + 4 P3 finds (2026-05-11)
 - v2 → v3 applied round 2: 3 P1 + 5 P2 + 1 P3 finds (2026-05-11)
+- v3 round 3 (2026-05-11): 0 P1, 1 P2, 2 P3 — все applied inline (parametrized recovery activities test, source-order placement test, risks test reference fix)
