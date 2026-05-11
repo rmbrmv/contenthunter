@@ -33,9 +33,9 @@ Event `tt_music_rights_accepted` с `button_tapped=true` залогирован 
 
 (Codex round 1, P2#8: rate-based, не traffic-зависимая абсолюта.)
 
-- **0** task'ов имеющих **оба** `tt_music_rights_accepted=true` И `tt_upload_confirmation_timeout` events в течение 24h после rollout. Это абсолютный gate — мы починили RC-B ⟺ ни одна публикация не сваливается в timeout после успешного accept'а.
+- **0** task'ов имеющих `tt_music_rights_accepted=true` И `tt_upload_confirmation_timeout` И **без** промежуточного `tt_upload_confirmed_*` event'а в течение 24h после rollout (Codex round 2, P2#3 — narrow gate, не задеваемый unrelated confirmation-loop timeouts).
 - При наличии ≥10 events `tt_music_rights_accepted=true` за 24h: доля задач завершившихся `tt_upload_confirmed_*` (любым из путей: early, post_music_rights activity, штатный UPLOAD_OK substring) ≥ **80%**.
-- 0 events `tt_upload_confirmed_post_music_rights` followed by downstream `publish_failed_*` (false-positive rate должен быть 0 для этого детектора; non-zero = регрессия дизайна).
+- 0 events `tt_upload_confirmed_post_music_rights` followed by downstream `publish_failed_*` (false-positive rate должен быть 0 для этого детектора; non-zero = регрессия дизайна → тянуть streak threshold выше или добавлять signals).
 - При появлении **любого** `tt_music_rights_button_changed_suspect` event'а — сохранённый XML должен быть прочитан и константы расширены в следующей итерации.
 
 ---
@@ -98,18 +98,22 @@ def _detect_tt_music_rights_dialog_fallback(self, ui_xml: str) -> bool:
     1. Substring pre-filter (case-INSENSITIVE): low_xml = ui_xml.lower();
        в low_xml есть одна из _TT_MUSIC_RIGHTS_FALLBACK_TITLE_SUBSTRINGS
        (все substring'и заранее lowercase).
-    2. Структурная проверка через XML parse:
-       a) has_specific_structure (checkbox-label OR button EXACT) OR
-          has_generic_checkbox (checkable=true / class*=CheckBox)
-       b) И clickable-button-node с text/desc EXACT in
-          _TT_MUSIC_RIGHTS_BUTTON (=кнопка accept в досягаемости).
+    2. Структурная проверка через XML parse — ВСЕ три должны быть true
+       (Codex round 2, P1#1: предыдущая 'OR generic_checkbox' могла
+       fall-positive на обычном composer'е где «music rights» появляется
+       в hyperlink/help-tip + есть generic checkbox + есть Publish-кнопка):
+       a) has_checkbox_label_exact: node с text/desc EXACT in
+          _TT_MUSIC_RIGHTS_CHECKBOX (наш известный checkbox-label).
+       b) has_clickable_button_exact: clickable=true node с text/desc
+          EXACT in _TT_MUSIC_RIGHTS_BUTTON.
+       c) (a) и (b) находятся **в общем dialog-контейнере**: их bounds
+          пересекаются по Y-диапазону (центр одного попадает в bounds
+          другого ±200px) — структурный признак single-dialog.
 
-    Условие (2b) — анкер «правильного» диалога: без EXACT-кнопки accept
-    fallback НЕ возвращает True (защита от false-positive на экранах
-    где substring 'music rights' появляется в caption/hashtag/help-link).
-    Codex round 1, P2#4: case-insensitive normalization нужна, чтобы
-    варианты с разным casing ('Music Usage Rights' vs 'music usage rights')
-    matchились — иначе test fixture противоречил бы коду.
+    Если кто-то из (a)/(b)/(c) фейлит → fallback возвращает False.
+    Кейс «substring есть, но это не диалог» (composer caption-link или
+    help screen) — НЕ ловится fallback'ом, перенаправляется в evidence-only
+    path где dump'ится без auto-handle.
     """
 ```
 
@@ -189,12 +193,12 @@ def _handle_tt_music_rights_dialog(self, ui_xml: str) -> bool:
 
 `_save_dump_for_fallback_review(ui_xml, suffix)`:
 - Создаёт директорию `/tmp/autowarm_ui_dumps/` через `os.makedirs(..., exist_ok=True)` (Codex round 1, P2#7).
-- Имя файла: `tt_music_rights_{suffix}_{task_id}_{int(time.time())}.xml` (timestamp защищает от перезаписи при повторных hits в том же task — Codex round 1, P3#9).
+- Имя файла: `tt_music_rights_{suffix}_{task_id}_{int(time.time() * 1000)}_{uuid.uuid4().hex[:8]}.xml` — миллисекундный timestamp + короткий random suffix защищают от коллизии при retries в тот же sec (Codex round 1, P3#9; Codex round 2, P3#1).
 - Best-effort write. На exception — `log.warning(...)` и возврат `'write_failed'`. Никогда не raise'ит.
 
 ### RC-B.3: Activity-based success-check (внутри upload-confirmation loop)
 
-Срабатывает ТОЛЬКО при условиях: `_music_rights_just_accepted_iter is not None`, `tiktok_active=True`, прошло ≥ 2 итерации после accept (>=6 сек), И зафиксировано **2 подряд good observation'а** (Codex round 1, P1#2: одиночное navigate-away может быть транзитом из cancelled/failed publish'а).
+Срабатывает ТОЛЬКО при условиях: `_music_rights_just_accepted_iter is not None`, `tiktok_active=True`, прошло ≥ 3 итерации после accept (>=9 сек), И зафиксировано **3 подряд good observation'а** (Codex round 1, P1#2 + Codex round 2, P1#2: одиночное/двойное navigate-away всё ещё может быть транзитом или queued/cancelled state'ом; 3 iters × 3 sec = 9 сек stable — обоснованный безопасный порог).
 
 State, добавляемый в publisher:
 ```python
@@ -210,7 +214,7 @@ if (os.environ.get('TT_POST_MUSIC_RIGHTS_DETECTION_ENABLED', 'false').lower() ==
     and tiktok_active):
 
     iters_since = wait - self._music_rights_just_accepted_iter
-    if iters_since >= 2:  # минимум 6 сек на transition
+    if iters_since >= 3:  # минимум 9 сек на transition (Codex round 2, P1#2)
         # Анти-сигнал #1: композер ещё на стеке = не успех
         composer_on_stack = (
             'SAASceneWrapperActivity' in act
@@ -219,8 +223,7 @@ if (os.environ.get('TT_POST_MUSIC_RIGHTS_DETECTION_ENABLED', 'false').lower() ==
             or any(m in ui for m in STILL_ON_EDITOR)
         )
         # Анти-сигнал #2: failure-toast или повторный music-rights диалог
-        # (= TT отверг публикацию). Codex round 1, P1#2: feed/profile может
-        # появиться в момент cancel/reject, не только при успехе.
+        # (= TT отверг публикацию).
         post_publish_failure_hint = (
             self._detect_tt_music_rights_dialog(ui)
             or (os.environ.get('TT_MUSIC_RIGHTS_FALLBACK_ENABLED', 'false').lower() == 'true'
@@ -231,6 +234,14 @@ if (os.environ.get('TT_POST_MUSIC_RIGHTS_DETECTION_ENABLED', 'false').lower() ==
                 'Попробуйте ещё раз', 'Try again',
             ))
         )
+        # Анти-сигнал #3: upload в процессе (queued state может маскироваться
+        # под success — Codex round 2, P1#2). Если есть явная индикация upload
+        # in progress — это НЕ success, а ожидание.
+        upload_in_progress_hint = any(m in ui for m in (
+            'Загружается', 'Uploading',
+            'Загружается видео', 'Video uploading',
+            'Обрабатывается', 'Processing',
+        ))
         post_publish_activity = any(a in act for a in (
             'MainActivity',          # домашний экран TT (Для вас / Подписки)
             'DetailActivity',        # страница опубликованного видео
@@ -239,14 +250,15 @@ if (os.environ.get('TT_POST_MUSIC_RIGHTS_DETECTION_ENABLED', 'false').lower() ==
         ))
         is_good_iter = (post_publish_activity
                         and not composer_on_stack
-                        and not post_publish_failure_hint)
+                        and not post_publish_failure_hint
+                        and not upload_in_progress_hint)
 
         if is_good_iter:
             self._post_mr_good_streak += 1
         else:
             self._post_mr_good_streak = 0  # reset на любом плохом сигнале
 
-        if self._post_mr_good_streak >= 2:  # 2 подряд = ~6 сек стабильно
+        if self._post_mr_good_streak >= 3:  # 3 подряд = ~9 сек стабильно
             log.info(f'  ✅ TikTok: post-music-rights navigate-away stable '
                      f'({self._post_mr_good_streak} iters) — публикация подтверждена')
             self.log_event('info',
@@ -261,9 +273,10 @@ if (os.environ.get('TT_POST_MUSIC_RIGHTS_DETECTION_ENABLED', 'false').lower() ==
 
 **Почему это работает:**
 - memory `reference_tt_activities_observed`: `SAASceneWrapperActivity` — composer/wrapper; уход = navigate-away.
-- **2 подряд good iters** (~6 сек) защищает от транзитного MainActivity в момент failure-toast (Codex round 1, P1#2).
-- **post_publish_failure_hint** — failure-toast'ы И повторное появление music-rights диалога. Эти подскзки language/build-зависимы (Codex round 1, P3#10) — список расширим после анализа собранных XML dump'ов.
-- `iters_since >= 2` — даём TT минимум 6 сек на transition.
+- **3 подряд good iters** (~9 сек) защищает от транзитного MainActivity (Codex round 2, P1#2: queued/cancelled может транзитно показать MainActivity).
+- **post_publish_failure_hint** — failure-toast'ы И повторное появление music-rights диалога.
+- **upload_in_progress_hint** — queued state guard (Codex round 2, P1#2).
+- `iters_since >= 3` — даём TT минимум 9 сек на transition.
 
 **Marker brittleness (известное ограничение):** activity-имена (`MainActivity`, `DetailActivity`, etc.) и failure-toast строки — зависят от version'а TT и языка приложения. Это сознательная trade-off ради быстрого ship'а; точные строки будем калибровать после первых dump'ов из prod'а (Codex round 1, P3#10).
 
@@ -277,10 +290,12 @@ if (os.environ.get('TT_DUMP_POST_MUSIC_RIGHTS_XML', 'false').lower() == 'true'
     if iters_since in (1, 3, 5, 10, 20, 40):  # логарифмическая частота
         try:
             os.makedirs('/tmp/autowarm_ui_dumps', exist_ok=True)  # Codex round 1, P2#7
-            # Timestamp suffix защищает от перезаписи при retries (Codex round 1, P3#9)
+            # ms-timestamp + uuid suffix — защита от коллизии при retries
+            # в той же секунде (Codex round 1, P3#9; Codex round 2, P3#1)
             path = (f'/tmp/autowarm_ui_dumps/'
                     f'tt_post_music_rights_{self.task_id}'
-                    f'_iter{iters_since}_{int(time.time())}.xml')
+                    f'_iter{iters_since}_{int(time.time() * 1000)}'
+                    f'_{uuid.uuid4().hex[:8]}.xml')
             with open(path, 'w', encoding='utf-8') as f:
                 f.write(ui or '')
             log.info(f'  💾 post-music-rights dump (iter+{iters_since}): {path}')
@@ -312,21 +327,24 @@ Default `false` (Codex round 1, P1#1) — opt-in активация в rollout s
 
 | Test | Фикстура | Ожидаемо |
 |---|---|---|
-| `test_detect_fallback_matches_substring_title_lowercase` | XML с `text="music usage rights confirmation"` (lowercase) + checkbox + button EXACT | fallback returns True |
-| `test_detect_fallback_matches_substring_title_titlecase` | XML с `text="Music Usage Rights Confirmation"` + checkbox + button EXACT (Codex round 1, P2#4: case-insensitive) | fallback returns True |
-| `test_detect_fallback_no_button_no_match` | XML с substring но без `Опубликовать видео`/`Publish video` button-node | fallback returns False |
+| `test_detect_fallback_matches_substring_title_lowercase` | XML с `text="music usage rights confirmation"` + checkbox-label EXACT + button EXACT + bounds overlap | fallback returns True |
+| `test_detect_fallback_matches_substring_title_titlecase` | XML с `text="Music Usage Rights Confirmation"` + checkbox-label + button EXACT (Codex round 1, P2#4: case-insensitive) | fallback returns True |
+| `test_detect_fallback_no_button_no_match` | XML с substring + checkbox-label но без button-node EXACT | fallback returns False |
+| `test_detect_fallback_no_checkbox_label` | XML с substring + button EXACT но без _CHECKBOX EXACT label (только generic checkbox) | fallback returns False (Codex round 2, P1#1: generic-checkbox path удалён — false-positive risk) |
+| `test_detect_fallback_bounds_not_in_same_dialog` | XML с substring + checkbox-label + button EXACT, но bounds **далеко** (>200px по Y) | fallback returns False (Codex round 2, P1#1: structural single-dialog requirement) |
 | `test_detect_fallback_no_substring` | XML без указанных substring'ов | fallback returns False |
 | `test_evidence_only_substring_no_button_triggers_dump` | XML с substring 'music rights' + generic checkbox, без EXACT button | `_detect_evidence_only` returns True; handler dump'ит XML с suffix `button_changed_suspect`; возвращает False |
 | `test_strict_still_primary` | EXACT title XML | strict returns True; fallback не вызывается |
 | `test_handle_with_fallback_writes_dump` | mock fallback match + `tmp_path` для dump | XML файл создаётся; log_event с `matched_via='fallback'`; filename содержит timestamp |
 | `test_handle_creates_dump_dir_if_missing` | удалить `/tmp/autowarm_ui_dumps/` перед вызовом + mock fallback match | dump-файл создан, директория создана автоматически (Codex round 1, P2#7) |
-| `test_post_music_rights_success_requires_two_iters_streak` | mock: iter+2 single good observation (`MainActivity`, без composer) | streak=1, `upload_confirmed=False`. На iter+3 второй good → streak=2 → `upload_confirmed=True` (Codex round 1, P1#2) |
-| `test_post_music_rights_streak_resets_on_bad_iter` | mock: iter+2 good, iter+3 composer обратно → iter+4 good | streak=1→0→1; не triggers success на одиночном good (защита от транзита) |
+| `test_post_music_rights_success_requires_three_iters_streak` | mock: iter+3 single good observation | streak=1, `upload_confirmed=False`. На iter+4 streak=2, iter+5 streak=3 → success (Codex round 2, P1#2: 3-iter threshold) |
+| `test_post_music_rights_streak_resets_on_bad_iter` | mock: iter+3 good, iter+4 composer обратно → iter+5 good | streak=1→0→1; не triggers success (защита от транзита) |
 | `test_post_music_rights_failure_hint_blocks_success` | mock: `MainActivity` есть, composer нет, но в ui есть `'Не удалось опубликовать'` | `is_good_iter=False`, streak=0 (Codex round 1, P1#2: failure-toast guard) |
+| `test_post_music_rights_upload_in_progress_blocks_success` | mock: `MainActivity` + 'Загружается' в ui | `is_good_iter=False` (Codex round 2, P1#2: queued state guard) |
 | `test_post_music_rights_no_success_composer_on_stack` | mock: `MainActivity` + `SAASceneWrapperActivity` в стеке | success-check не triggers |
 | `test_post_music_rights_no_success_tiktok_not_active` | mock: `tiktok_active=False` | success-check не triggers |
-| `test_post_music_rights_iters_since_below_2_skipped` | mock: iter+1, всё «good» | streak не инкрементируется (минимум iter+2 — Codex round 1, P1#2) |
-| `test_post_music_rights_dump_at_iters_with_timestamp` | mock: проходим iter 1,3,5; `TT_DUMP_POST_MUSIC_RIGHTS_XML=true` | dump-файлы созданы для каждого; filename содержит timestamp (Codex round 1, P3#9) |
+| `test_post_music_rights_iters_since_below_3_skipped` | mock: iter+1 и iter+2, всё «good» | streak не инкрементируется (минимум iter+3 — Codex round 2, P1#2) |
+| `test_post_music_rights_dump_at_iters_with_ms_timestamp_uuid` | mock: проходим iter 1,3,5; `TT_DUMP_POST_MUSIC_RIGHTS_XML=true` | dump-файлы созданы для каждого; filename содержит ms-timestamp + uuid suffix (Codex round 1, P3#9 + round 2, P3#1) |
 | `test_dump_flag_off_no_writes` | `TT_DUMP_POST_MUSIC_RIGHTS_XML=false` (default) | dump-файлы не создаются — соответствует «flag=false = current prod» (Codex round 1, P1#1) |
 | `test_feature_flag_off_fallback_skipped` | `TT_MUSIC_RIGHTS_FALLBACK_ENABLED=false` | fallback не вызывается даже при substring match; evidence-only тоже не вызывается |
 | `test_feature_flag_off_post_music_rights_skipped` | `TT_POST_MUSIC_RIGHTS_DETECTION_ENABLED=false` | activity-check не triggers |
@@ -349,18 +367,49 @@ Default `false` (Codex round 1, P1#1) — opt-in активация в rollout s
 
 ### Прод-rollout
 
-1. Deploy кода с **обоими** flag'ами `false`. Smoke green (тесты pass).
-2. Включить `TT_DUMP_POST_MUSIC_RIGHTS_XML=true` (default — уже true, но verify). Накапливаем XML evidence 1-2 часа на любом publish который пройдёт music-rights handler successfully.
-3. Включить `TT_MUSIC_RIGHTS_FALLBACK_ENABLED=true`.
-4. Включить `TT_POST_MUSIC_RIGHTS_DETECTION_ENABLED=true`.
+**Активация env-vars — через `.env` файл + `pm2 restart --update-env`** (Codex round 2, P2#2: `pm2 set` устанавливает PM2-global, НЕ `os.environ` для процессов; код читает `os.environ`, поэтому нужно либо `.env` через ecosystem-config dotenv loader, либо явный `restart --update-env`).
+
+Точные шаги:
+
+1. Deploy кода с **тремя** flag'ами `false` (defaults). Smoke green (pytest pass).
+2. Активировать инструментацию:
+   ```bash
+   cd /root/.openclaw/workspace-genri/autowarm
+   # добавить строку в .env (создать если нет):
+   echo "TT_DUMP_POST_MUSIC_RIGHTS_XML=true" >> .env
+   pm2 restart autowarm --update-env
+   ```
+   Накапливаем XML evidence 1-2 часа на любом publish который пройдёт music-rights handler successfully.
+3. Включить fallback matcher:
+   ```bash
+   echo "TT_MUSIC_RIGHTS_FALLBACK_ENABLED=true" >> .env
+   pm2 restart autowarm --update-env
+   ```
+4. Включить post-music-rights success-check:
+   ```bash
+   echo "TT_POST_MUSIC_RIGHTS_DETECTION_ENABLED=true" >> .env
+   pm2 restart autowarm --update-env
+   ```
 5. Мониторинг 4-6 часов:
-   - Считаем events: `tt_music_rights_fallback_match`, `tt_upload_confirmed_post_music_rights`.
-   - Не должно быть `tt_upload_confirmation_timeout` сразу после `tt_music_rights_accepted=true`.
-   - Считаем false-positive: `tt_upload_confirmed_post_music_rights` но task с downstream `publish_failed_*` (= мы зафиксировали success там где не было).
+   - Считаем events: `tt_music_rights_fallback_match`, `tt_upload_confirmed_post_music_rights`, `tt_music_rights_button_changed_suspect`.
+   - Targeted query (Codex round 2, P2#3 — refined gate, не задеваемый unrelated timeouts):
+     ```sql
+     -- task'и с successful accept + последующим timeout БЕЗ промежуточного
+     -- UPLOAD_OK event'а. Этот subset = RC-B fail; ожидание = 0.
+     SELECT id FROM publish_tasks
+     WHERE platform='TikTok' AND created_at > NOW() - INTERVAL '24 hours'
+       AND error_code='tt_upload_confirmation_timeout'
+       AND events @> '[{"meta": {"category": "tt_music_rights_accepted"}}]'::jsonb
+       AND NOT EXISTS (
+         SELECT 1 FROM jsonb_array_elements(events) e
+         WHERE e->'meta'->>'category' LIKE 'tt_upload_confirmed%'
+       );
+     ```
+   - Считаем false-positive: `tt_upload_confirmed_post_music_rights` но task потом завершилась как `publish_failed_*` или контент не появился в feed'е → false-positive.
 
 ### Если за 6 часов 0 успехов через post-music-rights detection и >=1 fallback-match XML сохранён
 
-Exit rollout, читаем XML, итерируем дизайн на основе реальных данных (второй раунд: расширение activity list или новые UPLOAD_OK markers).
+Exit rollout, читаем XML, итерируем дизайн на основе реальных данных (расширение activity list / UPLOAD_OK markers / button-text константы).
 
 ---
 
