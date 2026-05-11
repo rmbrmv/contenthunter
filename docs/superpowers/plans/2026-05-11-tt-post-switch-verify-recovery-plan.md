@@ -274,47 +274,46 @@ Note: Recovery должно быть вставлено ВНУТРИ existing `i
 # ─── Recovery flow в TT-caller tests ────────────────────────────────────────
 
 
-def _build_switcher_for_recovery(verify_results, feed_xml, navigate_returns=True):
+def _build_switcher_for_recovery(post_renav_verify_results, feed_xml,
+                                  navigate_returns=True):
     """Build AccountSwitcher с моками для recovery-path тестов.
 
-    verify_results: list of ('match'/'mismatch'/'unknown', current) — возвращается
-                    последовательно при каждом вызове _post_switch_verify_handle.
-    feed_xml:       XML строка для _is_tt_feed_after_pick (mock _make_xml_with).
-    navigate_returns: возвращаемое значение _navigate_to_profile_tab.
+    NOTE: `_tt_handle_post_switch_unknown` вызывается ПОСЛЕ того как caller
+    уже observe initial unknown. То есть helper делает РОВНО 1 verify call
+    (после navigate+re-dump). `post_renav_verify_results` — list с этим
+    одним результатом (e.g. [('match', 'targetuser')]). Для non-feed
+    test'а side_effect должен быть пустым (verify не вызывается).
     """
     sw = AccountSwitcher.__new__(AccountSwitcher)
     sw.p = MagicMock()
-    sw.p.dump_ui = MagicMock(side_effect=[feed_xml, feed_xml])  # initial + post-renav
+    sw.p.dump_ui = MagicMock(return_value=feed_xml)  # post-renav re-dump
     sw.p.log_event = MagicMock()
     sw._save_dump = MagicMock()
     sw._maybe_screenshot = MagicMock()
     sw._fail = MagicMock(return_value=False)
     sw._navigate_to_profile_tab = MagicMock(return_value=navigate_returns)
-    sw._post_switch_verify_handle = MagicMock(side_effect=verify_results)
+    sw._post_switch_verify_handle = MagicMock(side_effect=post_renav_verify_results)
     return sw
 
 
 def test_unknown_with_feed_triggers_navigate_and_renav_match():
-    """unknown + feed-markers + renav match → success path + recovered event."""
+    """feed-markers + renav match → ('recovered', current) + recovered event."""
     feed_xml = _make_xml_with([
         ('[100,96][300,200]', 'Смотреть', ''),
         ('[300,96][500,200]', 'Подписки', ''),
         ('[500,96][700,200]', 'Рекомендации', ''),
     ])
     sw = _build_switcher_for_recovery(
-        verify_results=[('unknown', None), ('match', 'targetuser')],
+        post_renav_verify_results=[('match', 'targetuser')],
         feed_xml=feed_xml,
     )
-    # Invoke the slice of _handle_tt_account_switch that runs the recovery.
-    # Implementation detail: helper method `_tt_handle_post_switch_unknown` that we'll
-    # extract for testability (see Step 3).
-    result = sw._tt_handle_post_switch_unknown(
+    outcome, current = sw._tt_handle_post_switch_unknown(
         target='targetuser', xml_after_pick=feed_xml,
         header_y_max=260, label='tt_4_target_profile', attempt=0,
     )
-    assert result == 'recovered'
+    assert outcome == 'recovered'
+    assert current == 'targetuser'
     assert sw._navigate_to_profile_tab.call_count == 1
-    # Check that recovered event was emitted
     emitted_categories = [
         call.kwargs.get('meta', {}).get('category')
         for call in sw.p.log_event.call_args_list
@@ -324,60 +323,64 @@ def test_unknown_with_feed_triggers_navigate_and_renav_match():
 
 
 def test_unknown_with_feed_renav_still_unknown_fails():
-    """unknown + feed + renav still unknown → _fail с tt_post_switch_verify_unrecoverable."""
+    """feed + renav still unknown → _fail + ('failed', None)."""
     feed_xml = _make_xml_with([
         ('[100,96][300,200]', 'Смотреть', ''),
         ('[300,96][500,200]', 'Подписки', ''),
         ('[500,96][700,200]', 'Рекомендации', ''),
     ])
     sw = _build_switcher_for_recovery(
-        verify_results=[('unknown', None), ('unknown', None)],
+        post_renav_verify_results=[('unknown', None)],
         feed_xml=feed_xml,
     )
-    result = sw._tt_handle_post_switch_unknown(
+    outcome, current = sw._tt_handle_post_switch_unknown(
         target='targetuser', xml_after_pick=feed_xml,
         header_y_max=260, label='tt_4_target_profile', attempt=0,
     )
-    assert result == 'failed'
+    assert outcome == 'failed'
+    assert current is None
     sw._fail.assert_called_once()
     fail_msg = sw._fail.call_args.args[0]
     assert 'tt_post_switch_verify_unrecoverable' in fail_msg
 
 
 def test_unknown_with_feed_renav_mismatch_falls_through():
-    """unknown + feed + renav mismatch → возвращает 'mismatch' (caller обработает retry)."""
+    """feed + renav mismatch → ('mismatch', renav_current). caller обработает retry."""
     feed_xml = _make_xml_with([
         ('[100,96][300,200]', 'Смотреть', ''),
         ('[300,96][500,200]', 'Подписки', ''),
         ('[500,96][700,200]', 'Рекомендации', ''),
     ])
     sw = _build_switcher_for_recovery(
-        verify_results=[('unknown', None), ('mismatch', 'otheruser')],
+        post_renav_verify_results=[('mismatch', 'otheruser')],
         feed_xml=feed_xml,
     )
-    result = sw._tt_handle_post_switch_unknown(
+    outcome, current = sw._tt_handle_post_switch_unknown(
         target='targetuser', xml_after_pick=feed_xml,
         header_y_max=260, label='tt_4_target_profile', attempt=0,
     )
-    assert result == 'mismatch'
+    assert outcome == 'mismatch'
+    assert current == 'otheruser'
     sw._fail.assert_not_called()
 
 
 def test_unknown_non_feed_fails_immediately():
-    """unknown без feed-markers → _fail сразу, без navigate."""
+    """no feed-markers → _fail сразу, без navigate, без verify call."""
     no_feed_xml = _make_xml_with([
         ('[100,1500][300,1600]', 'Loading', ''),  # ниже header
     ])
     sw = _build_switcher_for_recovery(
-        verify_results=[('unknown', None)],
+        post_renav_verify_results=[],  # verify должен НЕ вызываться
         feed_xml=no_feed_xml,
     )
-    result = sw._tt_handle_post_switch_unknown(
+    outcome, current = sw._tt_handle_post_switch_unknown(
         target='targetuser', xml_after_pick=no_feed_xml,
         header_y_max=260, label='tt_4_target_profile', attempt=0,
     )
-    assert result == 'failed'
+    assert outcome == 'failed'
+    assert current is None
     sw._navigate_to_profile_tab.assert_not_called()
+    sw._post_switch_verify_handle.assert_not_called()
     fail_msg = sw._fail.call_args.args[0]
     assert 'tt_post_switch_verify_unrecoverable' in fail_msg
     assert 'non-feed' in fail_msg.lower()
@@ -399,7 +402,7 @@ Expected: 4 FAILED — `AttributeError: ... '_tt_handle_post_switch_unknown'`.
 ```python
     def _tt_handle_post_switch_unknown(self, target: str, xml_after_pick: str,
                                        header_y_max: int, label: str,
-                                       attempt: int) -> str:
+                                       attempt: int) -> tuple:
         """[tt_post_switch_renav 2026-05-11] Recovery для unknown verify status.
 
         После того как `_post_switch_verify_handle` вернул unknown в TT
@@ -407,14 +410,18 @@ Expected: 4 FAILED — `AttributeError: ... '_tt_handle_post_switch_unknown'`.
           1. Детектим TT feed-top-bar в первичном XML.
           2. Если feed → log + navigate-to-profile + re-dump + re-verify.
           3. По re-verify результату:
-             - match    → лог recovered_via_renav, return 'recovered' (caller breaks)
-             - mismatch → return 'mismatch' (caller продолжает в existing
+             - match    → лог recovered_via_renav, return ('recovered', current)
+             - mismatch → return ('mismatch', current) (caller обновляет
+                          status/current и проваливается в existing
                           mismatch-handler с MAX_PICK_ATTEMPTS retry)
-             - unknown  → _fail с tt_post_switch_verify_unrecoverable
+             - unknown  → _fail с tt_post_switch_verify_unrecoverable,
+                          return ('failed', None)
           4. Если в первичном XML feed-markers НЕТ (FLAG_SECURE / sparse /
-             непредвиденный UI) → _fail сразу без navigate.
+             непредвиденный UI) → _fail сразу без navigate,
+             return ('failed', None).
 
-        Returns: 'recovered' | 'mismatch' | 'failed'.
+        Returns: tuple[outcome: str, current: Optional[str]]
+                 outcome ∈ {'recovered', 'mismatch', 'failed'}.
         """
         is_feed = self._is_tt_feed_after_pick(xml_after_pick, header_y_max)
         if not is_feed:
@@ -424,7 +431,7 @@ Expected: 4 FAILED — `AttributeError: ... '_tt_handle_post_switch_unknown'`.
                 f'(target={target!r})',
                 step=label,
             )
-            return 'failed'
+            return ('failed', None)
 
         # Feed-after-pick — известное regression в новом TT UX.
         self.p.log_event(
@@ -447,17 +454,18 @@ Expected: 4 FAILED — `AttributeError: ... '_tt_handle_post_switch_unknown'`.
                       'target': target, 'current': current,
                       'attempt': attempt + 1},
             )
-            return 'recovered'
+            return ('recovered', current)
         if status == 'mismatch':
-            # Caller продолжит в existing mismatch-handler retry loop.
-            return 'mismatch'
+            # Caller обновит локальные status='mismatch' / current=current
+            # и провалится в existing mismatch-handler retry loop.
+            return ('mismatch', current)
         # status == 'unknown' — recovery не удался.
         self._fail(
             f'tt_post_switch_verify_unrecoverable: no profile after re-nav '
             f'(target={target!r})',
             step=f'{label}_renav',
         )
-        return 'failed'
+        return ('failed', None)
 ```
 
 - [ ] **Step 5: Run tests, verify all 4 recovery tests green**
@@ -504,7 +512,7 @@ Expected: 9 PASSED (5 helper + 4 recovery).
                           'step': label,
                           'attempt': attempt + 1},
                 )
-                outcome = self._tt_handle_post_switch_unknown(
+                outcome, recovered_current = self._tt_handle_post_switch_unknown(
                     target=target, xml_after_pick=xml_after_pick,
                     header_y_max=header_y_max, label=label, attempt=attempt,
                 )
@@ -512,23 +520,16 @@ Expected: 9 PASSED (5 helper + 4 recovery).
                     break
                 if outcome == 'failed':
                     return False
-                # outcome == 'mismatch' — continue в existing mismatch handler
-                # ниже (line 2289+), update current to renav-current?
-                # Note: existing mismatch handler reads `current` from the SAME
-                # scope — for falls-through correctness, we need to update
-                # `current` after recovery. Implementation detail: пересохранить
-                # current через nonlocal или вернуть из recovery вместе с status.
-                # Simplest: повторить _post_switch_verify_handle на свежий dump
-                # в mismatch-path. Уже сейчас этот path делает retry через
-                # _find_and_tap_account loop.
-                # Поскольку наш recovery emit'нул event, и outcome=mismatch
-                # значит re-verify дал mismatch ≡ existing handler работает.
-                pass  # fall through to mismatch handler
+                # outcome == 'mismatch' — recovered re-verify дал mismatch.
+                # Update local status+current так чтобы existing mismatch
+                # handler ниже (line 2289+) увидел actual mismatch state
+                # и сделал retry pick через MAX_PICK_ATTEMPTS.
+                status = 'mismatch'
+                current = recovered_current
+                # fall through to existing mismatch handler ниже
 ```
 
-Note: outcome=`'mismatch'` означает что после navigate мы РЕАЛЬНО на чужом профиле. Существующий mismatch-handler ниже (line 2289+) сделает retry pick через `MAX_PICK_ATTEMPTS`. Variable `current` для mismatch-handler нужен — но он перезаписывается на следующей итерации через `xml_after_pick = self.p.dump_ui()` и второй `_post_switch_verify_handle(...)` (или handler сразу делает retry pick без чтения current).
-
-ПРОВЕРКА на этом шаге (если есть concern о scope): прочитать lines 2289-2330 (mismatch handler), убедиться что `current` берётся из локальной переменной (не нужно update после recovery).
+> Note: после wire-in проверить lines 2289+ (mismatch handler): он использует `status`, `current`, `is_final = attempt == MAX_PICK_ATTEMPTS - 1`. Все эти переменные теперь корректны после нашего update. Если handler делает `if status == 'mismatch':` — наш `status = 'mismatch'` его engage; если он сразу падает в `if status == 'unknown':` (т.е. порядок проверок такой что unknown-ветка должна return до mismatch-проверки), то fall-through через `# (после wire-in) mismatch handler runs next` — корректно, поскольку мы только что вышли из `if status == 'unknown':` branch.
 
 - [ ] **Step 7: Run full file's test suite (no regression in adjacent tests)**
 
