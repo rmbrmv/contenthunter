@@ -144,6 +144,28 @@ describe('calcDashboardRange — Europe/Moscow (UTC+3 fixed)', () => {
     );
   });
 
+  test('custom: to > today + 60 days → throws (per-date cutoff)', () => {
+    // today MSK = 2026-05-11; cutoff = 2026-07-10 (60 days later).
+    assert.throws(
+      () => calcDashboardRange('custom', '2026-05-01', '2099-01-01', Date.UTC(2026, 4, 11)),
+      /within \d+ days of today/
+    );
+  });
+
+  test('custom: from > today + 60 days → throws (per-date cutoff)', () => {
+    assert.throws(
+      () => calcDashboardRange('custom', '2099-01-01', '2099-01-02', Date.UTC(2026, 4, 11)),
+      /within \d+ days of today/
+    );
+  });
+
+  test('custom: to == today + 60 days exactly → OK', () => {
+    // today = 2026-05-11 MSK; +60 = 2026-07-10. Должно пройти.
+    const r = calcDashboardRange('custom', '2026-05-11', '2026-07-10', Date.UTC(2026, 4, 11));
+    assert.equal(r.preset, 'custom');
+    assert.equal(r.to.toISOString(), '2026-07-10T21:00:00.000Z'); // 2026-07-11 00:00 MSK
+  });
+
   test('custom: invalid format → throws', () => {
     assert.throws(
       () => calcDashboardRange('custom', '05/11/2026', '2026-05-11', Date.UTC(2026, 4, 11)),
@@ -328,6 +350,13 @@ function calcDashboardRange(preset, fromStr, toStr, nowMs = Date.now()) {
     if (fromMsk >= toMsk) throw new Error('from must be <= to');
     if (toMsk - fromMsk > MAX_DASHBOARD_RANGE_DAYS * DAY_MS) {
       throw new Error('range too large (max ' + MAX_DASHBOARD_RANGE_DAYS + ' days)');
+    }
+    // Per-date future cutoff (spec §3.1): обе даты ≤ today + 60 дней (MSK).
+    // dayMsMsk = MSK 00:00 сегодня (см. выше). Cutoff = +60 дней.
+    const cutoffStartMsk = dayMsMsk + MAX_DASHBOARD_RANGE_DAYS * DAY_MS;     // 00:00 (today+60)
+    const cutoffEndExclMsk = cutoffStartMsk + DAY_MS;                        // конец дня (today+60)
+    if (fromMsk > cutoffStartMsk || toMsk > cutoffEndExclMsk) {
+      throw new Error('dates must be within ' + MAX_DASHBOARD_RANGE_DAYS + ' days of today');
     }
     return {
       preset: 'custom',
@@ -681,11 +710,7 @@ Spec: docs/superpowers/specs/2026-05-11-publishing-dashboard-design.md
 
 (Точный паттерн: вставить `'publishing-dashboard': 'publishing',` среди остальных `publishing-*` ключей в этом объекте.)
 
-- [ ] Найти функцию `nav(section)` (около строки 3918). Найти список обработчиков типа `if (section === 'publishing') loadUnifiedPublish();` (~строка 3966). Добавить ниже:
-
-```javascript
-  if (section === 'publishing-dashboard') loadPublishingDashboard();
-```
+**Важно:** в этой Task'е НЕ добавляем `if (section === 'publishing-dashboard') loadPublishingDashboard();` в `nav()` — функция `loadPublishingDashboard` появится только в Task 4 (stub) / Task 5 (real). Без неё в Task 3 секция отображается пустыми tile'ами (без JS-ошибок). Авто-load пропишем в Task 4.
 
 - [ ] Найти `if (section === 'publishing-queue') { nav('publishing'); return; }` (около строки 3997). Активного редиректа на publishing-dashboard НЕ добавляем — секция самостоятельная.
 
@@ -719,7 +744,9 @@ Tiles + custom-range UI без data-load пока (Task 5 заполнит JS).
 **Files:**
 - Modify: `/root/.openclaw/workspace-genri/autowarm/public/index.html`
 
-### Step 1: Add JS state + switchDashboardPreset
+### Step 1: Add JS state + stub loader + switchDashboardPreset + nav handler
+
+**Важно:** Сначала **stub `loadPublishingDashboard`** (чтобы ссылки из `switchDashboardPreset` и nav-handler'а не падали ReferenceError). Реальная имплементация заменит stub в Task 5.
 
 - [ ] Найти область в `<script>` блоке, где определены подобные state-переменные (например `_upCurrentTab` около строки 10681). Добавить рядом или в новый scope:
 
@@ -728,6 +755,14 @@ Tiles + custom-range UI без data-load пока (Task 5 заполнит JS).
 let _dashCurrentPreset = 'today';
 let _dashCustomFrom = null;
 let _dashCustomTo = null;
+
+// STUB — заменяется реальной имплементацией в Task 5.
+// Существует, чтобы switchDashboardPreset и nav-handler не падали ReferenceError
+// в промежуточных коммитах (auto-push hook отправляет каждый commit live).
+function loadPublishingDashboard() {
+  const el = document.getElementById('dash-range-display');
+  if (el) el.textContent = 'Готовлю данные…';
+}
 
 function switchDashboardPreset(preset) {
   _dashCurrentPreset = preset;
@@ -742,12 +777,17 @@ function switchDashboardPreset(preset) {
   // Custom-range визуальность
   const custom = document.getElementById('dash-custom-range');
   if (custom) custom.classList.toggle('hidden', preset !== 'custom');
-  // URL state
+
+  // URL state + auto-load.
+  // Для custom: если дате уже выбраны (restore из bookmark) — грузим сразу,
+  // иначе ждём applyDashboardCustom после ввода дат.
   if (preset !== 'custom') {
     setSubParam('dash:' + preset);
     loadPublishingDashboard();
+  } else if (_dashCustomFrom && _dashCustomTo) {
+    setSubParam('dash:custom:' + _dashCustomFrom + ':' + _dashCustomTo);
+    loadPublishingDashboard();
   } else {
-    // custom — ждём applyDashboardCustom
     setSubParam('dash:custom');
   }
 }
@@ -771,6 +811,14 @@ function applyDashboardCustom() {
   loadPublishingDashboard();
 }
 ```
+
+- [ ] Найти функцию `nav(section)` (около строки 3918) и список handlers (~3966) после `if (section === 'publishing') loadUnifiedPublish();`. Добавить:
+
+```javascript
+  if (section === 'publishing-dashboard') loadPublishingDashboard();
+```
+
+Теперь это безопасно — `loadPublishingDashboard` определён выше как stub.
 
 ### Step 2: Smoke in browser — preset toggling без данных
 
@@ -803,9 +851,9 @@ loadPublishingDashboard() пока stub — данные в Task 5.
 **Files:**
 - Modify: `/root/.openclaw/workspace-genri/autowarm/public/index.html`
 
-### Step 1: Add load function + renderers
+### Step 1: Replace stub + add renderers
 
-- [ ] Добавить в `<script>` блок (рядом с `switchDashboardPreset`):
+- [ ] В `<script>` блоке заменить stub `function loadPublishingDashboard() { ... }` из Task 4 на полную имплементацию ниже + добавить renderers + helpers (рядом с заменённой функцией):
 
 ```javascript
 const DASH_BUCKET_LABELS = [
