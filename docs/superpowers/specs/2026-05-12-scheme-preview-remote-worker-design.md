@@ -292,7 +292,7 @@ ALTER TABLE unic_tasks DROP COLUMN payload_hash, DROP COLUMN task_type;
 | Validator → DB INSERT | Postgres down | endpoint 503 → frontend toast «Сервис недоступен» (стандарт axios.error path) |
 | UniqueViolation (dedup race) | Два запроса с одинаковым hash в один миллисек | catch IntegrityError → SELECT existing → return `joined_existing:true` |
 | Worker не подхватил за 30 сек | Worker upal/PM2 stopped | Validator при `phase='pending' AND age(created_at) > 30s` возвращает `phase='queue_delayed'`. UI badge «Воркер занят, очередь» |
-| Worker подхватил, упал в processing | `current_status='processing'` + `updated_at < NOW() - 15 min` | Watchdog cron на worker'е (5-мин interval): UPDATE обратно в `pending` + revert_count в meta. Limit 3 revert'ов, дальше остаётся processing для расследования |
+| Worker подхватил scheme_preview, упал в processing | `task_type='scheme_preview' AND current_status='processing' AND updated_at < NOW() - 15 min` | Watchdog cron на worker'е (5-мин interval): UPDATE обратно в `pending` + revert_count в meta. Limit 3 revert'ов, дальше остаётся processing для расследования. **Только scheme_preview** — legacy unic-задачи watchdog не трогает (одна сложная схема может рендериться >15 мин без обновления `updated_at`; пере-requeue вызвал бы duplicate processing). Для legacy unic — отдельный backlog (heartbeat внутри рендера, либо exclusion как сейчас). |
 | ffmpeg returncode != 0 на схеме | Одна из N схем не отрендерилась | meta.scheme_errors[sid] = stderr_tail, продолжает оставшиеся. Финал — `done` если хоть одна успешна, `error` если все упали |
 | S3 upload failed | beget недоступен | `upload_to_s3` retry=5 backoff [3,9,15,21,27]s (worker.py:48). После 5 — схема в meta error |
 | Source video URL 404 | sample/overlay/logo умерли | `_download_file_sync` retry=3 с backoff. Если не скачалось — `current_status='error'`, error_message = `Failed to download sample video from {url[:80]}` |
@@ -319,7 +319,7 @@ async def stale_task_recovery_loop(pool):
                            )
                      WHERE current_status='processing'
                        AND updated_at < NOW() - INTERVAL '15 minutes'
-                       AND task_type IN ('unic', 'scheme_preview')
+                       AND task_type = 'scheme_preview'  -- legacy unic исключаем (см. Open Q + Out of scope)
                        AND COALESCE((meta->>'watchdog_revert_count')::int, 0) < 3
                     RETURNING id, task_type, (meta->>'watchdog_revert_count')::int as revert_count
                 """)
@@ -429,6 +429,7 @@ async def stale_task_recovery_loop(pool):
 5. Multi-worker horizontal scale — architecturally разрешено через `FOR UPDATE SKIP LOCKED`, но не deploy'им второй worker.
 6. TG-нотификация при watchdog 3-revert — пока только лог.
 7. Cancel-on-supersede для `processing` — только pending superseded'ятся.
+8. Watchdog для legacy unic-задач — намеренно НЕ включаем в этом spec. Legacy `process_task` может рендерить одну тяжёлую схему >15 мин без heartbeat'а на `updated_at`, и watchdog-revert вызвал бы duplicate processing (P1 от codex review). Чтобы включить watchdog для unic — нужен сначала heartbeat (периодический `UPDATE updated_at=NOW()` каждые ~30s внутри рендера). Отдельный backlog.
 
 ---
 
