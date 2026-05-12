@@ -73,6 +73,8 @@
 - Источник истины статуса — таблица в БД, не in-memory `_generation_status`. Переживает любые рестарты.
 - Worker и validator общаются **только через БД**. Никаких HTTP/RPC между ними. Postgres гарантирует ACID и порядок.
 - `FOR UPDATE SKIP LOCKED` (как в существующем `get_pending_task`) даёт корректность для multiple worker-instances в будущем.
+- **Per-project processing guard** в polling-запросе: воркер не подхватывает scheme_preview-task если в том же `project_id` уже есть один `processing`. Это исключает stale-overwrite сценарий (см. Data flow / per-project guard).
+- **Last-write-wins по task_id** на UPSERT в `validator_scheme_previews`: writer пишет свой `last_task_id`, UPSERT отказывается если в строке уже более новый task_id. Defense in depth даже если guard сломается.
 
 ---
 
@@ -237,7 +239,60 @@ WHERE task_type='scheme_preview' AND current_status IN ('pending','processing');
 
 - Двойной клик → тот же `task_id`, один progress bar.
 - Менеджер сменил setup и жмёт ещё раз, пока первая `pending` → старая → `superseded`, новая → `pending`. UI polls «последнюю» → видит новую с progress=0.
-- Если первая уже `processing` — она доработает (cancel-on-supersede не в этом scope). Новая встаёт в `pending` рядом. Когда `processing` завершится — старые preview обновятся в `validator_scheme_previews`, потом worker возьмёт новую с актуальным payload и перезапишет.
+- Если первая уже `processing` — она доработает. Новая встаёт в `pending` рядом. **Per-project guard** (см. ниже) не даст worker'у подхватить новую пока первая в processing → нет параллельного рендера одного project'a → нет race на S3/DB. Когда первая завершится — worker подхватит новую и перепишет previews актуальным payload'ом.
+
+### Per-project processing guard
+
+Полинг-запрос воркера для scheme_preview расширяется условием «нет уже-processing-task'a того же project»:
+
+```sql
+UPDATE unic_tasks
+   SET current_status='processing', updated_at=NOW()
+ WHERE id = (
+   SELECT t.id
+     FROM unic_tasks t
+    WHERE t.current_status = 'pending'
+      AND (
+            t.task_type = 'unic'  -- legacy: без guard
+            OR (
+              t.task_type = 'scheme_preview'
+              AND NOT EXISTS (
+                SELECT 1 FROM unic_tasks p
+                 WHERE p.task_type = 'scheme_preview'
+                   AND p.project_id = t.project_id
+                   AND p.current_status = 'processing'
+              )
+            )
+          )
+    ORDER BY t.id ASC
+    LIMIT 1
+    FOR UPDATE SKIP LOCKED
+ )
+RETURNING *;
+```
+
+Эффект: при concurrent supersede-INSERT'е (POST B пока A в processing) воркер увидит pending B, но не подхватит — у того же project уже есть processing A. Когда A завершится → следующий poll-tick подхватит B. Stale-overwrite невозможен.
+
+### Last-write-wins UPSERT (defense in depth)
+
+Если по какой-то причине guard сломается (например watchdog revert вернёт стародавнее task в pending, и оно перегонит свежее по id) — добавляем второй слой защиты на UPSERT'е в `validator_scheme_previews`:
+
+```sql
+ALTER TABLE validator_scheme_previews
+  ADD COLUMN last_task_id BIGINT NULL;
+
+INSERT INTO validator_scheme_previews (scheme_id, project_id, thumb_url, video_url, last_task_id, generated_at)
+VALUES (:sid, :pid, :thumb, :video, :task_id, NOW())
+ON CONFLICT (scheme_id, project_id) DO UPDATE
+   SET thumb_url       = EXCLUDED.thumb_url,
+       video_url       = EXCLUDED.video_url,
+       last_task_id    = EXCLUDED.last_task_id,
+       generated_at    = NOW()
+ WHERE validator_scheme_previews.last_task_id IS NULL
+    OR validator_scheme_previews.last_task_id < EXCLUDED.last_task_id;
+```
+
+Если строка уже содержит `last_task_id > :task_id` (стало быть свежее запись от более нового task'a) — UPSERT WHERE false, изменения не вносятся, старая overwrite не происходит. Скрытая регрессия маркируется в worker logs: `logger.warning(f'[scheme_preview] task {task_id} skipped UPSERT for scheme {sid} — newer task already wrote')`.
 
 ### S3 bucket decision
 
@@ -271,6 +326,12 @@ CREATE INDEX idx_unic_tasks_polling
 
 CREATE INDEX idx_unic_tasks_project_type
   ON unic_tasks (project_id, task_type, id DESC);
+
+-- Defense-in-depth: last-write-wins guard на validator_scheme_previews
+ALTER TABLE validator_scheme_previews
+  ADD COLUMN last_task_id BIGINT NULL;
+-- legacy строки получают NULL → первый UPSERT с любым task_id перепишет
+-- (WHERE last_task_id IS NULL OR < EXCLUDED.last_task_id)
 
 -- Если current_status имеет CHECK constraint — расширить его на 'superseded'.
 -- (verified во время миграции через \d+ unic_tasks; на момент design — в БД
@@ -418,6 +479,8 @@ async def stale_task_recovery_loop(pool):
 10a. **`test_heartbeat_keeps_updated_at_fresh.py`** — INSERT processing-задачу. Запустить `heartbeat_loop` на 75 сек (3 heartbeat-tick'a). Assert: `updated_at` обновился минимум 2 раза (NOW() приближён к концу теста). После `stop.set()` heartbeat останавливается.
 10b. **`test_heartbeat_no_update_after_status_change.py`** — INSERT processing → пока heartbeat работает, внешний UPDATE status='done'. Следующий heartbeat tick не должен возвращать `updated_at` ниже (WHERE current_status='processing' guard).
 10c. **`test_watchdog_does_not_requeue_active_with_heartbeat.py`** — параллельно: heartbeat_loop активен, watchdog tick через 16 мин. Watchdog не должен requeue (т.к. heartbeat держит `updated_at` свежим).
+10d. **`test_per_project_guard_prevents_concurrent_pickup.py`** — INSERT pending #1 → worker pickup → processing. INSERT pending #2 того же project. Next poll-tick → НЕ должен подхватить #2 (guard видит processing #1). После UPDATE #1='done' → next poll берёт #2.
+10e. **`test_last_task_id_blocks_stale_overwrite.py`** — pre-INSERT в `validator_scheme_previews` строку с `last_task_id=200`. Симуляция: старый task #150 пытается UPSERT — должен быть NO-OP (WHERE last_task_id < EXCLUDED.last_task_id false). Старые thumb_url/video_url не перезаписываются.
 
 ### Integration smoke (manual, после deploy)
 
