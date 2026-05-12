@@ -115,7 +115,7 @@
 **Меняется:**
 
 - `POST /api/schemes/{id}/generate-previews`:
-  - Считает `payload_hash = md5(canonical_json({project_id, scheme_ids_sorted, sample_url, logo_url, pattern_url, content_video_ids_sorted}))`
+  - Считает `payload_hash = md5(canonical_json({project_id, schemes_full_canonical, sample_url, logo_url, pattern_url, content_video_ids_sorted}))` где `schemes_full_canonical` = JSON массив каждой схемы целиком (drawboxes, chromakey params, rotation, speed и пр.) отсортированный по `scheme_id` с детерминированным `sort_keys=True` для каждого dict внутри. Hash должен меняться при любом изменении render-параметров, не только при добавлении/удалении схем.
   - В одной транзакции:
     1. Dedup-check: SELECT существующая `pending/processing` с тем же hash. Если есть — RETURN её `task_id` + `joined_existing=true`. UI не различает.
     2. Supersede: UPDATE существующие `pending` строки того же `project_id` (но с другим hash) в `current_status='superseded'`.
@@ -176,14 +176,26 @@
 
     payload_hash = md5(canonical_json({
         project_id,
-        scheme_ids = sorted([s.id for s in payload.schemes]),
+        schemes = [
+            # ↓ КАЖДАЯ схема целиком — все render-параметры
+            json.dumps(s, sort_keys=True, ensure_ascii=False)
+            for s in sorted(payload.schemes, key=lambda x: x['id'])
+        ],
         sample_url, logo_url, pattern_url,
         content_video_ids = sorted([v.id for v in content_resources.videos]),
     }))
 
-3b. atomic в одной транзакции:
+3b. atomic в одной транзакции (БД-level serial per project):
 
     BEGIN;
+    -- (0) Postgres advisory lock per project_id — гарантирует что
+    --     concurrent enqueue-запросы того же project обрабатываются
+    --     последовательно. Lock освобождается на COMMIT/ROLLBACK.
+    SELECT pg_advisory_xact_lock(
+        hashtext('scheme_preview_enqueue:' || :project_id::text)
+    );
+
+    -- (1) Dedup: есть ли активный task с тем же hash?
     SELECT id FROM unic_tasks
       WHERE task_type='scheme_preview'
         AND project_id = :pid
@@ -195,15 +207,23 @@
         COMMIT;
         RETURN {task_id, status:'queued', joined_existing:true};
 
+    -- (2) Supersede всех pending того же project (любой hash) —
+    --     благодаря advisory lock никто другой не INSERT'ит pending
+    --     параллельно, поэтому supersede надёжен.
     UPDATE unic_tasks
       SET current_status='superseded', updated_at=NOW()
       WHERE task_type='scheme_preview'
         AND project_id = :pid
         AND current_status = 'pending';
 
+    -- (3) INSERT новой
     INSERT INTO unic_tasks (..., payload_hash=:hash, ...) RETURNING id;
     COMMIT;
 ```
+
+**Почему advisory lock, а не дополнительный unique index?**
+
+Unique partial index `(project_id) WHERE task_type='scheme_preview' AND current_status='pending'` теоретически решает «не больше одной pending per project». Но: если два concurrent INSERT'a — один пройдёт, второй упадёт на `UniqueViolation`, и обработка этой ошибки приведёт к ещё одной транзакции (SELECT existing → join). Это работает, но advisory lock проще и явнее: транзакция дожидается своей очереди вместо retry. Lock per project, не глобальный, поэтому разные projects всё равно обрабатываются параллельно.
 
 Partial unique index (БД-level гарантия даже на ms-race):
 
@@ -292,18 +312,53 @@ ALTER TABLE unic_tasks DROP COLUMN payload_hash, DROP COLUMN task_type;
 | Validator → DB INSERT | Postgres down | endpoint 503 → frontend toast «Сервис недоступен» (стандарт axios.error path) |
 | UniqueViolation (dedup race) | Два запроса с одинаковым hash в один миллисек | catch IntegrityError → SELECT existing → return `joined_existing:true` |
 | Worker не подхватил за 30 сек | Worker upal/PM2 stopped | Validator при `phase='pending' AND age(created_at) > 30s` возвращает `phase='queue_delayed'`. UI badge «Воркер занят, очередь» |
-| Worker подхватил scheme_preview, упал в processing | `task_type='scheme_preview' AND current_status='processing' AND updated_at < NOW() - 15 min` | Watchdog cron на worker'е (5-мин interval): UPDATE обратно в `pending` + revert_count в meta. Limit 3 revert'ов, дальше остаётся processing для расследования. **Только scheme_preview** — legacy unic-задачи watchdog не трогает (одна сложная схема может рендериться >15 мин без обновления `updated_at`; пере-requeue вызвал бы duplicate processing). Для legacy unic — отдельный backlog (heartbeat внутри рендера, либо exclusion как сейчас). |
+| Worker подхватил scheme_preview, упал в processing | `task_type='scheme_preview' AND current_status='processing' AND updated_at < NOW() - 15 min` | **Heartbeat-based detection.** `process_scheme_preview_task` запускает `heartbeat_loop` параллельно с рендером, каждые 30 сек делает `UPDATE updated_at=NOW() WHERE id=task_id AND current_status='processing'`. Если worker реально жив — `updated_at` обновляется. Если процесс умер — heartbeat останавливается, через 15 мин watchdog видит stale `updated_at` и UPDATE обратно в `pending` + revert_count в meta. Limit 3 revert'ов. **Только scheme_preview** — legacy unic-pipeline остаётся без watchdog (см. Out of scope #8). |
 | ffmpeg returncode != 0 на схеме | Одна из N схем не отрендерилась | meta.scheme_errors[sid] = stderr_tail, продолжает оставшиеся. Финал — `done` если хоть одна успешна, `error` если все упали |
 | S3 upload failed | beget недоступен | `upload_to_s3` retry=5 backoff [3,9,15,21,27]s (worker.py:48). После 5 — схема в meta error |
 | Source video URL 404 | sample/overlay/logo умерли | `_download_file_sync` retry=3 с backoff. Если не скачалось — `current_status='error'`, error_message = `Failed to download sample video from {url[:80]}` |
 | Worker crash прямо на INSERT validator_scheme_previews | повторный pickup после restart → UNIQUE conflict | UPSERT `ON CONFLICT (scheme_id, project_id) DO UPDATE` — идемпотентно |
 | Disk full /tmp/unic_worker | ffmpeg падает на write | task error → cleanup через `try/finally tempfile.mkdtemp` |
 
+### Heartbeat (обязателен ДО включения watchdog'a)
+
+Watchdog корректен только если `updated_at` живой пока worker реально работает. `process_scheme_preview_task` обновляет `updated_at` только после завершения каждой схемы — но одна схема может рендериться 5+ минут (сложный filter_complex), а вся task — 30-75 минут. Без heartbeat'а watchdog requeue'нет активный task → второй worker подхватит → дубль S3 upload + UPSERT-races в `validator_scheme_previews`.
+
+```python
+async def heartbeat_loop(pool, task_id: int, stop: asyncio.Event):
+    """Каждые 30 секунд: UPDATE unic_tasks SET updated_at=NOW() WHERE id=task_id."""
+    while not stop.is_set():
+        try:
+            async with pool.acquire() as conn:
+                await conn.execute(
+                    "UPDATE unic_tasks SET updated_at=NOW() "
+                    "WHERE id=$1 AND current_status='processing'",
+                    task_id,
+                )
+        except Exception as e:
+            logger.warning(f'[heartbeat] task {task_id} update failed: {e}')
+        try:
+            await asyncio.wait_for(stop.wait(), timeout=30)
+        except asyncio.TimeoutError:
+            pass
+
+async def process_scheme_preview_task(pool, task):
+    stop = asyncio.Event()
+    hb = asyncio.create_task(heartbeat_loop(pool, task['id'], stop))
+    try:
+        # ... весь pipeline (download, render каждой схемы, S3 upload, UPSERT)
+        ...
+    finally:
+        stop.set()
+        await hb
+```
+
+Heartbeat update игнорирует строки в `pending/superseded/done/error` (WHERE current_status='processing'), поэтому случайно «оживить» уже завершённую task heartbeat не сможет. Если worker процесс реально умрёт — heartbeat не идёт, `updated_at` стареет, watchdog requeue корректно сработает.
+
 ### Watchdog implementation
 
 ```python
 async def stale_task_recovery_loop(pool):
-    """Каждые 5 минут возвращает в pending задачи processing > 15 мин."""
+    """Каждые 5 минут возвращает в pending scheme_preview-задачи processing > 15 мин (без heartbeat'a)."""
     while True:
         await asyncio.sleep(300)
         try:
@@ -351,7 +406,8 @@ async def stale_task_recovery_loop(pool):
 3. **`test_generate_previews_supersede_pending.py`** — POST A → pending. POST B (другой payload) того же project → A → `superseded`, B → `pending`.
 4. **`test_generate_previews_no_supersede_processing.py`** — pre-INSERT processing-строки. POST с другим payload → processing не тронут, новая pending.
 5. **`test_generation_status_reads_latest.py`** — 3 строки (superseded, processing, pending). GET → данные pending (последней по id).
-6. **`test_payload_hash_canonical.py`** — тот же payload с разным порядком keys/items → тот же hash. Изменение sample_url → другой hash.
+6. **`test_payload_hash_canonical.py`** — тот же payload с разным порядком keys/items → тот же hash. Изменение `sample_url` → другой hash. **Изменение `drawboxes`/`chromakey`/`rotation` внутри одной схемы (тот же scheme_id) → ДРУГОЙ hash** (защита от dedup-join после правки параметров рендера).
+6a. **`test_concurrent_enqueue_serialized_per_project.py`** — два concurrent POST одного project (через `asyncio.gather` двух запросов через httpx.AsyncClient) с разными payload. После завершения: ровно одна `pending` row в `unic_tasks` (одна из них либо joined существующую, либо superseded'нула первую). Без advisory lock этот тест ловит race condition.
 
 ### Worker tests (новые, `unic-worker/tests/`)
 
@@ -359,6 +415,9 @@ async def stale_task_recovery_loop(pool):
 8. **`test_scheme_preview_pipeline_e2e.py`** — full pipeline с mock-S3 fixtures. INSERT task → run → assert files в mock-S3 + строки в `validator_scheme_previews`.
 9. **`test_watchdog_reverts_stale.py`** — INSERT processing-задача `updated_at = NOW() - 20 min`, revert_count=0. Watchdog tick → pending + revert_count=1.
 10. **`test_watchdog_skips_after_3_reverts.py`** — revert_count=3, processing 20 min ago. Watchdog не трогает.
+10a. **`test_heartbeat_keeps_updated_at_fresh.py`** — INSERT processing-задачу. Запустить `heartbeat_loop` на 75 сек (3 heartbeat-tick'a). Assert: `updated_at` обновился минимум 2 раза (NOW() приближён к концу теста). После `stop.set()` heartbeat останавливается.
+10b. **`test_heartbeat_no_update_after_status_change.py`** — INSERT processing → пока heartbeat работает, внешний UPDATE status='done'. Следующий heartbeat tick не должен возвращать `updated_at` ниже (WHERE current_status='processing' guard).
+10c. **`test_watchdog_does_not_requeue_active_with_heartbeat.py`** — параллельно: heartbeat_loop активен, watchdog tick через 16 мин. Watchdog не должен requeue (т.к. heartbeat держит `updated_at` свежим).
 
 ### Integration smoke (manual, после deploy)
 
