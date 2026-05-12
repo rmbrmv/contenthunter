@@ -65,10 +65,11 @@ OR (ut.meta->>'slot_id')::int IS DISTINCT FROM CAST(:keep_slot_id AS INTEGER)
 
 ## Verify
 
-3 уровня:
+4 уровня:
 1. `/tmp/repro_amb.py` без cast → error, с cast → OK
 2. `pytest test_pipeline_reversal.py -v` → 6/6 PASS (2 новых live-DB регрессии + 4 mocked)
 3. Validator stderr post-restart чистый, новых `AmbiguousParameterError` за 3 min monitor — нет
+4. **User-confirmed UI 2026-05-12:** drag-n-drop работает, окно загрузки работает
 
 ## Lessons
 
