@@ -153,7 +153,7 @@ def _top_labels(elements: list, n: int) -> list:
 cd /root/.openclaw/workspace-genri/autowarm && python -m pytest tests/test_tt_account_switcher_open.py -v
 ```
 
-Expected: 3 passed.
+Expected: all tests in `test_tt_account_switcher_open.py` pass (pytest exit 0).
 
 - [ ] **Step 5: Commit**
 
@@ -289,7 +289,7 @@ In `account_switcher.py`, add as `AccountSwitcher` method (insert after `_tap_pr
 cd /root/.openclaw/workspace-genri/autowarm && python -m pytest tests/test_tt_account_switcher_open.py -v
 ```
 
-Expected: all tests so far pass (8 total).
+Expected: all tests pass (pytest exit 0).
 
 - [ ] **Step 5: Commit**
 
@@ -441,7 +441,7 @@ Add after `_detect_tt_stories_viewer`:
 cd /root/.openclaw/workspace-genri/autowarm && python -m pytest tests/test_tt_account_switcher_open.py -v
 ```
 
-Expected: 14 passed (8 prior + 6 new).
+Expected: all tests pass (pytest exit 0).
 
 - [ ] **Step 5: Commit**
 
@@ -602,7 +602,7 @@ Add after `_find_tt_account_switcher_anchor_in_drawer`:
 cd /root/.openclaw/workspace-genri/autowarm && python -m pytest tests/test_tt_account_switcher_open.py -v
 ```
 
-Expected: 21 passed (14 prior + 7 new).
+Expected: all tests pass (pytest exit 0).
 
 - [ ] **Step 5: Commit**
 
@@ -895,7 +895,7 @@ Add after `_has_tt_bottomsheet_signature`:
 cd /root/.openclaw/workspace-genri/autowarm && python -m pytest tests/test_tt_account_switcher_open.py -v
 ```
 
-Expected: 24 passed (21 prior + 3 new Phase-1 tests).
+Expected: all tests pass (pytest exit 0) — 3 new Phase-1 tests now green.
 
 - [ ] **Step 5: Commit**
 
@@ -1138,7 +1138,7 @@ In `account_switcher.py`, find the `# --- Phase 2: menu path (implemented in Tas
 cd /root/.openclaw/workspace-genri/autowarm && python -m pytest tests/test_tt_account_switcher_open.py -v
 ```
 
-Expected: 28 passed (24 prior + 4 new Phase-2 tests).
+Expected: all tests pass (pytest exit 0) — 4 new Phase-2 tests now green.
 
 - [ ] **Step 5: Commit**
 
@@ -1368,7 +1368,7 @@ def test_tap_profile_header_signature_unchanged():
 cd /root/.openclaw/workspace-genri/autowarm && python -m pytest tests/test_tt_account_switcher_open.py -v
 ```
 
-Expected: 35 passed (28 prior + 2 discriminator + 5 parametrised canonical-event + 1 signature regression = 36 total scoped; allow ±1 variance from parametrise expansion).
+Expected: all tests pass (pytest exit 0) — 2 discriminator tests + the parametrised canonical-event test (6 cases) + the signature regression test now green.
 
 - [ ] **Step 3: Commit**
 
@@ -1425,6 +1425,33 @@ def test_switch_tiktok_callsite_does_not_re_emit_canonical_event():
         'Block:\n' + block
     )
     assert 'log_event("error"' not in block
+```
+
+And a consistency test that asserts each `_TT_ERR_TO_STEP` value resolves to its corresponding error_code via `_SWITCHER_STEP_TO_CATEGORY` (catches future drift between the two mappings):
+
+```python
+def test_tt_err_to_step_consistent_with_kernel_mapper():
+    """The step name the callsite passes to _fail for each orchestrator
+    err must, via _SWITCHER_STEP_TO_CATEGORY (publisher_kernel.py),
+    resolve to the SAME err. Guards against drift between the callsite
+    dict and the kernel mapping."""
+    from publisher_kernel import _SWITCHER_STEP_TO_CATEGORY
+    expected = {
+        'tt_account_sheet_closed_before_parse': 'tt_3_open_list',
+        'tt_header_tap_failed':                 'tt_3_open_list_probe',
+        'tt_stories_back_failed':               'tt_3_open_list_back',
+        'tt_profile_menu_not_found':            'tt_3_open_list_menu',
+        'tt_account_menu_unknown_layout':       'tt_3_open_list_drawer',
+        'tt_drawer_tap_did_not_open_sheet':     'tt_3_open_list_sheet',
+    }
+    for err, step in expected.items():
+        assert _SWITCHER_STEP_TO_CATEGORY.get(step) == err, (
+            f'step {step!r} → {_SWITCHER_STEP_TO_CATEGORY.get(step)!r}, '
+            f'expected {err!r}. _TT_ERR_TO_STEP / mapper out of sync.'
+        )
+    # Also assert the probe-retry alias maps to header_tap_failed.
+    assert (_SWITCHER_STEP_TO_CATEGORY.get('tt_3_open_list_probe_retry1')
+            == 'tt_header_tap_failed')
 ```
 
 And a positive end-to-end-on-resolver test that exercises the actual resolver `publisher_base._set_error_code_from_events` against synthetic `events[]`:
@@ -1499,8 +1526,13 @@ After L92 (`'tt_3_open_list': 'tt_account_sheet_closed_before_parse'`), add new 
     # [TT Pattern B 2026-05-13] Probe-and-pivot fallback step→category
     # mappings. Resolver prefers meta.category set by the orchestrator;
     # these are step-based fallbacks when meta is absent.
-    'tt_3_open_list_probe': 'tt_account_sheet_closed_before_parse',
-    'tt_3_open_list_probe_retry1': 'tt_account_sheet_closed_before_parse',
+    # Note: the bare 'tt_3_open_list' step (already at L92) maps to
+    # tt_account_sheet_closed_before_parse — that handles the legacy
+    # single-account-device case. The new sub-step entries below cover
+    # the more specific orchestrator failure modes; they must match the
+    # _TT_ERR_TO_STEP dict in account_switcher._switch_tiktok callsite.
+    'tt_3_open_list_probe': 'tt_header_tap_failed',
+    'tt_3_open_list_probe_retry1': 'tt_header_tap_failed',
     'tt_3_open_list_back': 'tt_stories_back_failed',
     'tt_3_open_list_menu': 'tt_profile_menu_not_found',
     'tt_3_open_list_drawer': 'tt_account_menu_unknown_layout',
