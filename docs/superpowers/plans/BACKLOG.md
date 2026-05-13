@@ -4,28 +4,26 @@
 
 ### 24h verify (next day morning)
 
-Три shipped PR в один день требуют 24h-verify SQL:
+Четыре shipped PR в один день требуют 24h-verify SQL:
 
 | PR | Topic | Deadline (UTC) | Acceptance |
 |---|---|---|---|
 | #48 | Watchdog ping regression | 2026-05-14 08:40 | Pi 3+5 `switch_failed_unspecified` < 5 / 24h |
 | #49 | IG share OK fallback (Tier 1.5) | 2026-05-14 11:45 | `ok_rescued_24h / ok_attempted_24h ≥ 30%` |
 | #50 | TT security prompt dismiss | 2026-05-14 13:25 | `tt_profile_tab_broken < 2/24h` AND `tt_security_prompt_dismissed > 0` |
+| #52 | TT Pattern B (probe-and-pivot) | 2026-05-14 17:30 | `tt_account_sheet_closed_before_parse` ≤ 5/24h AND new codes ≤ 3/24h combined |
 
-SQL pack в `docs/evidence/2026-05-13-*.md § "24h verify"` для каждого PR. После прогона — обновить evidence docs с verdicts + memory entries (статус → close OR iterate).
+SQL pack в `docs/evidence/2026-05-13-*.md § "24h verify"` для каждого PR. PR #52 SQL — `jsonb_array_elements WITH ORDINALITY` (terminal `failed` event без category, нужно сканировать назад). После прогона — обновить evidence docs + memory entries (close OR iterate).
 
-### TT Pattern B — `tt_account_sheet_closed_before_parse` (top open today)
+### TT Pattern B — `tt_account_sheet_closed_before_parse` ✅ SHIPPED 2026-05-13 PR #52
 
-**Top остаточный TT fail после PR #50 (sibling pattern, разный root cause).** 19/24h на 2026-05-13. Drill (task 5338, `clickpay_under` на phone #19): `_tap_profile_header` тапает coord (540, 180) — попадает на видео-превью карточку, а НЕ на header профиля (TT layout change). UI dump retry1 показывает: «clickpay_under · 13 ч. назад», «Оригинальный звук от clickpay_under», «Закрыть», «0 зрителей», «Еще». Это видео-card, не account-switcher trigger.
+12-commit branch (`be62872..69a2dea`) squash-merged как `76ecd4f`. Probe-and-pivot orchestrator закрывает 19/24h root cause (TT app update — username tap открывает Stories/LIVE viewer вместо account-switcher bottomsheet). Memory: [[project_tt_pattern_b_shipped]]. Evidence: `docs/evidence/2026-05-13-tt-pattern-b-shipped.md`. Smoke pq 2149 live; 24h verify deadline 2026-05-14 17:30 UTC.
 
-Fix варианты:
-1. Alternative anchor — найти «Меню профиля» button at [945,112][1058,225] (top-right, resource-id `action_bar_button_text`) вместо (540, 180) tap
-2. Resource-id-based: искать кликабельный node с конкретным `:id/` суффиксом для profile header
-3. Skip fallback (540, 180) и fail-fast если xml_bounds не нашёл header
-
-Distribution: 13/19 на Pi 9, 2/19 на Pi 7, остальное singletons. Sample tasks 5338, 5335, 5334, 5332, 5331 — все clickpay_* accounts на Pi 9.
-
-Approach: спецификации ещё нет. Нужен brainstorming с инспекцией нескольких failed-task XMLs для надёжного anchor.
+**Open follow-ups (Minor, from final holistic opus review):**
+1. Inline-vs-helper asymmetry on `tt_account_sheet_closed_before_parse` emission (functionally fine).
+2. `menu_dump` redundancy with `back_dump` (~1-2s extra).
+3. `_tap_profile_header` internal `_save_dump` overwritten by orchestrator under same step name (pre-existing).
+4. End-to-end test of menu-path through `_switch_tiktok` missing — smoke is only true verification.
 
 ### AI Unstuck не firing — possibly self-resolved by PR #48
 

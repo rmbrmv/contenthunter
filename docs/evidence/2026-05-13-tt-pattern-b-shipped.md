@@ -1,0 +1,96 @@
+# TT Pattern B — SHIPPED 2026-05-13
+
+**PR:** [#52](https://github.com/GenGo2/delivery-contenthunter/pull/52) — squash-merged `76ecd4f` at 2026-05-13 17:29:34 UTC.
+**Deploy:** PM2 `autowarm` restart at 2026-05-13 17:30:50 UTC. `exec cwd = /root/.openclaw/workspace-genri/autowarm` verified.
+**Spec:** `docs/superpowers/specs/2026-05-13-tt-pattern-b-profile-header-anchor-design.md` (codex clean ×6 rounds).
+**Plan:** `docs/superpowers/plans/2026-05-13-tt-pattern-b-profile-header-anchor-plan.md` (codex clean ×6 rounds, subagent-driven execution).
+
+## What shipped
+
+Probe-and-pivot orchestrator for the TikTok account-switcher. Closes the 19/24h `tt_account_sheet_closed_before_parse` spike caused by TT changing the profile-username tap behaviour — tap now opens Stories/LIVE viewer instead of the account-switcher bottomsheet.
+
+**Architecture:**
+- New orchestrator `_open_tt_account_switcher` in `AccountSwitcher`. Phase 1: probe old path up to 2× (preserves older TT versions). Phase 2 (on Stories detection): `adb keyevent KEYCODE_BACK` → tap «Меню профиля» (RU+EN cd) → search drawer for broad-anchor trigger → tap → verify bottomsheet via positive signature (`+ Добавить/Add аккаунт/account` OR ≥2 `@handles` below y=600).
+- 3 new pure-function helpers (`_detect_tt_stories_viewer`, `_find_tt_account_switcher_anchor_in_drawer`, `_has_tt_bottomsheet_signature`).
+- Module-level `TT_DRAWER_ACCOUNT_TRIGGERS` priority list + `_top_labels` forensic helper.
+- Callsite in `_switch_tiktok` (L2298–L2323) collapsed from 44-line retry loop to 26 lines (orchestrator call + `_TT_ERR_TO_STEP` mapping → `_fail`).
+- 6 new entries in `publisher_kernel._SWITCHER_STEP_TO_CATEGORY` for Pass-2 step-fallback resolution.
+
+**5 invariants enforced and tested:**
+1. Every non-success return emits exactly one `error`-type `log_event` with `meta.category == returned_code`.
+2. Every `dump_ui` paired with `_save_dump` under stable step name (`_probe`, `_probe_retry1`, `_back`, `_menu`, `_drawer`, `_sheet`) — including the failure path of menu-button-not-found.
+3. Sheet detection robust against drawer-still-open false positives (positive signature OR anchor-bounds mismatch with drawer trigger).
+4. 2-attempt probe retry preserved from old retry loop.
+5. `_fail` does not emit a competing canonical event; mapper resolves from `meta.category` on the most recent `error` event before the terminal `failed` event.
+
+## Branch summary
+
+12 commits, 3 files, +1300/-42:
+
+| Commit | Topic |
+|---|---|
+| `be62872` | T1: TT_DRAWER_ACCOUNT_TRIGGERS + _top_labels |
+| `3f31215` | T1 noqa F401 cleanup |
+| `fb64d3a` | T2: _detect_tt_stories_viewer (RU+EN) |
+| `f71eb8e` | T2 hit_time discrimination gap |
+| `c4de69c` | T3: _find_..._anchor_in_drawer (two-pass) |
+| `5df303a` | T3 smallest-area tie-breaker |
+| `eadeec4` | T4: _has_tt_bottomsheet_signature |
+| `a7775c0` | T5: orchestrator Phase 1 (probe + retry + Stories pivot) |
+| `35b59d9` | T5 stub time.sleep in test module |
+| `136f85b` | T6: orchestrator Phase 2 (menu → drawer → sheet) |
+| `d4a4134` | T7: discriminator + canonical-event + signature regression tests |
+| `69a2dea` | T8: callsite refactor + mapper extension |
+
+## Quality gates passed
+
+- Codex review of spec: 6 rounds, 0 P1/P2 final.
+- Codex review of plan: 6 rounds, 0 P1/P2 final.
+- Per-task spec compliance + code quality reviews (T1–T8): each clean after iteration (typically 1–2 fix rounds per task).
+- Final holistic opus review of full branch: **APPROVED**, GO for PR, zero critical/important findings, 5 minor follow-ups deferred.
+- 48 new unit tests + 73 pre-existing TT tests all green; 14 baseline failures elsewhere unchanged (DB-mock unrelated).
+
+## Live verify
+
+### Smoke (live)
+
+Re-queued `publish_queue.id=2149` (clickpay_under) at 2026-05-13 17:30:50 UTC — dispatcher picks up within 5 min. **Expected outcomes:**
+
+- **Happy path:** `events[].meta.category` includes `tt_menu_path_opened_bottomsheet` → status `done`.
+- **First-iteration evidence (acceptable):** `error_code='tt_account_menu_unknown_layout'` with `meta.drawer_labels[]` populated — that's actionable evidence for iteration #2 without further smoke.
+
+### 24h soak SQL (deadline: 2026-05-14 17:30 UTC)
+
+```sql
+WITH last_err AS (
+  SELECT pt.id, MAX(ev.idx) AS idx
+  FROM publish_tasks pt,
+       jsonb_array_elements(pt.events) WITH ORDINALITY AS ev(value, idx)
+  WHERE pt.platform = 'TikTok'
+    AND pt.created_at >= '2026-05-13 17:30:50+00'
+    AND pt.status = 'failed'
+    AND ev.value->>'type' = 'error'
+    AND ev.value->'meta'->>'category' IS NOT NULL
+  GROUP BY pt.id
+)
+SELECT (pt.events->(le.idx::int - 1)->'meta'->>'category') AS cat,
+       COUNT(*) AS n
+FROM publish_tasks pt
+JOIN last_err le ON le.id = pt.id
+GROUP BY 1 ORDER BY 2 DESC;
+```
+
+**Acceptance:**
+- `tt_account_sheet_closed_before_parse` falls from 19/24h pre-deploy to ≤5/24h.
+- New codes (`tt_account_menu_unknown_layout` + `tt_drawer_tap_did_not_open_sheet`) ≤3/24h combined.
+- If `tt_account_menu_unknown_layout > 3/24h` → iteration #2 from the `drawer_labels` evidence.
+
+## Open follow-ups
+
+From final holistic review (all Minor, none blocking):
+
+1. Inline-vs-helper asymmetry on `tt_account_sheet_closed_before_parse` emission (single divergent path; functionally equivalent).
+2. `menu_dump` redundancy with `back_dump` (same UI state; one extra `dump_ui` ~1-2s).
+3. `_tap_profile_header` internal `_save_dump` is overwritten by orchestrator's `_save_dump` under same step name — pre-existing, low priority.
+4. Plan said `PublisherBase`, code uses `BasePublisher` — implementation resolved silently.
+5. No end-to-end test of menu-path through `_switch_tiktok` — smoke is the only true verification before prod.
