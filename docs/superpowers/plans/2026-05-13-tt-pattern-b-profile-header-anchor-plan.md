@@ -753,6 +753,28 @@ def test_open_tt_account_switcher_single_account_legacy_semantic(monkeypatch):
     assert ('tt_3_open_list_probe_retry1', '<x2/>') in sw.p.saved_dumps
 
 
+def test_open_tt_account_switcher_phase1_handles_only_sheet_synthesised(
+        monkeypatch):
+    """Phase 1: first probe opens a sheet that has @handles but no
+    ACCOUNT_LIST_ANCHORS text. Must succeed with synthesised anchor_bounds —
+    mirrors the Phase 2 handles-only synthesis path."""
+    sw = _make_sw_with_proxy(dump_queue=['<sheet/>'])
+    first_handle = make_el(text='@user1', bounds=(50, 800, 300, 880))
+    sheet_els = [first_handle,
+                 make_el(text='@user2', bounds=(50, 900, 300, 980))]
+    import account_switcher as mod
+    monkeypatch.setattr(mod, 'parse_ui_dump', lambda xml: sheet_els)
+    monkeypatch.setattr(mod, 'find_anchor_bounds',
+                        lambda els, anchors: None)
+
+    anchor, err = sw._open_tt_account_switcher(
+        elements=[], cfg=_TT_CFG, target='someone',
+        step_base='tt_3_open_list')
+
+    assert err is None
+    assert tuple(anchor) == tuple(first_handle.bounds)
+
+
 def test_open_tt_account_switcher_probe_retry_recovers_old_layout(monkeypatch):
     """Phase 1: first probe yields blank, second yields sheet
     (transient old-layout state). Returns (anchor, None) on attempt 2.
@@ -834,14 +856,26 @@ Add after `_has_tt_bottomsheet_signature`:
             self._save_dump(step, probe_dump)
             probe_elements = parse_ui_dump(probe_dump) if probe_dump else []
 
+            # Sheet detection: anchor-text OR positive signature with
+            # synthesised anchor_bounds (mirrors Phase 2 discriminator —
+            # legacy sheets may expose ACCOUNT_LIST_ANCHORS, newer ones
+            # may show only @handles / + Добавить аккаунт).
             anchor_bounds = find_anchor_bounds(probe_elements, anchors)
+            sheet_open = self._has_tt_bottomsheet_signature(probe_elements)
+            if sheet_open and not anchor_bounds:
+                for el in probe_elements:
+                    if (el.text or '').strip().startswith('@') \
+                            and el.bounds[1] > 600:
+                        anchor_bounds = tuple(el.bounds)
+                        break
             if anchor_bounds:
                 self.p.log_event(
                     'account_switch',
                     f'tt_probe_opened_bottomsheet bounds={anchor_bounds} '
                     f'attempt={attempt + 1}',
                     meta={'category': 'tt_probe_opened_bottomsheet',
-                          'attempt': attempt + 1},
+                          'attempt': attempt + 1,
+                          'sheet_open_signal': sheet_open},
                 )
                 return anchor_bounds, None
             if self._detect_tt_stories_viewer(probe_elements):
