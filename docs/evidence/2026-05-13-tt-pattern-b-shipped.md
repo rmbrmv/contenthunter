@@ -1,7 +1,8 @@
 # TT Pattern B — SHIPPED 2026-05-13
 
 **PR:** [#52](https://github.com/GenGo2/delivery-contenthunter/pull/52) — squash-merged `76ecd4f` at 2026-05-13 17:29:34 UTC.
-**Deploy:** PM2 `autowarm` restart at 2026-05-13 17:30:50 UTC. `exec cwd = /root/.openclaw/workspace-genri/autowarm` verified.
+**Hotfix PR:** [#54](https://github.com/GenGo2/delivery-contenthunter/pull/54) — squash-merged `967d95e` at 2026-05-13 17:45:03 UTC. Live smoke caught `AttributeError: 'DevicePublisher' object has no attribute 'adb_shell'` — the orchestrator called `self.p.adb_shell(...)` for the Stories-pivot BACK keyevent, but the proxy exposes `self.p.adb(...)`. Unit tests masked the bug because `_FakeProxy` defined the wrong method name. 1-character production fix + mock-shape sync.
+**Deploy:** PM2 `autowarm` restart at 2026-05-13 17:30:50 UTC (PR #52) + 2026-05-13 17:45:13 UTC (PR #54 hotfix). `exec cwd = /root/.openclaw/workspace-genri/autowarm` verified.
 **Spec:** `docs/superpowers/specs/2026-05-13-tt-pattern-b-profile-header-anchor-design.md` (codex clean ×6 rounds).
 **Plan:** `docs/superpowers/plans/2026-05-13-tt-pattern-b-profile-header-anchor-plan.md` (codex clean ×6 rounds, subagent-driven execution).
 
@@ -54,7 +55,9 @@ Probe-and-pivot orchestrator for the TikTok account-switcher. Closes the 19/24h 
 
 ### Smoke (live)
 
-Re-queued `publish_queue.id=2149` (clickpay_under) at 2026-05-13 17:30:50 UTC — dispatcher picks up within 5 min. **Expected outcomes:**
+**First smoke (pre-hotfix):** pq 2149 → task 5571 (clickpay_under). Status `failed`, `error_code='switch_failed_unspecified'`. Events show `tt_username_tap_opened_stories` detected (Stories pivot correctly identified), then crashed with `AttributeError: 'DevicePublisher' object has no attribute 'adb_shell'` at the BACK keyevent. Triggered hotfix PR #54.
+
+**Second smoke (post-hotfix):** pq 2071 → re-queued at 2026-05-13 17:45 UTC. Pending dispatcher pickup. **Expected outcomes:**
 
 - **Happy path:** `events[].meta.category` includes `tt_menu_path_opened_bottomsheet` → status `done`.
 - **First-iteration evidence (acceptable):** `error_code='tt_account_menu_unknown_layout'` with `meta.drawer_labels[]` populated — that's actionable evidence for iteration #2 without further smoke.
