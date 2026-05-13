@@ -71,7 +71,27 @@ def log_event(self, event_type: str, message: str, meta: dict = None):
 
 In `publisher_base.py:1725-1732`, delete the orphan dead-code block (currently positioned after `return fallback` in `_resolve_publish_fail_category`). Leaving the dead code creates future-reader confusion about which copy is authoritative.
 
-### 2.3 Design rationale
+### 2.3 Edit 3 — explicit ping per chunk in chunked-push hot path
+
+`log_event` is only called at chunked-push start (`adb_push_chunked_started`) and end (`adb_push_chunked_success`). Per-chunk pushes in `_adb_push_single_chunk` emit no `log_event` on success (only on retry/failure). Restoring the `log_event` ping alone resets the timer ONCE at chunked-push start, giving a fresh 180s window — but production samples show pushes lasting up to 184s after that start point (e.g., task 5175: 184.1s `chunked_started → chunked_success`). Those pathological cases would still cross the 180s window before success.
+
+In `_adb_push_chunked` (`publisher_base.py:1043-1067`), after each successful single-chunk push (`if not ok` branch falls through to `successful_remote.append(remote_chunk)`), add an explicit watchdog ping:
+
+```python
+# T4: extend per-step watchdog after each successful chunk push.
+# log_event activity only fires on chunked_started/success, leaving a window
+# for 180s+ pushes (observed: 184s on slow Pi networks).
+if self._watchdog is not None:
+    try:
+        self._watchdog.ping()
+    except Exception:
+        pass
+successful_remote.append(remote_chunk)
+```
+
+This is the only intra-push hot path that needs explicit ping; the post-cat `cat`/`md5`/cleanup steps reach `log_event('adb_push_chunked_success')` quickly and are covered by Edit 1.
+
+### 2.4 Design rationale
 
 **Why ping is outside the DB-write `try/except`:** the act of calling `log_event` proves that the pipeline thread is still progressing, regardless of whether the DB write succeeded. A transient Postgres outage should not stop watchdog extension and trigger spurious relaunches.
 
@@ -100,6 +120,11 @@ New file `tests/test_publisher_log_event_ping.py`:
    - Patch `psycopg2.connect` to raise `psycopg2.OperationalError`; assert `pub._watchdog.ping.called` (ping is outside DB try/except).
 
 All five tests use `unittest.mock.MagicMock` for `self._watchdog`; no real threading.Timer needed. Existing `tests/test_watchdog_timer.py` continues to test the timer in isolation and must remain green.
+
+Additional test for Edit 3 in the same file:
+
+6. `test_chunked_push_pings_watchdog_per_chunk`
+   - Mock `_adb_push_single_chunk` to always return `(True, None)`; supply a fake local file split into 3 chunks; set `pub._watchdog = MagicMock()`; call `_adb_push_chunked`; assert `pub._watchdog.ping.call_count >= 3` (at least one ping per successful chunk).
 
 ## 4. Rollout
 
@@ -156,18 +181,17 @@ Single `git revert <fix-commit>` on `rmbrmv/contenthunter` main; auto-push hook 
 
 - **Coupling between `log_event` and `WatchdogTimer`.** Intentional: `log_event` IS the activity signal. The coupling existed pre-refactor and is the documented design (see `WatchdogTimer.ping` docstring + comments at `publisher_base.py:1725-1727`).
 - **Masking of genuine silent hangs.** If a push hangs without ever calling `log_event` (e.g., a thread blocked deep in `subprocess.communicate`), the watchdog still fires correctly — `set_step` is called before push, starting a fresh 180s timer; if no activity happens, no ping, timer fires. The post-op `_check_watchdog(phase='media')` on `publisher_base.py:4024` retains its role: catching push that returned without raising but is reported stuck by the timer.
-- **`adb_push_chunked_started` is the only intra-push log_event.** Per-chunk pushes do not emit log_event on success. After this fix, the timer is reset once when chunked-push starts, giving a fresh 180s window. Most slow pushes complete within that window (observed: 131–184s). For pathological cases >360s (start + new window), the watchdog will still fire — that is correct behavior and out of scope here.
+- **Coverage of long pushes.** Edit 1 (log_event ping) covers any push that emits at least one `log_event` within each 180s window. Edit 3 (per-chunk ping in `_adb_push_chunked`) covers chunked pushes specifically — every successful single-chunk push extends the timer, so a 58-chunk push at ~3s/chunk keeps resetting every 3s. Pathological hangs that produce no chunk progress (single chunk stuck >180s in `_adb_push_single_chunk`'s own retries) will still fire watchdog correctly — that is the desired behavior.
 
 ## 8. Out of scope (deferred to backlog)
 
-- Per-chunk `_watchdog.ping()` inside `_adb_push_single_chunk` (Option B from brainstorming). Defer until evidence shows the minimal fix is insufficient.
-- Skip `_check_watchdog(phase='media')` when `remote_path` was returned successfully (Option C). Same — defer.
-- Auditing other dead-code blocks from the same `bcb5a2d8` refactor.
-- Increasing `STEP_TIMEOUTS['adb push']` above 180s. Not needed once ping is restored.
+- Skip `_check_watchdog(phase='media')` when `remote_path` was returned successfully (Option C from brainstorming). Defer until evidence shows Edits 1+3 are insufficient.
+- Auditing other dead-code blocks from the same `bcb5a2d8` refactor for similar regressions.
+- Increasing `STEP_TIMEOUTS['adb push']` above 180s. Not needed once ping is restored across both general (Edit 1) and chunked-push hot path (Edit 3).
 
 ## 9. Acceptance criteria summary
 
-- ✅ All five new tests in `tests/test_publisher_log_event_ping.py` are GREEN.
+- ✅ All six new tests in `tests/test_publisher_log_event_ping.py` are GREEN.
 - ✅ Existing `tests/test_watchdog_timer.py` remains GREEN.
 - ✅ Codex review on this spec → 0 P1 (this round and any follow-up).
 - ✅ Codex review on the implementation plan → 0 P1.
