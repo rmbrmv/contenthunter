@@ -88,7 +88,7 @@ Pure function (testable on synthetic XML-derived element lists). Returns True if
 
 ### `_tap_tt_profile_menu(step: str) -> bool`
 
-Fresh `dump_ui()` → `self.p.tap_element(ui, ['Меню профиля'], clickable_only=True)`. Returns the helper's bool. On True: save dump under `step`, take screenshot. On False: `log_event` `tt_profile_menu_button_not_found` (forensic) and return False.
+Fresh `dump_ui()` → `self.p.tap_element(ui, ['Меню профиля'], clickable_only=True)`. Returns the helper's bool. On True: `self._save_dump(step, dump_xml)`, take screenshot. On False: emit a non-`error`-type breadcrumb `log_event('account_switch', 'tt_profile_menu_button_not_tapped', meta={'category': 'tt_profile_menu_button_not_tapped'})` (breadcrumb only — does NOT compete with the orchestrator's canonical `tt_profile_menu_not_found` error event, see invariant #1).
 
 ### `_find_tt_account_switcher_anchor_in_drawer(elements: list) -> Optional[UIElement]`
 
@@ -113,18 +113,35 @@ Orchestrator. Returns `(anchor_bounds, error_code)` where exactly one is non-Non
 
 Pseudocode (see Section "Data Flow" in conversation transcript for full control flow):
 
+**Invariants enforced by the orchestrator:**
+
+1. **Every non-success return path emits exactly one `error`-type `log_event` whose `meta.category` equals the returned `error_code`.** This is what the canonical-error-code mapper reads (see [[project_error_code_mapper_fail_event_fix]]). The callsite does **not** re-log a category; it only calls `_fail`.
+2. **Every `dump_ui(retries=1)` is paired with `self._save_dump(step, dump_xml)` under a stable step name** (`<step_base>_probe`, `<step_base>_back`, `<step_base>_menu`, `<step_base>_drawer`, `<step_base>_sheet`). These step names are the test-contract artifacts referenced by unit test #9 and by post-mortem S3 URLs.
+3. **Sheet-vs-drawer discriminator after the drawer tap.** The same broad-anchor label (e.g. `'Управление аккаунтами'`) can exist on **both** the drawer entry button (which we just tapped) and the bottomsheet title (which is what we want to see). A naive `find_anchor_bounds` after a no-op tap can re-match the still-open drawer's entry and falsely signal success. The discriminator MUST satisfy at least one of:
+   - The matched anchor element's `bounds != drawer_anchor.bounds` (different element identity), AND
+   - The drawer entry is no longer findable in the post-tap dump (`_find_tt_account_switcher_anchor_in_drawer(sheet_elements) is None` OR returns an element with bounds outside the previous drawer region).
+   If neither holds → return `tt_drawer_tap_did_not_open_sheet`.
+
 ```python
 def _open_tt_account_switcher(self, elements, cfg, target, step_base):
     header_y_max = cfg['profile_title_header_y_range'][1]
     anchors = ACCOUNT_LIST_ANCHORS.get('TikTok', [])
 
+    def _emit_error(code, extra=None):
+        meta = {'category': code}
+        if extra:
+            meta.update(extra)
+        self.p.log_event('error', code, meta=meta)
+        return None, code
+
     # --- Phase 1: probe ---
     if not self._tap_profile_header(elements, header_y_max,
                                     f'{step_base}_probe',
                                     fallback_coords=(540, 180)):
-        return None, 'tt_header_tap_failed'
+        return _emit_error('tt_header_tap_failed')
     time.sleep(POST_TAP_WAIT_S + 0.8)
     probe_dump = self.p.dump_ui(retries=1)
+    self._save_dump(f'{step_base}_probe', probe_dump)
     probe_elements = parse_ui_dump(probe_dump) if probe_dump else []
 
     anchor_bounds = find_anchor_bounds(probe_elements, anchors)
@@ -135,11 +152,8 @@ def _open_tt_account_switcher(self, elements, cfg, target, step_base):
         return anchor_bounds, None
 
     if not self._detect_tt_stories_viewer(probe_elements):
-        self.p.log_event('error',
-            'tt_probe_unknown_post_state',
-            meta={'category': 'tt_probe_unknown_post_state',
-                  'probe_top_labels': _top_labels(probe_elements, 30)})
-        return None, 'tt_probe_unknown_post_state'
+        return _emit_error('tt_probe_unknown_post_state',
+                           {'probe_top_labels': _top_labels(probe_elements, 30)})
 
     self.p.log_event('account_switch',
         'tt_username_tap_opened_stories — reverting + menu path',
@@ -147,40 +161,52 @@ def _open_tt_account_switcher(self, elements, cfg, target, step_base):
     self.p.adb_shell('input keyevent KEYCODE_BACK')
     time.sleep(POST_TAP_WAIT_S)
     back_dump = self.p.dump_ui(retries=1)
+    self._save_dump(f'{step_base}_back', back_dump)
     if not self._is_tt_own_profile(back_dump):
-        return None, 'tt_stories_back_failed'
+        return _emit_error('tt_stories_back_failed',
+                           {'back_top_labels': _top_labels(
+                               parse_ui_dump(back_dump) if back_dump else [], 30)})
 
     # --- Phase 2: menu ---
     if not self._tap_tt_profile_menu(f'{step_base}_menu'):
-        return None, 'tt_profile_menu_not_found'
+        return _emit_error('tt_profile_menu_not_found',
+                           {'profile_top_labels': _top_labels(elements, 30)})
+    # _tap_tt_profile_menu saves its own dump under f'{step_base}_menu'.
     time.sleep(POST_TAP_WAIT_S + 0.8)
     drawer_dump = self.p.dump_ui(retries=1)
+    self._save_dump(f'{step_base}_drawer', drawer_dump)
     drawer_elements = parse_ui_dump(drawer_dump) if drawer_dump else []
     drawer_anchor = self._find_tt_account_switcher_anchor_in_drawer(drawer_elements)
     if drawer_anchor is None:
-        self.p.log_event('error',
-            'tt_account_menu_unknown_layout',
-            meta={'category': 'tt_account_menu_unknown_layout',
-                  'drawer_labels': _top_labels(drawer_elements, 30)})
-        return None, 'tt_account_menu_unknown_layout'
+        return _emit_error('tt_account_menu_unknown_layout',
+                           {'drawer_labels': _top_labels(drawer_elements, 30)})
 
     self.p.adb_tap(*drawer_anchor.center)
     time.sleep(POST_TAP_WAIT_S + 0.8)
     sheet_dump = self.p.dump_ui(retries=1)
+    self._save_dump(f'{step_base}_sheet', sheet_dump)
     sheet_elements = parse_ui_dump(sheet_dump) if sheet_dump else []
+
+    # Discriminator (see invariant #3 above): the post-tap dump must contain
+    # a different anchor element than drawer_anchor.bounds — otherwise we are
+    # likely still looking at the same drawer and the tap was a no-op.
     anchor_bounds = find_anchor_bounds(sheet_elements, anchors)
-    if not anchor_bounds:
-        self.p.log_event('error',
-            'tt_drawer_tap_did_not_open_sheet',
-            meta={'category': 'tt_drawer_tap_did_not_open_sheet',
-                  'drawer_anchor_label': drawer_anchor.label[:50]})
-        return None, 'tt_drawer_tap_did_not_open_sheet'
+    drawer_still_open = self._find_tt_account_switcher_anchor_in_drawer(sheet_elements)
+    if (not anchor_bounds
+            or tuple(anchor_bounds) == tuple(drawer_anchor.bounds)
+            or (drawer_still_open is not None
+                and tuple(drawer_still_open.bounds) == tuple(drawer_anchor.bounds))):
+        return _emit_error('tt_drawer_tap_did_not_open_sheet',
+                           {'drawer_anchor_label': drawer_anchor.label[:50],
+                            'sheet_top_labels': _top_labels(sheet_elements, 30)})
 
     self.p.log_event('account_switch',
         f'tt_menu_path_opened_bottomsheet bounds={anchor_bounds}',
         meta={'category': 'tt_menu_path_opened_bottomsheet'})
     return anchor_bounds, None
 ```
+
+**Note on `_tap_tt_profile_menu`:** Per invariant #1, when this helper returns False, the orchestrator emits the `tt_profile_menu_not_found` event itself. The helper's own diagnostic `log_event` (if any) MUST NOT compete with the canonical category — either omit a category-bearing event from the helper, or have it emit a non-`error`-type breadcrumb (e.g. `type='account_switch'`) so the mapper does not consume it as the canonical error.
 
 ### `_top_labels(elements: list, n: int) -> list[str]` (helper, module-level)
 
@@ -225,12 +251,13 @@ The orchestrator handles its own `log_event` calls for the new error codes (with
 
 | `error_code` (= `meta.category`) | Condition | `meta` extra |
 |---|---|---|
-| `tt_account_sheet_closed_before_parse` | Probe didn't open sheet AND didn't open Stories (legacy "single-account device" semantic) | `target` |
-| `tt_header_tap_failed` | `_tap_profile_header` returned False — should be impossible given current impl; defensive | (none) |
-| `tt_stories_back_failed` | BACK after Stories did not return to own profile | (none — back_dump saved on disk path is enough) |
-| `tt_profile_menu_not_found` | `cd='Меню профиля'` not tappable in current dump | (none) |
+| `tt_account_sheet_closed_before_parse` | Probe didn't open sheet AND didn't open Stories (legacy "single-account device" semantic). Emitted by **callsite**, not orchestrator. | `target`, `reason` |
+| `tt_header_tap_failed` | `_tap_profile_header` returned False — defensive (should be impossible given current impl) | (none) |
+| `tt_probe_unknown_post_state` | Probe didn't open sheet, didn't detect Stories — orchestrator value; mapped to `tt_account_sheet_closed_before_parse` at callsite | `probe_top_labels[]` |
+| `tt_stories_back_failed` | BACK after Stories did not return to own profile | `back_top_labels[]` |
+| `tt_profile_menu_not_found` | `cd='Меню профиля'` not tappable in current dump | `profile_top_labels[]` |
 | `tt_account_menu_unknown_layout` | Drawer has no broad-anchor trigger | `drawer_labels[]` (top 30) |
-| `tt_drawer_tap_did_not_open_sheet` | Drawer trigger tapped, but bottomsheet anchor absent | `drawer_anchor_label` |
+| `tt_drawer_tap_did_not_open_sheet` | Drawer trigger tapped, but bottomsheet anchor absent OR identical-bounds to drawer (no-op tap detected) | `drawer_anchor_label`, `sheet_top_labels[]` |
 
 All new codes must be added to the resolver mapping in `error_codes.py` so the canonical-error-code mapper picks them up from `events[].meta.category` on `fail`-events (per [[project_error_code_mapper_fail_event_fix]]).
 
@@ -246,14 +273,16 @@ All new codes must be added to the resolver mapping in `error_codes.py` so the c
 6. `test_find_drawer_anchor_fallback_аккаунты` — drawer with only `'Аккаунты'` → fallback hit.
 7. `test_find_drawer_anchor_none` — drawer with irrelevant content → None.
 8. `test_open_tt_account_switcher_legacy_path` — probe immediately yields bottomsheet (mock `dump_ui` to return XML with `'Управление аккаунтами'`) → `(anchor_bounds, None)`, `_tap_tt_profile_menu` not invoked.
-9. `test_open_tt_account_switcher_menu_path_happy` — mocked sequence: probe→Stories, BACK→profile, menu→drawer-with-anchor, tap→sheet. Verify `(anchor_bounds, None)` and that **4 dumps are saved** with step names `tt_3_open_list_probe`, `tt_3_open_list_menu`, `tt_3_open_list_drawer`, `tt_3_open_list_sheet` (exact names are part of the test contract — they become S3 forensics).
-10. `test_open_tt_account_switcher_unknown_layout` — drawer without any trigger → `(None, 'tt_account_menu_unknown_layout')` and the corresponding `log_event` call has `meta.drawer_labels` non-empty.
-11. `test_open_tt_account_switcher_single_account_legacy_semantic` — probe yields neither sheet nor Stories → `(None, 'tt_probe_unknown_post_state')`. Companion test for the **callsite** in `_switch_tiktok` verifies this is mapped to a `_fail(...)` with the legacy `tt_account_sheet_closed_before_parse` event/category.
-12. `test_open_tt_account_switcher_back_failed` — Stories detected, but BACK does not return to own profile → `(None, 'tt_stories_back_failed')`.
+9. `test_open_tt_account_switcher_menu_path_happy` — mocked sequence: probe→Stories, BACK→profile, menu→drawer-with-anchor, tap→sheet **with different bounds than drawer_anchor**. Verify `(anchor_bounds, None)` and that **5 dumps are saved** with step names `tt_3_open_list_probe`, `tt_3_open_list_back`, `tt_3_open_list_menu`, `tt_3_open_list_drawer`, `tt_3_open_list_sheet` (exact names are part of the test contract — they become S3 forensics).
+10. `test_open_tt_account_switcher_unknown_layout` — drawer without any trigger → `(None, 'tt_account_menu_unknown_layout')`, exactly one `error`-type `log_event` with `meta.category=='tt_account_menu_unknown_layout'` and `meta.drawer_labels` non-empty.
+11. `test_open_tt_account_switcher_single_account_legacy_semantic` — probe yields neither sheet nor Stories → `(None, 'tt_probe_unknown_post_state')`, one `error`-type `log_event` with `meta.category=='tt_probe_unknown_post_state'`. Companion test for the **callsite** in `_switch_tiktok` verifies this is mapped to a `_fail(...)` with a second `error`-type event whose `meta.category=='tt_account_sheet_closed_before_parse'` (legacy semantic preserved).
+12. `test_open_tt_account_switcher_back_failed` — Stories detected, but BACK does not return to own profile → `(None, 'tt_stories_back_failed')` and `error`-type event with that category + `back_top_labels[]`.
+13. `test_open_tt_account_switcher_drawer_noop_tap` — drawer trigger found, but post-tap `sheet_elements` still contains the **same drawer_anchor** (identical bounds) → `(None, 'tt_drawer_tap_did_not_open_sheet')`. Verifies the discriminator (invariant #3) rejects no-op taps that would otherwise re-match the same broad-anchor label.
+14. `test_open_tt_account_switcher_canonical_event_per_error` — parametrised over every non-success error_code: for each, verify exactly **one** `error`-type `log_event` is emitted with `meta.category == <error_code>`. Guards invariant #1.
 
 ### Signature-level regression test
 
-13. `test_tap_profile_header_signature_unchanged` — uses `inspect.signature(AccountSwitcher._tap_profile_header)` to assert parameter names `[self, elements, header_y_max, step, fallback_coords]` and return annotation `bool`. Mirrors the pattern from [[project_tt_switcher_bool_return_fixed]]. Guards against accidental refactor breakage for IG/YT-RO callsites.
+15. `test_tap_profile_header_signature_unchanged` — uses `inspect.signature(AccountSwitcher._tap_profile_header)` to assert parameter names `[self, elements, header_y_max, step, fallback_coords]` and return annotation `bool`. Mirrors the pattern from [[project_tt_switcher_bool_return_fixed]]. Guards against accidental refactor breakage for IG/YT-RO callsites.
 
 ### Integration smoke (post-deploy)
 
