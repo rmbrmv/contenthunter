@@ -134,10 +134,15 @@ try:
                 log.warning(f'wait_upload retry {retry_n}: tap_element no share match — break to final check')
                 break
 
-        # NEW: Tier 1.5 — one fallback tap on action_bar OK
+        # NEW: Tier 1.5 — one fallback tap on action_bar OK.
+        # `ok_tap_dispatched` is the source of truth for the rollout query:
+        # True ONLY if the helper actually found a matching node and ADB
+        # accepted the tap. False on no-match / malformed bounds / ADB error.
+        ok_tap_dispatched = False
         if not progressed and self._is_ig_editor_still_visible(self.dump_ui()):
             ok_ui = self.dump_ui()
             if self._tap_ig_action_bar_ok(ok_ui):
+                ok_tap_dispatched = True
                 self.log_event('info',
                                'Instagram: action_bar OK fallback tap',
                                meta={'category': 'ig_share_ok_button_attempted',
@@ -147,14 +152,17 @@ try:
                     progressed = True
 
         if not progressed and self._is_ig_editor_still_visible(self.dump_ui()):
-            # Unchanged: fail-fast emit
+            # Unchanged: fail-fast emit.
+            # ok_fallback_attempted reflects only whether a tap was actually
+            # dispatched (helper returned True), not whether the conditional
+            # was entered.
             self.log_event('error',
                            'Instagram: Share tap не прогрессировал после retries',
                            meta={'category': 'ig_share_tap_no_progress',
                                  'platform': self.platform,
                                  'step': 'wait_upload',
                                  'retries_exhausted': 2,
-                                 'ok_fallback_attempted': True})
+                                 'ok_fallback_attempted': ok_tap_dispatched})
             try:
                 self._save_debug_artifacts('instagram_share_no_progress')
             except Exception as _art_e:
