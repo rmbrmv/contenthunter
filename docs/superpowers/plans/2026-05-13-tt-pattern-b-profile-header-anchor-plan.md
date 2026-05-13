@@ -467,10 +467,21 @@ fallbacks. 6 unit tests."
 - [ ] **Step 1: Write failing tests**
 
 ```python
-def test_has_tt_bottomsheet_signature_add_account_ru():
+def test_has_tt_bottomsheet_signature_add_account_ru_with_plus():
     sw = _make_switcher()
     elements = [
         make_el(text='+ Добавить аккаунт', clickable=True,
+                bounds=(50, 1900, 1030, 1980)),
+    ]
+    assert sw._has_tt_bottomsheet_signature(elements) is True
+
+
+def test_has_tt_bottomsheet_signature_add_account_ru_without_plus():
+    """TT often renders the '+' icon as a separate node, leaving the
+    text as plain 'Добавить аккаунт'. Must still match."""
+    sw = _make_switcher()
+    elements = [
+        make_el(text='Добавить аккаунт', clickable=True,
                 bounds=(50, 1900, 1030, 1980)),
     ]
     assert sw._has_tt_bottomsheet_signature(elements) is True
@@ -480,6 +491,15 @@ def test_has_tt_bottomsheet_signature_add_account_en():
     sw = _make_switcher()
     elements = [
         make_el(text='+ Add account', clickable=True,
+                bounds=(50, 1900, 1030, 1980)),
+    ]
+    assert sw._has_tt_bottomsheet_signature(elements) is True
+
+
+def test_has_tt_bottomsheet_signature_add_account_en_without_plus():
+    sw = _make_switcher()
+    elements = [
+        make_el(text='Add account', clickable=True,
                 bounds=(50, 1900, 1030, 1980)),
     ]
     assert sw._has_tt_bottomsheet_signature(elements) is True
@@ -543,7 +563,10 @@ Add after `_find_tt_account_switcher_anchor_in_drawer`:
 
 ```python
     _TT_ADD_ACCOUNT_RE = re.compile(
-        r'^\+\s*(Добавить|Add)\s+(аккаунт|account)',
+        # Plus prefix optional (TT often renders the icon as a separate
+        # node, leaving plain "Добавить аккаунт"); grouping with the
+        # second (аккаунт|account) prevents bare-'account' substring leak.
+        r'^\+?\s*(Добавить|Add)\s+(аккаунт|account)\b',
         re.IGNORECASE,
     )
 
@@ -848,7 +871,11 @@ Add after `_has_tt_bottomsheet_signature`:
         )
         self.p.adb_shell('input keyevent KEYCODE_BACK')
         time.sleep(POST_TAP_WAIT_S)
-        back_dump = self.p.dump_ui(retries=1)
+        # Use retries=3 to avoid the known TT dump race that produces
+        # empty/stale dumps immediately after a keyevent — same retry
+        # budget the surrounding profile verification uses (see
+        # _switch_tiktok above).
+        back_dump = self.p.dump_ui(retries=3)
         self._save_dump(f'{step_base}_back', back_dump)
         if not self._tt_is_own_profile(back_dump):
             return _emit_error(
@@ -1437,13 +1464,25 @@ In `account_switcher.py`, find the block starting at L2262 (`header_y_max = cfg[
         # [TT Pattern B 2026-05-13] Probe-and-pivot orchestrator —
         # extracted from prior 2-attempt inline retry. Orchestrator emits
         # exactly one canonical error-event per failure; callsite only
-        # maps to _fail. Spec:
+        # maps to _fail. Distinct step name per error so the publisher's
+        # _resolve_publish_fail_category() Pass-2 fallback (step → category
+        # via _SWITCHER_STEP_TO_CATEGORY) still yields the canonical code
+        # even if the error event is lost to a logging race. Spec:
         # docs/superpowers/specs/2026-05-13-tt-pattern-b-profile-header-anchor-design.md
         anchor_bounds, err = self._open_tt_account_switcher(
             elements, cfg, target, step_base='tt_3_open_list')
         if err:
+            _TT_ERR_TO_STEP = {
+                'tt_account_sheet_closed_before_parse': 'tt_3_open_list',
+                'tt_header_tap_failed':                 'tt_3_open_list_probe',
+                'tt_stories_back_failed':               'tt_3_open_list_back',
+                'tt_profile_menu_not_found':            'tt_3_open_list_menu',
+                'tt_account_menu_unknown_layout':       'tt_3_open_list_drawer',
+                'tt_drawer_tap_did_not_open_sheet':     'tt_3_open_list_sheet',
+            }
             return self._fail(
-                f'tt_3_open_list: {err}', step='tt_3_open_list')
+                f'tt_3_open_list: {err}',
+                step=_TT_ERR_TO_STEP.get(err, 'tt_3_open_list'))
 ```
 
 Verify no orphan references — grep for the variables used by the old loop (`for attempt in range(2)`, `anchor_bounds_retry`, etc.) inside `_switch_tiktok` to make sure nothing downstream depends on the loop's local vars. The new `anchor_bounds` is in scope, which is what the downstream `_find_and_tap_account` call needs.
