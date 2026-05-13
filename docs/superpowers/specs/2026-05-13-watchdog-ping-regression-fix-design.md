@@ -124,7 +124,9 @@ All five tests use `unittest.mock.MagicMock` for `self._watchdog`; no real threa
 Additional test for Edit 3 in the same file:
 
 6. `test_chunked_push_pings_watchdog_per_chunk`
-   - Mock `_adb_push_single_chunk` to always return `(True, None)`; supply a fake local file split into 3 chunks; set `pub._watchdog = MagicMock()`; call `_adb_push_chunked`; assert `pub._watchdog.ping.call_count >= 3` (at least one ping per successful chunk).
+   - Mock `pub.log_event` to a no-op `MagicMock` so log-event-driven pings are isolated out of the assertion.
+   - Mock `_adb_push_single_chunk` to always return `(True, None)`; supply a fake local file that splits into exactly 3 chunks; set `pub._watchdog = MagicMock()`; call `_adb_push_chunked`.
+   - Assert `pub._watchdog.ping.call_count == 3` — exactly one explicit ping per successful single-chunk push (Edit 3), with no log-event pings counted.
 
 ## 4. Rollout
 
