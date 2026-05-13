@@ -1,5 +1,23 @@
 # BACKLOG — Генри
 
+## 🟢 Spec D — slot move обновляет publish date (validator PR #9 merged 2026-05-13)
+**Приоритет:** высокий
+**Статус:** merged в main `eab5791`, prod deploy заблокирован uncommitted hot-patch (schemes.py)
+
+**Open для пользователя:**
+- Resolve prod hot-patch: `cd /root/.openclaw/workspace-genri/validator && git stash && git pull origin main && git stash pop` (или commit hot-patch если нужен) — потом `sudo pm2 restart validator-backend` + `cd frontend && npm run build`.
+- Manual smoke на testbench phone #19 (см. evidence doc): drag pq.pending в другой день → assert pq cancelled + unic переадресован; drag во время `pq.running` → UI ⏳ badge + backend 409.
+- 24h SQL canary: `count(*) WHERE DATE(pt.started_at) != vss.slot_date` ≈0.
+- 409 rate в pm2 logs validator-backend — guard срабатывает редко.
+
+**Backlog (next iteration):**
+- Race-detect для `update_slot` (class A) — Spec B `cancel_downstream_for_content` имеет тот же TOCTOU изъян, scope Spec D не покрывает; пока никто не жаловался.
+- Kill protocol для running publisher — не закрываем started publishers (риск drafts/screen recordings); если pain нарастёт — отдельный design.
+
+Evidence: `docs/evidence/2026-05-13-spec-d-slot-move-update-publish-date-shipped.md`.
+
+---
+
 ## 🔴 TT 24h verify — PRs #32, #33, #34 (2026-05-12)
 **Приоритет:** высокий
 **Статус:** ожидает 24ч окно (≈ 2026-05-12 18:00 UTC)
