@@ -1,10 +1,49 @@
 # Backlog tickets
 
+## 2026-05-13 session follow-ups
+
+### 24h verify (next day morning)
+
+Три shipped PR в один день требуют 24h-verify SQL:
+
+| PR | Topic | Deadline (UTC) | Acceptance |
+|---|---|---|---|
+| #48 | Watchdog ping regression | 2026-05-14 08:40 | Pi 3+5 `switch_failed_unspecified` < 5 / 24h |
+| #49 | IG share OK fallback (Tier 1.5) | 2026-05-14 11:45 | `ok_rescued_24h / ok_attempted_24h ≥ 30%` |
+| #50 | TT security prompt dismiss | 2026-05-14 13:25 | `tt_profile_tab_broken < 2/24h` AND `tt_security_prompt_dismissed > 0` |
+
+SQL pack в `docs/evidence/2026-05-13-*.md § "24h verify"` для каждого PR. После прогона — обновить evidence docs с verdicts + memory entries (статус → close OR iterate).
+
+### TT Pattern B — `tt_account_sheet_closed_before_parse` (top open today)
+
+**Top остаточный TT fail после PR #50 (sibling pattern, разный root cause).** 19/24h на 2026-05-13. Drill (task 5338, `clickpay_under` на phone #19): `_tap_profile_header` тапает coord (540, 180) — попадает на видео-превью карточку, а НЕ на header профиля (TT layout change). UI dump retry1 показывает: «clickpay_under · 13 ч. назад», «Оригинальный звук от clickpay_under», «Закрыть», «0 зрителей», «Еще». Это видео-card, не account-switcher trigger.
+
+Fix варианты:
+1. Alternative anchor — найти «Меню профиля» button at [945,112][1058,225] (top-right, resource-id `action_bar_button_text`) вместо (540, 180) tap
+2. Resource-id-based: искать кликабельный node с конкретным `:id/` суффиксом для profile header
+3. Skip fallback (540, 180) и fail-fast если xml_bounds не нашёл header
+
+Distribution: 13/19 на Pi 9, 2/19 на Pi 7, остальное singletons. Sample tasks 5338, 5335, 5334, 5332, 5331 — все clickpay_* accounts на Pi 9.
+
+Approach: спецификации ещё нет. Нужен brainstorming с инспекцией нескольких failed-task XMLs для надёжного anchor.
+
+### AI Unstuck не firing — possibly self-resolved by PR #48
+
+До PR #48 (08:40 UTC): AI Unstuck не firing 0/22 в TT timeout кейсах. Hypothesis: watchdog regression обрывал AI Unstuck до того, как он успевал что-то сделать. Per memory `project_watchdog_ping_regression_shipped` — теперь watchdog продлевается активностью. Проверить 24h: возвращается ли AI Unstuck к нормальной частоте.
+
+### YT Шаг D — yt_editor_upload_timeout — possibly self-resolved by PR #48
+
+Post-PR #48 (4h sample): 0 `yt_editor_upload_timeout` post-deploy (vs 2/day pre-deploy). Похоже на collateral fix от watchdog regression. Подтвердить 24h post-deploy: если 0 → close backlog item.
+
+---
+
 ## YT stabilization follow-ups (2026-05-12 session)
 
 ### Шаг D — yt_editor_upload_timeout (после AI Unstuck)
 
-13 fails/week, single-pattern `YouTube: редактор timeout — Загрузить не найдено (после AI)` в `publisher_youtube.py:1199-1205`. AI Unstuck вызывается (`ai_unstuck_result=True`), что-то делает, но кнопка «Загрузить» не появляется. Screen recordings analysis на task'ах 4892/4444/4441. Hypothesis: editor в caption-screen с задержанной generation animation; AI не дожидается. Fix варианты: лучший detection caption-screen + skip AI, или post-AI wait+retry с другими criteria.
+**STATUS:** likely closed by PR #48 (watchdog ping). Post-deploy 4h sample = 0 fails. Confirm 24h.
+
+13 fails/week pre-2026-05-13, single-pattern `YouTube: редактор timeout — Загрузить не найдено (после AI)` в `publisher_youtube.py:1199-1205`. AI Unstuck вызывается (`ai_unstuck_result=True`), что-то делает, но кнопка «Загрузить» не появляется. Screen recordings analysis на task'ах 4892/4444/4441. Hypothesis: editor в caption-screen с задержанной generation animation; AI не дожидается. Fix варианты: лучший detection caption-screen + skip AI, или post-AI wait+retry с другими criteria.
 
 ### Port `device_tz` to `publisher_helpers.parse_picker_thumbnail_date`
 
