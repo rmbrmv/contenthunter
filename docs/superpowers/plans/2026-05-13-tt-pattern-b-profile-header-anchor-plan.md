@@ -1041,6 +1041,88 @@ def test_open_tt_account_switcher_back_failed(monkeypatch):
     assert 'back_top_labels' in err_events[0]['meta']
 
 
+def test_open_tt_account_switcher_menu_tap_en_locale(monkeypatch):
+    """Menu pivot must accept both 'Меню профиля' and 'Profile menu'.
+    On EN TikTok the cd is 'Profile menu' — must not return
+    tt_profile_menu_not_found just because of locale."""
+    captured_patterns = []
+    sw = _make_sw_with_proxy(
+        dump_queue=['<probe/>', '<back/>', '<menu/>', '<drawer/>', '<sheet/>'])
+    # Intercept tap_element to record what patterns were passed.
+    def fake_tap_element(xml, patterns, clickable_only=True):
+        captured_patterns.append(list(patterns))
+        return True  # menu tap succeeds
+    sw.p.tap_element = fake_tap_element
+
+    stories = [
+        make_el(cd='Close', bounds=(900, 200, 1080, 300)),
+        make_el(cd='More', bounds=(900, 2080, 1080, 2200)),
+    ]
+    drawer_anchor = make_el(text='Manage accounts', clickable=True,
+                            bounds=(50, 500, 1030, 560))
+    drawer_els = [drawer_anchor]
+    sheet_els = [
+        make_el(text='+ Add account', clickable=True,
+                bounds=(50, 1900, 1030, 1980)),
+        make_el(text='@user1', bounds=(50, 800, 300, 880)),
+        make_el(text='@user2', bounds=(50, 900, 300, 980)),
+    ]
+    import account_switcher as mod
+    parse_calls = iter([stories, [], drawer_els, sheet_els])
+    monkeypatch.setattr(mod, 'parse_ui_dump',
+                        lambda xml: next(parse_calls))
+    fab_calls = iter([None, (50, 1900, 1030, 1980)])
+    monkeypatch.setattr(mod, 'find_anchor_bounds',
+                        lambda els, anchors: next(fab_calls))
+
+    anchor, err = sw._open_tt_account_switcher(
+        elements=[], cfg=_TT_CFG, target='someone',
+        step_base='tt_3_open_list')
+
+    assert err is None
+    # Menu tap patterns include both locales
+    assert any('Меню профиля' in p and 'Profile menu' in p
+               for p in captured_patterns), captured_patterns
+
+
+def test_open_tt_account_switcher_handles_only_sheet_anchor_synthesised(
+        monkeypatch):
+    """If find_anchor_bounds returns None but positive sheet signature
+    is True (e.g. sheet shows @handles but no ACCOUNT_LIST_ANCHORS
+    label), the orchestrator must synthesise anchor_bounds from the
+    first @handle — otherwise it would falsely emit
+    tt_drawer_tap_did_not_open_sheet."""
+    sw = _make_sw_with_proxy(
+        dump_queue=['<probe/>', '<back/>', '<menu/>', '<drawer/>', '<sheet/>'],
+        tap_returns=[True],
+    )
+    stories = [
+        make_el(cd='Закрыть', bounds=(900, 200, 1080, 300)),
+        make_el(cd='Еще', bounds=(900, 2080, 1080, 2200)),
+    ]
+    drawer_anchor = make_el(text='Управление аккаунтами', clickable=True,
+                            bounds=(50, 500, 1030, 560))
+    drawer_els = [drawer_anchor]
+    first_handle = make_el(text='@user1', bounds=(50, 800, 300, 880))
+    sheet_els = [first_handle,
+                 make_el(text='@user2', bounds=(50, 900, 300, 980))]
+    import account_switcher as mod
+    parse_calls = iter([stories, [], drawer_els, sheet_els])
+    monkeypatch.setattr(mod, 'parse_ui_dump',
+                        lambda xml: next(parse_calls))
+    # find_anchor_bounds returns None for both probe AND sheet.
+    monkeypatch.setattr(mod, 'find_anchor_bounds',
+                        lambda els, anchors: None)
+
+    anchor, err = sw._open_tt_account_switcher(
+        elements=[], cfg=_TT_CFG, target='someone',
+        step_base='tt_3_open_list')
+
+    assert err is None, f'expected success, got {err}'
+    # anchor_bounds synthesised from first @handle
+    assert tuple(anchor) == tuple(first_handle.bounds)
+
+
 def test_open_tt_account_switcher_menu_dump_saved_on_failure(monkeypatch):
     """Invariant #2: menu pre-tap dump is saved BEFORE the tap, so a
     button-not-found failure still produces forensic artifact."""
@@ -1089,8 +1171,14 @@ In `account_switcher.py`, find the `# --- Phase 2: menu path (implemented in Tas
         menu_dump = self.p.dump_ui(retries=1)
         self._save_dump(f'{step_base}_menu', menu_dump)
         menu_elements = parse_ui_dump(menu_dump) if menu_dump else []
-        tapped = self.p.tap_element(menu_dump, ['Меню профиля'],
-                                    clickable_only=True)
+        # RU + EN aliases for the «Меню профиля» content-desc — matches the
+        # locale coverage already present for Stories detection and drawer
+        # triggers (TT_DRAWER_ACCOUNT_TRIGGERS).
+        tapped = self.p.tap_element(
+            menu_dump,
+            ['Меню профиля', 'Profile menu'],
+            clickable_only=True,
+        )
         if not tapped:
             return _emit_error(
                 'tt_profile_menu_not_found',
@@ -1114,8 +1202,20 @@ In `account_switcher.py`, find the `# --- Phase 2: menu path (implemented in Tas
         self._save_dump(f'{step_base}_sheet', sheet_dump)
         sheet_elements = parse_ui_dump(sheet_dump) if sheet_dump else []
 
-        anchor_bounds = find_anchor_bounds(sheet_elements, anchors)
         sheet_open = self._has_tt_bottomsheet_signature(sheet_elements)
+        anchor_bounds = find_anchor_bounds(sheet_elements, anchors)
+        # Discriminator (invariant #3): positive signature is sufficient.
+        # When the signature confirms the sheet but find_anchor_bounds
+        # returns nothing (sheet has @handles or '+ Добавить' but no
+        # ACCOUNT_LIST_ANCHORS text), synthesise anchor_bounds from the
+        # first @handle element so the downstream container_y_range
+        # computation in _find_and_tap_account still works.
+        if sheet_open and not anchor_bounds:
+            for el in sheet_elements:
+                if (el.text or '').strip().startswith('@') \
+                        and el.bounds[1] > 600:
+                    anchor_bounds = tuple(el.bounds)
+                    break
         if (not anchor_bounds
                 or tuple(anchor_bounds) == tuple(drawer_anchor.bounds)
                 or not sheet_open):
