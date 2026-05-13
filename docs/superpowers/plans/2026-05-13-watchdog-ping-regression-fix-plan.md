@@ -487,13 +487,24 @@ Expected:
 
 - [ ] **Step 4: Run the full repo test suite to catch incidental regressions**
 
+Run pytest first (so its exit status is visible to the shell), then look at the last lines for context:
+
 ```bash
-pytest tests/ -x --ignore=tests/test_publisher_obstacle_kb.py -q 2>&1 | tail -30
+pytest tests/ -x --ignore=tests/test_publisher_obstacle_kb.py -q > /tmp/full-suite.log 2>&1
+status=$?
+tail -30 /tmp/full-suite.log
+echo "pytest exit=$status"
 ```
 
-(The obstacle-KB suite needs a live DB; skip it here. Other DB-heavy suites that already exist on main may have pre-existing failures — see [[project_validator_stale_generate_description_tests]] for the equivalent pattern in validator. If you encounter failures unrelated to `watchdog`/`log_event`/`adb_push`, treat them as pre-existing and document the names, do not try to fix them in this PR.)
+Do NOT use `pytest ... | tail` — the pipe hides pytest's exit code behind `tail`'s success.
 
-Expected: green or pre-existing failures only (none touching `log_event`, `watchdog`, `adb_push_chunked`).
+The obstacle-KB suite needs a live DB and is intentionally excluded. Other DB-heavy suites that already exist on main may have pre-existing failures (see [[project_validator_stale_generate_description_tests]] for the equivalent pattern in validator).
+
+Decision rule:
+- `pytest exit=0` → proceed.
+- `pytest exit=1` and the failures are exclusively in tests touching `log_event`, `watchdog`, or `adb_push_chunked` → **stop and fix in this PR**.
+- `pytest exit=1` but the failures match pre-existing names that already fail on `origin/main` → **document the failing test names in the next commit message** and proceed. Verify they are pre-existing by checking out `origin/main` in a scratch worktree (or `git stash` your edits and run the same command) and confirming the same failures.
+- Any failure on `tests/test_publisher_log_event_ping.py` or `tests/test_watchdog_timer.py` → **stop and fix**.
 
 - [ ] **Step 5: Commit Edit 3**
 
