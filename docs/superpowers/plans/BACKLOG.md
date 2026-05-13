@@ -19,11 +19,15 @@ SQL pack в `docs/evidence/2026-05-13-*.md § "24h verify"` для каждог�
 
 12-commit branch (`be62872..69a2dea`) squash-merged как `76ecd4f`. Probe-and-pivot orchestrator закрывает 19/24h root cause (TT app update — username tap открывает Stories/LIVE viewer вместо account-switcher bottomsheet). Memory: [[project_tt_pattern_b_shipped]]. Evidence: `docs/evidence/2026-05-13-tt-pattern-b-shipped.md`. Smoke pq 2149 live; 24h verify deadline 2026-05-14 17:30 UTC.
 
+**Iteration #2 — 2-step settings-nested account switcher (HIGH priority, evidence in hand)**
+
+Live smoke task 5572 (clickpay_go) post-hotfix: orchestrator successfully reached drawer search but `_find_tt_account_switcher_anchor_in_drawer` returned None. `drawer_labels[]` payload reveals new TT requires 2-step navigation: «Меню профиля» → «Настройки и конфиденциальность» → settings page → «Управление аккаунтами». Spec for iter#2 needed: add a settings-nested lookup pass to the orchestrator when first drawer search returns None. Anchors: `['настройки и конфиденциальность', 'настройки', 'settings and privacy', 'settings']`. Cap nesting at 1 level. See `docs/evidence/2026-05-13-tt-pattern-b-shipped.md` § Second smoke for the full drawer label list.
+
 **Open follow-ups (Minor, from final holistic opus review):**
 1. Inline-vs-helper asymmetry on `tt_account_sheet_closed_before_parse` emission (functionally fine).
 2. `menu_dump` redundancy with `back_dump` (~1-2s extra).
 3. `_tap_profile_header` internal `_save_dump` overwritten by orchestrator under same step name (pre-existing).
-4. End-to-end test of menu-path through `_switch_tiktok` missing — smoke is only true verification.
+4. End-to-end test of menu-path through `_switch_tiktok` missing — smoke is only true verification. **CAUGHT BY THIS — smoke caught `adb_shell→adb` regression (hotfix PR #54) that 6 codex rounds + 48 unit tests missed.**
 
 ### `switch_failed_unspecified` mapper retry-suffix gap (new, 2026-05-13)
 

@@ -57,10 +57,31 @@ Probe-and-pivot orchestrator for the TikTok account-switcher. Closes the 19/24h 
 
 **First smoke (pre-hotfix):** pq 2149 → task 5571 (clickpay_under). Status `failed`, `error_code='switch_failed_unspecified'`. Events show `tt_username_tap_opened_stories` detected (Stories pivot correctly identified), then crashed with `AttributeError: 'DevicePublisher' object has no attribute 'adb_shell'` at the BACK keyevent. Triggered hotfix PR #54.
 
-**Second smoke (post-hotfix):** pq 2071 → re-queued at 2026-05-13 17:45 UTC. Pending dispatcher pickup. **Expected outcomes:**
+**Second smoke (post-hotfix):** pq 2071 → task 5572 (clickpay_go). Completed 2026-05-13 ~17:57 UTC with `error_code='tt_account_menu_unknown_layout'`. **This is the acceptable first-iteration outcome** — orchestrator walked the full new path:
 
-- **Happy path:** `events[].meta.category` includes `tt_menu_path_opened_bottomsheet` → status `done`.
-- **First-iteration evidence (acceptable):** `error_code='tt_account_menu_unknown_layout'` with `meta.drawer_labels[]` populated — that's actionable evidence for iteration #2 without further smoke.
+1. Phase 1 probe → Stories detected ✓
+2. KEYCODE_BACK → returned to own profile (verified by `_tt_is_own_profile`) ✓
+3. Tapped `cd='Меню профиля'` ✓
+4. Drawer dumped + searched for broad-anchor → **no match** → fail-fast with `drawer_labels[]` payload ✓
+
+**Iteration #2 design — diagnosed from `drawer_labels[]`:**
+
+```json
+[
+  "0", "Лайки", "Повседневные расчёты в цифровом формате\n",
+  "Понравившиеся видео", "Лайк", "Поделиться",
+  "Меню профиля", "Профиль", "Ресурсы", "Баланс",
+  "Личные инструменты", "Центр активности", "Время",
+  "Видео офлайн", "Скачать", "Ваш QR-код",
+  "Инструменты для творчества и бизнеса", "Инструменты для бизнеса",
+  "Магазин", "TikTok Studio", "Инструменты автора",
+  "Настройки и конфиденциальность", "Настройки"
+]
+```
+
+**Finding:** No `TT_DRAWER_ACCOUNT_TRIGGERS` strings present. The new TT requires **2-step navigation** from the profile menu drawer: tap «Настройки и конфиденциальность» (or «Настройки») → opens a settings page → tap «Управление аккаунтами» on that page.
+
+**Iteration #2 task:** Add a settings-nested path to the orchestrator — if `_find_tt_account_switcher_anchor_in_drawer` returns None, fall through to a second lookup against `['настройки и конфиденциальность', 'настройки', 'settings and privacy', 'settings']` → tap → re-dump → re-run `_find_tt_account_switcher_anchor_in_drawer`. Cap nesting at 1 level to avoid infinite recursion.
 
 ### 24h soak SQL (deadline: 2026-05-14 17:30 UTC)
 
