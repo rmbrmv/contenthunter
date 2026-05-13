@@ -328,15 +328,27 @@ All new codes must be added to the resolver mapping in `error_codes.py` so the c
 2. Expected outcomes:
    - **Happy path** (most likely on Pi 9 if our drawer hypothesis is correct): task succeeds; `events[].meta.category` includes `tt_menu_path_opened_bottomsheet`.
    - **First iteration failure on real device**: task fails with `tt_account_menu_unknown_layout`; `events[].meta.drawer_labels` lists the real drawer content — feed straight into iteration #2 spec without further smoke.
-3. 24h soak SQL:
+3. 24h soak SQL. Per invariant #5 the terminal `failed` event has no `meta.category`; the canonical category lives on the most recent `error`-type event before it. The acceptance query MUST scan backwards for that event:
    ```sql
-   SELECT events->-1->'meta'->>'category' AS cat, COUNT(*) AS n
-   FROM publish_tasks
-   WHERE platform='TikTok'
-     AND created_at >= '<deploy_ts>'
-     AND status='failed'
+   WITH last_err AS (
+     SELECT pt.id, MAX(ev.idx) AS idx
+     FROM publish_tasks pt,
+          jsonb_array_elements(pt.events) WITH ORDINALITY AS ev(value, idx)
+     WHERE pt.platform = 'TikTok'
+       AND pt.created_at >= '<deploy_ts>'
+       AND pt.status = 'failed'
+       AND ev.value->>'type' = 'error'
+       AND ev.value->'meta'->>'category' IS NOT NULL
+     GROUP BY pt.id
+   )
+   SELECT (pt.events->(le.idx::int - 1)->'meta'->>'category') AS cat,
+          COUNT(*) AS n
+   FROM publish_tasks pt
+   JOIN last_err le ON le.id = pt.id
    GROUP BY 1 ORDER BY 2 DESC;
    ```
+   (`WITH ORDINALITY` is 1-based; `events` is 0-based, hence `idx - 1`.)
+
    Acceptance: `tt_account_sheet_closed_before_parse` falls from 19/24h pre-deploy to ≤5/24h. New codes (`tt_account_menu_unknown_layout`, `tt_drawer_tap_did_not_open_sheet`) ≤3/24h combined. If `tt_account_menu_unknown_layout > 3/24h` — start iteration #2 from the `drawer_labels` evidence.
 
 ## Risk / Rollout
