@@ -52,6 +52,7 @@ import pytest
 
 from account_switcher import (
     AccountSwitcher,
+    SwitchResult,
     TT_DRAWER_ACCOUNT_TRIGGERS,
     UIElement,
     _top_labels,
@@ -903,18 +904,16 @@ def test_open_tt_account_switcher_menu_path_happy(monkeypatch):
         dump_queue=['<probe/>', '<back/>', '<menu/>', '<drawer/>', '<sheet/>'],
         tap_returns=[True],  # menu tap
     )
-    # Sequence of parsed element lists in call order:
-    #   1) probe → Stories markers
-    #   2) back → own profile (irrelevant — _tt_is_own_profile mocked True)
-    #   3) menu pre-tap → has Меню профиля (tap_element mocked True)
-    #   4) drawer → has Управление аккаунтами clickable
-    #   5) sheet → has positive bottomsheet signature
+    # parse_ui_dump call sequence on the happy path:
+    #   1) probe_dump → stories markers
+    #   2) menu_dump (pre-tap) → menu_els (back_dump NOT parsed — _tt_is_own_profile mocked True)
+    #   3) drawer_dump → drawer_els (has clickable Управление аккаунтами)
+    #   4) sheet_dump → sheet_els (positive bottomsheet signature)
     stories = [
         make_el(cd='Закрыть', bounds=(900, 200, 1080, 300)),
         make_el(cd='Еще', bounds=(900, 2080, 1080, 2200)),
         make_el(text='13 ч. назад', bounds=(50, 1000, 700, 1080)),
     ]
-    back_els = [make_el(text='back')]  # _tt_is_own_profile mocked → True
     menu_els = [make_el(cd='Меню профиля', clickable=True,
                         bounds=(945, 112, 1058, 225))]
     drawer_anchor = make_el(text='Управление аккаунтами', clickable=True,
@@ -931,7 +930,7 @@ def test_open_tt_account_switcher_menu_path_happy(monkeypatch):
                 bounds=(50, 1900, 1030, 1980)),
     ]
     import account_switcher as mod
-    parse_calls = iter([stories, back_els, menu_els, drawer_els, sheet_els])
+    parse_calls = iter([stories, menu_els, drawer_els, sheet_els])
     monkeypatch.setattr(mod, 'parse_ui_dump',
                         lambda xml: next(parse_calls))
     # find_anchor_bounds: None for probe (Stories), then real bounds for sheet
@@ -972,7 +971,8 @@ def test_open_tt_account_switcher_unknown_layout(monkeypatch):
         make_el(text='Privacy', clickable=True, bounds=(50, 300, 600, 380)),
     ]
     import account_switcher as mod
-    parse_calls = iter([stories, [], [], drawer_els])
+    # parses: probe → stories; (back NOT parsed); menu → []; drawer → drawer_els
+    parse_calls = iter([stories, [], drawer_els])
     monkeypatch.setattr(mod, 'parse_ui_dump',
                         lambda xml: next(parse_calls))
     monkeypatch.setattr(mod, 'find_anchor_bounds',
@@ -1026,7 +1026,8 @@ def test_open_tt_account_switcher_menu_dump_saved_on_failure(monkeypatch):
     menu_els = [make_el(text='Settings', clickable=True,
                        bounds=(50, 100, 600, 180))]
     import account_switcher as mod
-    parse_calls = iter([stories, [], menu_els])
+    # parses: probe → stories; (back NOT parsed); menu → menu_els
+    parse_calls = iter([stories, menu_els])
     monkeypatch.setattr(mod, 'parse_ui_dump',
                         lambda xml: next(parse_calls))
     monkeypatch.setattr(mod, 'find_anchor_bounds',
@@ -1154,12 +1155,14 @@ def test_open_tt_account_switcher_drawer_noop_identical_bounds(monkeypatch):
     # Post-tap dump still has anchor at SAME bounds (no-op tap)
     sheet_els = [drawer_anchor]
     import account_switcher as mod
-    parse_calls = iter([stories, [], [], drawer_els, sheet_els])
+    # parses: probe → stories; (back NOT parsed); menu → []; drawer → drawer_els; sheet → sheet_els
+    parse_calls = iter([stories, [], drawer_els, sheet_els])
     monkeypatch.setattr(mod, 'parse_ui_dump',
                         lambda xml: next(parse_calls))
-    # find_anchor_bounds returns SAME bounds for both drawer and sheet dumps
+    # find_anchor_bounds: None for probe (Stories), then same bounds for sheet
+    fab_calls = iter([None, (50, 500, 1030, 560)])
     monkeypatch.setattr(mod, 'find_anchor_bounds',
-                        lambda els, anchors: (50, 500, 1030, 560))
+                        lambda els, anchors: next(fab_calls))
 
     anchor, err = sw._open_tt_account_switcher(
         elements=[], cfg=_TT_CFG, target='someone',
@@ -1188,10 +1191,12 @@ def test_open_tt_account_switcher_drawer_noop_no_sheet_signature(monkeypatch):
     sheet_els = [make_el(text='Управление аккаунтами', clickable=True,
                          bounds=(50, 100, 1030, 180))]
     import account_switcher as mod
-    parse_calls = iter([stories, [], [], drawer_els, sheet_els])
+    # parses: probe → stories; (back NOT parsed); menu → []; drawer → drawer_els; sheet → sheet_els
+    parse_calls = iter([stories, [], drawer_els, sheet_els])
     monkeypatch.setattr(mod, 'parse_ui_dump',
                         lambda xml: next(parse_calls))
-    fab_calls = iter([None, None, (50, 500, 1030, 560), (50, 100, 1030, 180)])
+    # find_anchor_bounds: probe (None — Stories detected), sheet (different bounds)
+    fab_calls = iter([None, (50, 100, 1030, 180)])
     monkeypatch.setattr(mod, 'find_anchor_bounds',
                         lambda els, anchors: next(fab_calls))
 
@@ -1247,45 +1252,45 @@ def test_open_tt_account_switcher_canonical_event_per_error_code(code, monkeypat
             own_profile=False,
         ),
         'tt_profile_menu_not_found': dict(
+            # parses: probe → stories; (back NOT parsed); menu → menu_els
             dumps=['<probe/>', '<back/>', '<menu/>'],
             parses=[
                 [make_el(cd='Закрыть', bounds=(900, 200, 1080, 300)),
                  make_el(cd='Еще', bounds=(900, 2080, 1080, 2200))],
-                [],
                 [make_el(text='Settings', clickable=True,
                          bounds=(50, 100, 600, 180))],
             ],
-            anchors=[None, None, None],
+            anchors=[None],  # probe → None (Stories detected)
             tap_returns=[False],
             own_profile=True,
         ),
         'tt_account_menu_unknown_layout': dict(
+            # parses: probe → stories; (back NOT parsed); menu → []; drawer → irrelevant
             dumps=['<probe/>', '<back/>', '<menu/>', '<drawer/>'],
             parses=[
                 [make_el(cd='Закрыть', bounds=(900, 200, 1080, 300)),
                  make_el(cd='Еще', bounds=(900, 2080, 1080, 2200))],
-                [], [],
+                [],
                 [make_el(text='Random', clickable=True,
                          bounds=(50, 100, 600, 180))],
             ],
-            anchors=[None, None, None, None],
+            anchors=[None],  # probe → None
             tap_returns=[True],
             own_profile=True,
         ),
         'tt_drawer_tap_did_not_open_sheet': dict(
+            # parses: probe → stories; (back NOT parsed); menu → []; drawer → drawer_els; sheet → drawer_els (same bounds)
             dumps=['<probe/>', '<back/>', '<menu/>', '<drawer/>', '<sheet/>'],
             parses=[
                 [make_el(cd='Закрыть', bounds=(900, 200, 1080, 300)),
                  make_el(cd='Еще', bounds=(900, 2080, 1080, 2200))],
-                [], [],
+                [],
                 [make_el(text='Управление аккаунтами', clickable=True,
                          bounds=(50, 500, 1030, 560))],
-                # post-tap: SAME bounds, no sheet signature
                 [make_el(text='Управление аккаунтами', clickable=True,
                          bounds=(50, 500, 1030, 560))],
             ],
-            anchors=[None, None, None,
-                     (50, 500, 1030, 560), (50, 500, 1030, 560)],
+            anchors=[None, (50, 500, 1030, 560)],  # probe → None; sheet → same bounds
             tap_returns=[True],
             own_profile=True,
         ),
@@ -1360,65 +1365,69 @@ guarding IG/YT-RO _tap_profile_header callers."
 - Modify: `/root/.openclaw/workspace-genri/autowarm/publisher_kernel.py` (extend `_SWITCHER_STEP_TO_CATEGORY` near L92)
 - Test: `tests/test_tt_account_switcher_open.py`
 
-- [ ] **Step 1: Write failing test for callsite single-event semantic**
+- [ ] **Step 1: Write failing source-inspection test for callsite**
+
+This test enforces the refactor invariant by inspecting `_switch_tiktok` source. It catches a future regression where someone re-adds an `error`-event emit between the orchestrator call and the matching `_fail`.
 
 ```python
-def test_switch_tiktok_callsite_no_second_canonical_event(monkeypatch):
-    """When orchestrator returns ('tt_account_sheet_closed_before_parse',),
-    _switch_tiktok must call _fail WITHOUT emitting a second error-event
-    with the canonical category. Invariant #1: exactly one canonical
-    event per failure, owned by the orchestrator."""
-    from unittest.mock import patch
-    sw = _make_sw_with_proxy()
+def test_switch_tiktok_callsite_does_not_re_emit_canonical_event():
+    """After Task 8 refactor, the tt_3_open_list block in _switch_tiktok
+    must call _open_tt_account_switcher and then _fail directly — no
+    `log_event('error', ...)` between them. The orchestrator owns
+    canonical error emission (invariant #1). Source-level guard."""
+    import inspect
+    src = inspect.getsource(AccountSwitcher._switch_tiktok)
 
-    # Stub everything _switch_tiktok needs up to the orchestrator call.
-    sw._open_app = MagicMock(return_value=True)
-    sw._go_to_profile_tab = MagicMock()
-    sw._read_screen_hybrid = MagicMock(return_value=([], 'uiautomator', ''))
-    sw._open_tt_account_switcher = MagicMock(
-        return_value=(None, 'tt_account_menu_unknown_layout'))
-    # Other helpers required by _switch_tiktok pre-orchestrator block.
-    sw._tt_is_own_profile = MagicMock(return_value=True)
-    sw._single_account_mode = False
-    sw._fail = MagicMock(side_effect=lambda *a, **kw: SwitchResult(
-        success=False, reason=a[0] if a else '', final_step=kw.get('step', '')))
-    # Mock _vision_read_current_account etc. minimally — return None to skip
-    # current==target fast-path.
-    sw._vision_read_current_account = MagicMock(return_value=None)
+    # Find the orchestrator call line
+    assert '_open_tt_account_switcher(' in src, \
+        'refactor missing — orchestrator not called from _switch_tiktok'
 
-    # Direct entry into the inline block via private call — too fragile.
-    # Instead, assert at orchestrator-return level: count canonical events
-    # in sw.p.events after the orchestrator return.
-    # Verify orchestrator emitted its event (mocked here — would happen
-    # in real call); count canonical-category error events in sw.p.events:
-    sw.p.log_event('error', 'tt_account_menu_unknown_layout',
-                   meta={'category': 'tt_account_menu_unknown_layout'})
-    # Simulate callsite branch — must NOT add a second canonical event:
-    err = 'tt_account_menu_unknown_layout'
-    sw._fail(f'tt_3_open_list: {err}', step='tt_3_open_list')
-
-    canonical_events = [
-        e for e in sw.p.events
-        if e['kind'] == 'error'
-        and e['meta'].get('category') == 'tt_account_menu_unknown_layout'
-    ]
-    assert len(canonical_events) == 1
-    # _fail was called exactly once with the step
-    assert sw._fail.call_count == 1
-    assert sw._fail.call_args.kwargs.get('step') == 'tt_3_open_list'
+    # Extract the block from the orchestrator call to the next blank-line
+    # boundary (or end of function), and assert NO log_event('error', ...)
+    # appears in that block.
+    import re
+    block_match = re.search(
+        r'_open_tt_account_switcher\(.*?\n.*?(?=\n\n|\Z)',
+        src, re.DOTALL)
+    assert block_match is not None
+    block = block_match.group(0)
+    # Permit `account_switch` log_events; forbid `error`-kind log_events.
+    assert "log_event('error'" not in block, (
+        'tt_3_open_list callsite must not emit a second error event — '
+        'the orchestrator already emitted the canonical category.\n'
+        'Block:\n' + block
+    )
+    assert 'log_event("error"' not in block
 ```
 
-This test is structural (asserts that the callsite branch is single-emit). The real callsite is integration-tested via the orchestrator's own tests.
+And a positive end-to-end-on-resolver test that exercises the actual resolver `publisher_base._set_error_code_from_events` against synthetic `events[]`:
 
-- [ ] **Step 2: Run test to verify it currently passes**
+```python
+def test_set_error_code_from_events_picks_canonical_category(monkeypatch):
+    """The existing resolver _set_error_code_from_events (publisher_base)
+    must pick our new error_codes from meta.category on error-type events.
+    No error_codes.py registration needed — resolver accepts any string."""
+    # We can't easily import _set_error_code_from_events without a full
+    # publisher instance. Instead, assert the resolver source contains
+    # the pattern that consumes meta.category. This is a smoke-level
+    # source check; real-end-to-end via Task 9 production smoke.
+    from publisher_base import PublisherBase
+    import inspect
+    src = inspect.getsource(PublisherBase._set_error_code_from_events)
+    # Pass 1 of the resolver looks for `error`-type events and reads
+    # `meta.get('reason') or meta.get('category')`. Verify this pattern.
+    assert "ev.get('type') == 'error'" in src
+    assert "meta.get('reason')" in src or "m.get('reason')" in src
+    assert "meta.get('category')" in src or "m.get('category')" in src
+```
 
-(Old callsite emits a second error-event; new callsite (Step 3) must keep this test passing without emitting it. The test asserts behaviour after the refactor.)
+- [ ] **Step 2: Run tests to verify they FAIL (before refactor)**
 
 ```bash
-cd /root/.openclaw/workspace-genri/autowarm && python -m pytest tests/test_tt_account_switcher_open.py::test_switch_tiktok_callsite_no_second_canonical_event -v
+cd /root/.openclaw/workspace-genri/autowarm && python -m pytest tests/test_tt_account_switcher_open.py -v -k "callsite_does_not_re_emit or set_error_code"
 ```
 
-Expected: PASS (the test models the intended callsite behaviour by manual event emission; the real callsite is exercised in production smoke at Task 9).
+Expected: `callsite_does_not_re_emit` FAILS — old block at L2262-L2305 still contains `log_event('error', f'tt_account_sheet_closed_before_parse: ...'`. The resolver-source test should PASS (existing code already supports `meta.category`).
 
 - [ ] **Step 3: Refactor TT callsite**
 
@@ -1441,7 +1450,9 @@ Verify no orphan references — grep for the variables used by the old loop (`fo
 
 - [ ] **Step 4: Extend `_SWITCHER_STEP_TO_CATEGORY`**
 
-In `publisher_kernel.py`, locate `_SWITCHER_STEP_TO_CATEGORY` at L76. The mapper is **step-based**, but our orchestrator emits canonical `meta.category` directly — for cases where `meta.category` is missing or the resolver falls back to step-based, ensure the new failure codes have a sensible step→category fallback.
+**Spec discrepancy note:** the spec mentions `error_codes.py` as the resolver's "recognised-category set" — that file does not exist. The actual resolver is `PublisherBase._set_error_code_from_events` in `publisher_base.py:1921`, which reads `meta.reason` or `meta.category` from any `error`-type event (no registration list required). The `_SWITCHER_STEP_TO_CATEGORY` extension below is a **fallback** for the Pass-2 path that fires when no `error` event with a category is found (e.g. update_status('failed') race per the comment at publisher_base.py:1949).
+
+In `publisher_kernel.py`, locate `_SWITCHER_STEP_TO_CATEGORY` at L76.
 
 After L92 (`'tt_3_open_list': 'tt_account_sheet_closed_before_parse'`), add new fallback step entries:
 
