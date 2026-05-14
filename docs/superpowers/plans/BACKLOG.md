@@ -90,6 +90,12 @@ PR #45 (IG-only device-tz fix для phone #9 / Asia/Almaty) live в `publisher_
 
 Аккаунт в `factory_inst_accounts` с `gmail=NULL`, на phone в YT picker отсутствует (display name `Lead_Content `, suffix `_1` отсутствует, handle row отсутствует). Backfill no-match. Sticky 3 fails / 7d. Опции: (a) manual deactivation в БД; (b) automated `account_revision` post-scroll detector + auto-deactivate; (c) periodic backfill no-match log → daily TG bot notification.
 
+**NB 2026-05-14:** не все `yt_picker_target_absent` / `yt_target_not_in_picker_after_scroll` — реальные отсутствия. Триаж iter2 (task 5856) доказал false-negative: аккаунт *присутствует* в picker'е, но matcher его не находит — см. item «YT picker — matcher игнорирует имя канала» ниже (#66). Этот data-drift item остаётся валиден только для *реально* отсутствующих аккаунтов; перед deactivation проверять, что аккаунта правда нет (matcher-баг сначала фиксится).
+
+### YT picker — matcher игнорирует имя канала (OpenProject #66)
+
+`_find_and_tap_account` (`account_switcher.py:~3939`) для YT: gmail-fast-path работает только при заполненном `_yt_target_gmail` (нет у ~19% аккаунтов); fallback `find_account_in_list` — handle/username-ориентирован и НЕ матчит target против имени канала YT, которое для *неактивных* строк picker'а единственное видимое поле (`"<ChannelName>,,<subs>"`, без `@handle`). Dump usable + target не сматчен → терминальный FAIL без vision. Триаж 2026-05-14 iter2: task 5856 (`relismee` → канал «Relisme», 275 подписчиков, виден на экране всё время; `picker_diag.displays` его содержит, `handles=[]`, `gmail=null`). Семейство (`yt_target_not_in_picker_after_scroll` 23 + `yt_picker_target_absent` 4 = 27/7д) — крупнейшая actionable категория YT-падений за неделю; доля false-negative неизвестна до фикса. Направление: fallback-матч по имени канала (casefold + strip non-alnum + handle↔display drift) против `displays[]`; параллельно добить `factory_inst_accounts.gmail` backfill. Evidence: `docs/evidence/2026-05-14-yt-publish-triage-iter2.md`.
+
 ### 24h soak — new YT RC counts
 
 После Шагов B+C ждать 24h, затем:
