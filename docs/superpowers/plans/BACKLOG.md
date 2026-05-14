@@ -92,9 +92,15 @@ PR #45 (IG-only device-tz fix для phone #9 / Asia/Almaty) live в `publisher_
 
 **NB 2026-05-14:** не все `yt_picker_target_absent` / `yt_target_not_in_picker_after_scroll` — реальные отсутствия. Триаж iter2 (task 5856) доказал false-negative: аккаунт *присутствует* в picker'е, но matcher его не находит — см. item «YT picker — matcher игнорирует имя канала» ниже (#66). Этот data-drift item остаётся валиден только для *реально* отсутствующих аккаунтов; перед deactivation проверять, что аккаунта правда нет (matcher-баг сначала фиксится).
 
-### YT picker — matcher игнорирует имя канала (OpenProject #66)
+### YT picker — matcher игнорирует имя канала — ✅ SHIPPED 2026-05-14 PR #63 (OpenProject #66)
 
-`_find_and_tap_account` (`account_switcher.py:~3939`) для YT: gmail-fast-path работает только при заполненном `_yt_target_gmail` (нет у ~19% аккаунтов); fallback `find_account_in_list` — handle/username-ориентирован и НЕ матчит target против имени канала YT, которое для *неактивных* строк picker'а единственное видимое поле (`"<ChannelName>,,<subs>"`, без `@handle`). Dump usable + target не сматчен → терминальный FAIL без vision. Триаж 2026-05-14 iter2: task 5856 (`relismee` → канал «Relisme», 275 подписчиков, виден на экране всё время; `picker_diag.displays` его содержит, `handles=[]`, `gmail=null`). Семейство (`yt_target_not_in_picker_after_scroll` 23 + `yt_picker_target_absent` 4 = 27/7д) — крупнейшая actionable категория YT-падений за неделю; доля false-negative неизвестна до фикса. Направление: fallback-матч по имени канала (casefold + strip non-alnum + handle↔display drift) против `displays[]`; параллельно добить `factory_inst_accounts.gmail` backfill. Evidence: `docs/evidence/2026-05-14-yt-publish-triage-iter2.md`.
+**✅ SHIPPED 2026-05-14** — PR GenGo2/delivery-contenthunter#63 (squash `6189cd6`), в проде через `git pull --ff-only`. OpenProject #66 → Тестирование. Memory: [[project_yt_picker_channel_name_match_shipped]].
+
+Корень: `_find_and_tap_account` (`account_switcher.py`) для YT — gmail-fast-path работает только при заполненном `_yt_target_gmail` (нет у ~19% аккаунтов); fallback `find_account_in_list` — handle/username-ориентирован и НЕ матчит target против имени канала YT, которое для *неактивных* строк picker'а единственное видимое поле (`"<ChannelName>,,<subs>"`, без `@handle`). Dump usable + target не сматчен → терминальный FAIL без vision. Подтверждено task 5856 (`relismee` → канал «Relisme»). Семейство (`yt_target_not_in_picker_after_scroll` 23 + `yt_picker_target_absent` 4 = 27/7д) — крупнейшая actionable категория YT-падений за неделю.
+
+Фикс: новые `_alnum_norm` + `find_yt_channel_name_matches` (консервативный матч по имени канала — точное совпадение или префикс с разницей длины ровно 1, `min(len)>=4`; ambiguity-guard: при 2+ кандидатах честный fail, не угадываем). 12 тестов TDD, 0 регрессий, codex + 3 раунда subagent-review.
+
+**Открытые follow-up'ы (отдельные тикеты, вне #66):** добить `factory_inst_accounts.gmail` backfill для непокрытых ~19%; разобрать 11/27 за неделю где gmail в БД есть, но публикация всё равно не находит аккаунт. Evidence: `docs/evidence/2026-05-14-yt-publish-triage-iter2.md`.
 
 ### 24h soak — new YT RC counts
 

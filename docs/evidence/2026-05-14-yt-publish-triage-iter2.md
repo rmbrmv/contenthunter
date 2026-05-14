@@ -4,6 +4,7 @@
 **Goal:** rank failure causes by volume, pick the top *remaining* actionable bug, open an OpenProject ticket.
 **Relationship to iter 1:** the earlier same-day triage (`2026-05-14-yt-publish-triage.md`) ran ~10:30 UTC, saw 6 tasks, picked `yt_editor_upload_timeout`, and **shipped a fix** — OpenProject [#59](https://openproject.contenthunter.ru/work_packages/59), PR [GenGo2/delivery-contenthunter#56](https://github.com/GenGo2/delivery-contenthunter/pull/56), merged `348d495`. This iter covers the **whole day (12 tasks)** and confirms that fix is live.
 **This iter's ticket:** [#66 — Выкладка (YouTube): аккаунт-пикер не находит аккаунт по имени канала → ложный «аккаунт не привязан к устройству»](https://openproject.contenthunter.ru/work_packages/66) (type Ошибка, parent Epic #49 «Выкладка баги»).
+**Fix:** ✅ SHIPPED 2026-05-14 — PR [GenGo2/delivery-contenthunter#63](https://github.com/GenGo2/delivery-contenthunter/pull/63), squash-merge `6189cd6`, deployed to the prod tree via `git pull --ff-only` (no PM2 restart — `publisher.py` is a per-task subprocess). See [Fix](#fix--shipped-2026-05-14) below.
 
 ## Today's failed YT tasks (12 total)
 
@@ -106,10 +107,21 @@ The target `relismee` is the channel **"Relisme"** (same magenta RELISMEE avatar
 
 `_sample_picker_diag` (~line 258) is the snapshot collector.
 
-### Suggested direction (not a final design — fix is a separate effort)
-- Add a YT channel-display-name fallback match in `_find_and_tap_account`: normalise both sides (casefold, strip non-alphanumerics, account for handle↔display-name drift) and match `target` against the channel-name component of `displays[]`.
-- In parallel: finish the `factory_inst_accounts.gmail` backfill for the uncovered ~19% so the fast gmail path covers more accounts.
-- After the fix: re-measure what share of `yt_target_not_in_picker_after_scroll` was false.
+### Fix — ✅ SHIPPED 2026-05-14
+
+PR [GenGo2/delivery-contenthunter#63](https://github.com/GenGo2/delivery-contenthunter/pull/63) · squash-merge `6189cd6` · deployed to the prod tree (`/root/.openclaw/workspace-genri/autowarm/`) via `git pull --ff-only`. No PM2 restart — `publisher.py` is `spawn`'d as a fresh subprocess per task, so `account_switcher.py` is re-imported on the next publish.
+
+**Change** — `account_switcher.py`:
+- New pure helper `_alnum_norm` (casefold + strip non-alphanumerics, Unicode-aware so Cyrillic survives) and pure function `find_yt_channel_name_matches(elements, target)`. Conservative match rule: `_alnum_norm` equality **or** one normalised string is a prefix of the other with length-delta exactly 1 (the observed `relisme`/`relismee` handle-uniquification pattern), `min(len) >= 4`. Returns **all** matching rows.
+- Wired into `_find_and_tap_account` between the handle-match and the terminal-FAIL: **exactly one match → tap + log `yt_channel_name_match`**; **2+ matches → `return False` + log `yt_channel_name_ambiguous`** — never guesses (a single picker can hold both `relisme` and `RelismeWear`, so a loose match would risk publishing to the wrong channel).
+
+**Tests** — 12 new cases in `tests/test_switcher_youtube.py` (TDD), including a regression built from the real task-5856 picker dump and an active-row no-false-match guard. Full YT/switcher suites green; the broad sweep's 8 failures all confirmed identical on a clean `origin/main` checkout → **0 regressions**. Plan codex-reviewed (2 rounds, clean); spec + code-quality + final-implementation review via subagents.
+
+**Out of scope (separate follow-ups):** the `factory_inst_accounts.gmail` backfill for the uncovered ~19%; the 11/27 weekly failures where the gmail *is* in the DB but the task still fails; genuinely-absent accounts. The conservative match rule + ambiguity guard protect those from false matches.
+
+### 24–48h verify
+
+Watch for `yt_channel_name_match` events appearing in `publish_tasks.events`, and the gmail-empty subset of the `yt_target_not_in_picker_after_scroll` / `yt_picker_target_absent` rate (27/7d before the fix) dropping. Frequent `yt_channel_name_ambiguous` would signal the gmail-backfill follow-up is worth prioritising.
 
 ## Related findings (logged, not chosen)
 
