@@ -41,14 +41,15 @@ All code changes are in `publisher_instagram.py`. No schema changes, no changes 
 
 Module-level function (placed near `_ig_classify_pre_picker_state`), so it is unit-testable without an instance — per [[feedback_class_vs_instance_test_calls]].
 
-Returns `True` only for the **banner**, never for the composer "Edits" tab. Detection (returns `True` if either group matches):
+Returns `True` only for the **banner**, never for the composer "Edits" tab. Detection: return `True` when the banner-specific promo phrase `с помощью Edits` is present **AND** the install-button text `Установить приложение` is present. Both strings are confirmed against a real UI dump (see below).
 
-- **Bottom-sheet variant:** the banner-specific promo phrase `с помощью Edits` (covers both "Сделайте свои видео лучше с помощью Edits" and "Усовершенствуйте свои видео с помощью Edits") **AND** `Установить приложение`.
-- **Small install-banner variant:** `Установить` button text co-located with `Edits` app-name text in a Play-Store-install-style row — anchored on `с помощью Edits` being absent but `Edits:` (app-name colon form, e.g. "Edits: Видеомейкер") present together with `Установить`.
+Guards: empty / `None` / unparseable XML → `False`. Substring matching is acceptable here (consistent with the file's existing detection helpers); `с помощью Edits` is the primary anchor because it is banner-copy that never appears as a tab/control label (the composer "Edits" *tab* is just `text="Edits"`).
 
-Guards: empty / `None` / unparseable XML → `False`. Substring matching is acceptable here (consistent with the file's existing detection helpers), but the phrase `с помощью Edits` is the primary anchor because it is banner-copy that never appears as a tab/control label.
-
-> Implementation note for the plan stage: real UI-dump XML of the banner should be pulled from the failed tasks' debug artifacts (`_save_debug_artifacts` outputs; tasks 5662/5611/5031/5026) to lock the exact marker strings before finalizing the constants. If artifacts are unavailable, markers are synthesized from the screencast frames and refined during testbench live-smoke.
+> **Ground truth — real UI dump (task 5031, `gallery_blind_tap_after_step4`).** Screen 1080×2340. The banner is a Compose bottom-sheet under `resource-id=…:id/compose_bottom_sheet_container` / `bottom_sheet_compose_view`. Confirmed nodes:
+> - `TextView` `text="Сделайте свои видео лучше с помощью Edits"` bounds `[237,1417][782,1633]`
+> - `TextView` `text="Установить приложение"` bounds `[314,2075][766,2122]`; the clickable install control is `View` `resource-id=…:id/igds_button` bounds `[45,2031][1035,2166]` (centre `(540,2098)`)
+> - **`Button` `content-desc="Закрыть панель"` bounds `[0,0][1080,1338]`** — a reliable, content-desc-addressable close affordance (the scrim above the sheet). This is the primary dismissal target — see 2.2.
+> - the promo `ImageView` carries a long `content-desc` containing the word `видео` ("Рестайлинг этого **видео** сделан с помощью…") — this is *why* the gallery video-candidate parser can mis-pick the banner: its `'видео' in content-desc` heuristic matches banner copy. Dismissing the banner removes these nodes from the dump entirely, so the parser never sees them — no change to the parser heuristic is needed.
 
 ### 2.2 Dismissal — `_dismiss_ig_edits_promo(ui_xml=None)` (rewritten instance method)
 
@@ -58,13 +59,13 @@ Return type changes from `bool` to a status string: `'absent'` | `'dismissed'` |
 
 Logic:
 1. If `not _is_ig_edits_promo(ui)` → return `'absent'`.
-2. Dismissal ladder, re-dumping and re-checking `_is_ig_edits_promo` after each rung; stop as soon as the banner is gone:
-   1. **Swipe-down** on the bottom-sheet (downward swipe gesture in the sheet region) — the natural dismissal for an Android bottom sheet.
-   2. **Close affordance** — if the dump has a clickable close/`✕` node scoped to the banner, tap its centre.
+2. Dismissal ladder, re-dumping and re-checking `_is_ig_edits_promo` after each rung; stop as soon as the banner is gone. Ladder ordered by proven reliability against the real UI dump:
+   1. **Close affordance** — tap the centre of the clickable node with `content-desc="Закрыть панель"` (confirmed present in the real dump). Primary method.
+   2. **Swipe-down** — downward swipe within the sheet region (e.g. `(540,1450) → (540,2300)`) for IG builds where the close affordance is absent.
    3. **`back`** keyevent — last resort, single press (no repeat, no force-stop on this path).
-3. After the ladder: if the banner is gone → emit `info` event `ig_edits_promo_dismissed` with `meta.method` ∈ `{swipe_down, close_button, back}` and return `'dismissed'`; if still present → return `'still_present'` (caller decides — see 2.4).
+3. After the ladder: if the banner is gone → emit `info` event `ig_edits_promo_dismissed` with `meta.method` ∈ `{close_button, swipe_down, back}` and return `'dismissed'`; if still present → return `'still_present'` (caller decides — see 2.4).
 
-Never taps `Установить приложение`. The `force-stop + relaunch` escalation is **removed from this helper** — it remains only as the camera-stage's own recovery (the camera loop can afford a relaunch; the picker/editor cannot).
+Never taps the `Установить приложение` / `igds_button` control. The `force-stop + relaunch` escalation is **removed from this helper** — it remains only as the camera-stage's own recovery (the camera loop can afford a relaunch; the picker/editor cannot).
 
 ### 2.3 Play-Store-hijack & undismissable — honest fail-fast
 
@@ -134,8 +135,8 @@ Single-file, additive change. Rollback = revert the merge commit and `git pull -
 
 ## 7. Risks and limitations
 
-- **Marker accuracy.** If the real banner XML differs from the screencast-derived markers, `_is_ig_edits_promo` could miss (banner not dismissed — no worse than today) or, less likely, false-positive. The negative test against the plain composer-tab picker bounds the false-positive risk; the plan stage pulls real XML to lock markers.
-- **Swipe-down geometry.** Bottom-sheet swipe coordinates are screen-relative; if devices vary, the close-button and `back` rungs are the fallback.
+- **Marker accuracy.** Markers (`с помощью Edits`, `Установить приложение`) are confirmed against a real UI dump (task 5031). Residual risk is IG changing the copy in a future build → `_is_ig_edits_promo` misses (banner not dismissed — no worse than today). The negative test against the plain composer-tab picker bounds the false-positive risk.
+- **Dismissal geometry.** The primary rung taps the content-desc-addressable `Закрыть панель` node (no hard-coded coordinates). The swipe-down rung does use screen-relative coordinates; `back` is the final fallback.
 - **Banner appearing between dumps.** The check runs at every dump point but not continuously; a banner that appears and is tapped within a single `sleep` window still slips through — that residual is exactly what `ig_edits_promo_playstore_hijack` fail-fast covers honestly.
 - The non-banner `ig_gallery_no_video_candidate` modes remain — this fix does not move their count.
 
