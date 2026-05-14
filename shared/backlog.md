@@ -1,7 +1,7 @@
 # Backlog — Задачи агента
 
 ## OPEN
-- [2026-05-14] **TT switcher iter#2 — `tt_account_menu_unknown_layout`** — OpenProject WP [#60](https://openproject.contenthunter.ru/work_packages/60). 13 падений TT-выкладки/день, крупнейший одиночный баг. TikTok убрал вход в переключатель аккаунтов из drawer'а → переехал внутрь «Настройки и конфиденциальность». Фикс продиагностирован: settings-nested путь в `_open_tt_account_switcher`. Триаж: `docs/evidence/2026-05-14-tt-publish-failures-triage.md`, дизайн: `docs/evidence/2026-05-13-tt-pattern-b-shipped.md`. | от: self (TT триаж 2026-05-14)
+- [2026-05-14] **TT iter#2 smoke + 24h soak** — фикс `tt_account_menu_unknown_layout` отгружен (PR #57 `8e7623a`, prod deployed), smoke перевыложен через `publish_queue` id 2869 (`clickpay_go`). Дождаться результата нового `publish_task` + 24h soak (`tt_account_menu_unknown_layout` 13/24ч → ~0). Если smoke вернёт `settings_labels[]` без успеха — iter#3. Evidence: `docs/evidence/2026-05-14-tt-account-switcher-settings-nested-shipped.md`. | от: self (TT триаж 2026-05-14)
 - [2026-05-14] **TT `tt_post_switch_verify_unrecoverable` рецидив** — ~12 падений TT-выкладки/день (runner-up), `tt_4_target_profile`: «unknown header» / «no profile after renav». Уже 2 PR (#34 renav, #39 bool-return) — нужен отдельный заход. Частично замаскирован retry-suffix gap мэппера (5593, 5620 ушли в `switch_failed_unspecified`). Триаж: `docs/evidence/2026-05-14-tt-publish-failures-triage.md`. | от: self (TT триаж 2026-05-14)
 - [2026-05-11] **24h метрика TT music rights handler** — измерить fail-rate `tt_upload_confirmation_timeout` на raspberry=9 за 24h после deploy `8ec5c53`. Expect: < 3 (was 12). Query в evidence doc. | от: self (T10 deferred)
 - [2026-05-10] **`tt_fg_lost` после успешного music rights handle (pt 4523)** — Phase 1 investigation: AI Unstuck multi-tap может накликать nav buttons / background TT после tt_music_rights_accepted. Hypothesis. Sample: pt 4523 events 19:42:40-19:55:15. | от: self (T10 live verify finding)
@@ -12,6 +12,7 @@
 - [2026-05-04] **account-checker (delivery-contenthunter)** — research-карта переиспользуемого кода `.ai-factory/plans/account-checker-reusable-code-brief-20260504.md` готова. Открытые вопросы для автора ТЗ: набор признаков, триггер запуска, нужен ли UI. | от: self
 
 ## DONE
+- [2026-05-14] ~~TT switcher iter#2 — `tt_account_menu_unknown_layout`~~ | закрыто: 2026-05-14 | PR #57 `8e7623a`, prod deployed (PM2 autowarm restart), evidence `docs/evidence/2026-05-14-tt-account-switcher-settings-nested-shipped.md`. Settings-nested fallback в `_open_tt_account_switcher`. 55 tests green, codex clean. Smoke/soak — отдельным OPEN-пунктом.
 - [2026-05-10 19:55] ~~TT music rights confirmation dialog handler~~ | закрыто: 2026-05-10 19:55 | PR #28 `8ec5c53`, evidence `docs/evidence/2026-05-10-tt-music-rights-dialog-shipped.md`, live verify pt 4523 handler fired ✅
 - [2026-05-10 11:30] ~~ig_gallery_no_video_candidate Mode A~~ | закрыто: 2026-05-10 16:36 | PR #26 `4643c7d`, Mode B closed pending re-occurrence
 
