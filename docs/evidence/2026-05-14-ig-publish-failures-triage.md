@@ -9,6 +9,9 @@ usually a preflight one). Logs + screencasts reviewed for the top 4 categories.
 **OpenProject ticket:** [#68 — Выкладка Instagram: после открытия галереи робот
 попадает на пустую вкладку «Черновики Reels» вместо «Недавние»](https://openproject.contenthunter.ru/work_packages/68)
 (type Ошибка, parent Epic #49 «Выкладка баги»).
+**Fix:** PR [GenGo2/delivery-contenthunter#61](https://github.com/GenGo2/delivery-contenthunter/pull/61),
+ветка `fix/ig-gallery-drafts-chip-20260514` — root cause подтверждён детерминированно
+(см. §1 «Root cause»), 15 TDD-тестов, Codex review 0 находок. Awaiting merge + 24h live-verify.
 
 > **Mid-triage correction:** 3 of the 4 top categories were *already* tracked or fixed.
 > `ig_picker_wrong_candidate` + the Edits-banner part of `ig_gallery_no_video_candidate`
