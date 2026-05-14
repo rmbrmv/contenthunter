@@ -1,5 +1,32 @@
 # BACKLOG — Генри
 
+## 🟢 IG Edits-баннер dismissal — SHIPPED 2026-05-14 (OpenProject #61)
+**Приоритет:** высокий
+**Статус:** merged в `GenGo2/delivery-contenthunter` main `5372d18`, deployed на prod tree; OpenProject #61 → Тестирование
+
+Instagram-баннер «Edits» (промо bottom-sheet) перекрывал picker / уводил в Google Play — ~34 IG-падения/нед (20 устройств, 27 акков). Фикс: детектор `_is_ig_edits_promo` + переписанный `_dismiss_ig_edits_promo` (3-state ladder «Закрыть панель»→swipe→back, без force-stop) + оркестратор `_ig_handle_edits_promo_at_picker` (честные коды `ig_edits_promo_playstore_hijack` / `ig_edits_promo_undismissable`), wired в 4 точки `publish_instagram_reel`. 17 тестов.
+
+**Open для пользователя:**
+- 24h live-verify (≈ 2026-05-15): `ig_picker_wrong_candidate` + `ig_gallery_no_video_candidate` (Play-Store mode) должны упасть до ≤20% от baseline (~4.9/день); должны появиться `ig_edits_promo_dismissed` events. Точный SQL — в evidence-доке. Если ок — #61 → Готово.
+
+Evidence: `docs/evidence/2026-05-14-ig-publish-failure-triage.md` + `docs/evidence/2026-05-14-ig-edits-banner-dismiss-shipped.md`.
+
+---
+
+## 🟡 IG publish — остальные находки триажа 2026-05-14
+**Приоритет:** средний
+**Статус:** не заведены в OpenProject; ждут решения, брать ли в работу
+
+Из того же 7-дневного IG-триажа (229 prod-падений) — категории, не входящие в #61:
+- `ig_gallery_no_video_candidate` не-баннерные моды (~21/нед суммарно): пустой таб «Черновики Reels» (~10/нед) + экран редактора/playback (~11/нед) — отдельный nav-баг (робот приземляется не на тот таб композера Reels).
+- `ig_app_launch_failed` (~15/нед) — похоже на состояние устройств (IG не выходит на передний план), не код; нужна device-side разведка.
+- `ig_target_not_in_picker` (~13/нед) — аккаунт не привязан к устройству + парсер списка аккаунтов ловит мусор («устройстве.» как имя аккаунта).
+- Cleanup (не блокер): `_ig_handle_edits_promo_at_picker` зовёт `_current_foreground_package()` (один dumpsys) на каждой итерации даже без баннера — можно загейтить за `_is_ig_edits_promo`.
+
+Evidence: `docs/evidence/2026-05-14-ig-publish-failure-triage.md`.
+
+---
+
 ## 🟢 Spec D — slot move обновляет publish date (validator PR #9 merged 2026-05-13)
 **Приоритет:** высокий
 **Статус:** merged в main `eab5791`, prod deploy заблокирован uncommitted hot-patch (schemes.py)
