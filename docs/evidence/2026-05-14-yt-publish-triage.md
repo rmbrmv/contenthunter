@@ -3,7 +3,7 @@
 **Scope:** all `publish_tasks` with `platform='YouTube'` and `status='failed'` created on 2026-05-14 (UTC).
 **Goal:** rank failure causes by volume, pick the top one, open an OpenProject bug.
 **OpenProject ticket:** [#59 — Выкладка (YouTube: после переключения аккаунта публикация уходит в 5-минутный таймаут yt_editor_upload_timeout)](https://openproject.contenthunter.ru/work_packages/59) (type Ошибка, parent Epic #49 «Выкладка баги»).
-**Fix:** PR [GenGo2/delivery-contenthunter#56](https://github.com/GenGo2/delivery-contenthunter/pull/56) — branch `fix/yt-post-switch-foreground-guard`, commit `59e0a61`. Status: open, awaiting review/merge. See [Fix](#fix) below.
+**Fix:** ✅ SHIPPED 2026-05-14 — PR [GenGo2/delivery-contenthunter#56](https://github.com/GenGo2/delivery-contenthunter/pull/56), squash-merge `348d495`, deployed to prod tree via `git pull --ff-only` (no PM2 restart — publisher is subprocess-per-task). See [Fix](#fix) below. 24h verify deadline: 2026-05-15 ~13:00 UTC.
 
 ## Today's failed YT tasks (6 total)
 
@@ -90,7 +90,7 @@ Neither degrade-to-pass gate checks the foreground package. The "sparse dump" th
 
 ## Fix
 
-**PR:** [GenGo2/delivery-contenthunter#56](https://github.com/GenGo2/delivery-contenthunter/pull/56) · branch `fix/yt-post-switch-foreground-guard` · commit `59e0a61` · base `f21ee7b`.
+**✅ SHIPPED 2026-05-14** — PR [GenGo2/delivery-contenthunter#56](https://github.com/GenGo2/delivery-contenthunter/pull/56) · branch commit `59e0a61` · squash-merge `348d495` · deployed to prod tree (`/root/.openclaw/workspace-genri/autowarm/`) via `git pull --ff-only`. No PM2 restart needed — `publisher.py` is `spawn`'d as a fresh subprocess per task by `server.js`, so `account_switcher.py` is re-imported on the next publish.
 
 **Change** — `account_switcher.py`, `_switch_youtube` post-switch loop, the `status == 'unknown'` branch:
 
@@ -111,4 +111,28 @@ Before, `'unknown'` from `_post_switch_verify_handle` was unconditionally degrad
 
 `test_yt_post_switch_verify.py` 9/9 · `account_switcher` suite 83/83 · broad YT/switcher sweep 296 passed. One pre-existing unrelated failure — `test_switcher_read_only.py::test_yt_happy_path_returns_accounts` (read-only `read_accounts_list` path) — confirmed failing on clean baseline `f21ee7b`, not a regression of this change. Codex review: clean, no P1.
 
-**Open follow-up** — after merge + prod deploy, run a 24h check that `yt_editor_upload_timeout` failures preceded by `yt_post_switch_handle_unknown` drop, replaced by fast `yt_post_switch_app_not_foregrounded`. This fix makes the failure *fast and correctly-labelled*; it does not by itself recover the publish — if the device-state cause (YT not foregrounded after switch) is frequent enough, a follow-up recovery step (`_yt_ensure_foreground` re-entry) may be worth it.
+### 24h verify (deadline 2026-05-15 ~13:00 UTC)
+
+```sql
+-- YT failures since deploy, by last error-event category
+WITH last_err AS (
+  SELECT t.id,
+         (SELECT e->'meta'->>'category' FROM jsonb_array_elements(t.events) e
+          WHERE e->>'type'='error' AND e->'meta'->>'category' IS NOT NULL
+          ORDER BY (e->>'ts') DESC LIMIT 1) AS last_cat,
+         EXISTS(SELECT 1 FROM jsonb_array_elements(t.events) e
+                WHERE e->'meta'->>'category'='yt_post_switch_handle_unknown') AS had_unknown
+  FROM publish_tasks t
+  WHERE t.platform='YouTube' AND t.status='failed'
+    AND t.created_at >= '2026-05-14 12:39:00')   -- merge time
+SELECT coalesce(last_cat,'(none)') AS last_category, had_unknown, count(*)
+FROM last_err GROUP BY 1,2 ORDER BY 3 DESC;
+```
+
+**Acceptance:** `yt_editor_upload_timeout` failures preceded by `yt_post_switch_handle_unknown` drop sharply; where YouTube genuinely isn't foregrounded after the switch, the new fast `yt_post_switch_app_not_foregrounded` appears instead. No unexpected new error codes.
+
+### Residual / follow-up
+
+- This fix makes the failure **fast and correctly-labelled**; it does *not* by itself recover the publish. If `yt_post_switch_app_not_foregrounded` turns out to be frequent, a follow-up recovery step (re-enter via `_yt_ensure_foreground` before failing) is worth a separate ticket.
+- ~1/15 of 7-day `yt_editor_upload_timeout` had `yt_editor_stuck_detected` *without* the `yt_post_switch_handle_unknown` precursor — i.e. YouTube was foregrounded but the editor genuinely stuck. That residual is untouched by this fix and remains under the older "Шаг D — yt_editor_upload_timeout (после AI Unstuck)" backlog item.
+- **Structural parallel (not in scope here):** `account_switcher.py` has the same degrade-to-pass-without-foreground-check pattern for IG (`ig_post_switch_handle_unknown`, ~line 1516) and TT (`tt_post_switch_handle_unknown`, ~line 2433). IG/TT publish triage for 2026-05-14 is being handled by parallel sessions — flagged for them, not changed here.
