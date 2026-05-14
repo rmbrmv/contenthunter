@@ -9,9 +9,11 @@ usually a preflight one). Logs + screencasts reviewed for the top 4 categories.
 **OpenProject ticket:** [#68 — Выкладка Instagram: после открытия галереи робот
 попадает на пустую вкладку «Черновики Reels» вместо «Недавние»](https://openproject.contenthunter.ru/work_packages/68)
 (type Ошибка, parent Epic #49 «Выкладка баги»).
-**Fix:** PR [GenGo2/delivery-contenthunter#61](https://github.com/GenGo2/delivery-contenthunter/pull/61),
-ветка `fix/ig-gallery-drafts-chip-20260514` — root cause подтверждён детерминированно
-(см. §1 «Root cause»), 15 TDD-тестов, Codex review 0 находок. Awaiting merge + 24h live-verify.
+**Fix:** ✅ SHIPPED 2026-05-14 — PR [GenGo2/delivery-contenthunter#61](https://github.com/GenGo2/delivery-contenthunter/pull/61),
+squash-merge `c0f781b`, прод-дерево обновлено `git pull --ff-only` (publisher subprocess-per-task —
+без PM2-рестарта). Root cause подтверждён детерминированно (см. §1 «Root cause»), 15 TDD-тестов,
+458 passed / 0 регрессий, Codex review 0 находок. OpenProject #68 → Тестирование.
+24h live-verify deadline ≈ 2026-05-15 16:00 UTC (SQL в `agents/genri/BACKLOG.md`).
 
 > **Mid-triage correction:** 3 of the 4 top categories were *already* tracked or fixed.
 > `ig_picker_wrong_candidate` + the Edits-banner part of `ig_gallery_no_video_candidate`
@@ -151,10 +153,13 @@ case is a false positive.
 
 ## Outcome
 
-Filed **WP #68** — `ig_gallery_no_video_candidate` / empty «Черновики Reels» sub-mode.
-This is the single largest *unfiled* IG publish-failure cause (~29 of 39 / week,
-active daily). Fix direction: ensure the picker is on the «Недавние» tab before
-searching for a video candidate.
+Filed **WP #68** — `ig_gallery_no_video_candidate` / empty «Черновики Reels» sub-mode —
+the single largest *unfiled* IG publish-failure cause (~29 of 39 / week, active daily).
+Root-caused, fixed and **shipped same day** (PR #61, `c0f781b`): `_ig_find_gallery_anchor_coord`
+no longer returns the «Черновики»/«Шаблоны» destination chips, Шаг 4 detects an
+already-open picker and skips the open-gallery tap (`ig_gallery_already_open`), and
+the pre-Шаг-5 guard recognises the drafts screen as `ig_landed_on_reels_drafts`.
+WP #68 → Тестирование, 24h live-verify pending.
 
 Not filed (already tracked / already fixed, no duplicates created):
 - `ig_picker_wrong_candidate` + Edits-banner part of `ig_gallery_no_video_candidate`

@@ -1,5 +1,18 @@
 # BACKLOG — Генри
 
+## 🟢 IG `ig_gallery_no_video_candidate` — Шаг-4 промах по чипу «Черновики» (OpenProject #68, PR #61 merged 2026-05-14)
+**Приоритет:** высокий
+**Статус:** SHIPPED — squash `c0f781b` merged в `main`, прод-дерево обновлено `git pull --ff-only`. OpenProject #68 → Тестирование.
+
+Крупнейшая активная причина IG-падений (~29 из 39/нед). Root cause подтверждён детерминированно по фикстуре `ig_picker_clean.xml`: к Шагу 4 пикер «Новое видео Reels» уже открыт → `_ig_find_gallery_anchor_coord` проваливается на priority-2 `gallery_destination_item` → первый кликабельный матч = чип «Черновики» → tap `(276,332)` → пустой экран «Черновики Reels» → RC-8. Фикс: фильтр Drafts/Templates-чипов в anchor-lookup + `_ig_is_gallery_picker_open` (Шаг 4 пропускает open-gallery tap если пикер открыт) + `_ig_is_reels_drafts_screen` + guard-код `ig_landed_on_reels_drafts`. 15 TDD-тестов, 458 passed 0 регрессий, Codex 0 находок.
+
+**24h live-verify (дедлайн ≈ 2026-05-15 16:00 UTC):**
+- `SELECT created_at::date, count(*) FROM publish_tasks WHERE platform='Instagram' AND status='failed' AND NOT testbench AND error_code='ig_gallery_no_video_candidate' AND created_at > '2026-05-14' GROUP BY 1;` — счётчик должен заметно упасть (baseline ~17/3д).
+- `ig_gallery_already_open` events появляются в логах IG-задач (success-сигнал фикса).
+- `ig_landed_on_reels_drafts` — если ненулевой, значит Drafts достигается другим путём → новый раунд.
+
+Evidence: `docs/evidence/2026-05-14-ig-publish-failures-triage.md`.
+
 ## 🟢 Spec D — slot move обновляет publish date (validator PR #9 merged 2026-05-13)
 **Приоритет:** высокий
 **Статус:** merged в main `eab5791`, prod deploy заблокирован uncommitted hot-patch (schemes.py)
