@@ -61,11 +61,29 @@
 
 **iter#3 (одна строка):** добавить `'аккаунт'` (singular) в `TT_DRAWER_ACCOUNT_TRIGGERS` (в конец, после `accounts` — он подстрока более специфичных, поэтому priority-порядок сохраняется). Закрывает цепочку drawer → Настройки → Аккаунт → switcher. Механизм settings-хопа verified на живом устройстве, graceful-failure отработал точно по дизайну.
 
-**24h soak (deadline ~2026-05-15 11:00 UTC):** актуально после деплоя iter#3.
+**iter#3 SHIPPED:** PR #58 (`0c8518f`) — `'аккаунт'` (singular) добавлен в `TT_DRAWER_ACCOUNT_TRIGGERS` + codex-P2 fix (исключение `«+ Добавить аккаунт»` из anchor-поиска через `_TT_ADD_ACCOUNT_RE`). 60 tests green. Prod deployed (PM2 autowarm restart).
+
+**Smoke iter#3 (task 5853, `clickpay_me`, `failed` 13:13 UTC) — settings-хоп снова отработал, но finder опять None. Реальный XML дал точную причину:**
+
+Скачан `tt_3_open_list_settings` dump (task 5853). Структура страницы настроек:
+```
+View click=true [23,868][1057,1032]          ← строка-кнопка «Семейные настройки»
+TextView text='Аккаунт' desc='Аккаунт' click=false [46,1032][286,1148]  ← СИРОТА в зазоре между строками
+View click=true [23,1148][1057,1312]         ← настоящая строка-кнопка «Аккаунт»
+  TextView text='Аккаунт' click=false [165,1210][348,1267]   ← её метка (center внутри контейнера)
+```
+
+**Root cause iter#4:** `_find_tt_account_switcher_anchor_in_drawer` Pass 2 берёт **первое** совпадение по тексту и коммитится на него. Первая «Аккаунт» — сирота в зазоре `[46,1032][286,1148]` (center y=1090), вокруг неё нет кликабельного контейнера (`[...,1032]` и `[1148,...]` её не покрывают) → `best=None` → Pass 2 идёт к следующему триггеру, **не пробуя вторую «Аккаунт»** внутри настоящего кликабельного `[23,1148][1057,1312]`.
+
+**iter#4 fix:** Pass 2 должен перебирать **все** элементы, совпавшие с триггером, и для каждого пробовать найти кликабельный контейнер — возвращать первую пару (text_el, container), которая срабатывает. Общее улучшение, не костыль. Проверяется против реального XML (`/tmp/tt5853_settings.xml`) ДО деплоя — больше не вслепую.
+
+**24h soak:** актуально после iter#4.
 
 ## Что осталось
 
-- [x] Smoke по task 5796 — settings-хоп работает, iter#3 найден (singular `'аккаунт'`).
-- [ ] **iter#3** — добавить `'аккаунт'` в `TT_DRAWER_ACCOUNT_TRIGGERS`, прогнать тесты, PR, деплой, новый smoke. Возможный iter#4: если tap по «Аккаунт» откроет ещё одну страницу вместо bottomsheet (тогда `tt_drawer_tap_did_not_open_sheet` + `sheet_top_labels[]`).
-- [ ] 24h soak после iter#3.
+- [x] Smoke iter#2 (task 5796) — settings-хоп работает, iter#3 найден.
+- [x] iter#3 SHIPPED (PR #58) — singular `'аккаунт'` + codex-P2 add-account exclusion.
+- [x] Smoke iter#3 (task 5853) — settings-хоп работает, iter#4 root cause найден по реальному XML.
+- [ ] **iter#4** — Pass 2 перебирает все text-совпадения, не только первое. Verify против `/tmp/tt5853_settings.xml` до деплоя.
+- [ ] 24h soak после iter#4.
 - Runner-up из триажа `tt_post_switch_verify_unrecoverable` (~12/день) — в backlog, отдельной задачей.
