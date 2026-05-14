@@ -165,3 +165,31 @@ last_fail AS (SELECT DISTINCT ON (id) id, failmsg FROM fail_ev ORDER BY id, ord 
 SELECT failmsg LIKE '%tt_post_switch_verify_unrecoverable%' AS is_chosen_bug, count(*)
 FROM last_fail GROUP BY 1;
 ```
+
+## SHIPPED 2026-05-14
+
+- **PR:** GenGo2/delivery-contenthunter [#62](https://github.com/GenGo2/delivery-contenthunter/pull/62) — squash-merge `433c5b2`.
+- **Fix:** `get_current_account_from_profile` — добавлен ведущий разряд сортировки
+  `is_bare` (0 для `@`-префиксных токенов, 1 для bare) → `@handle` выигрывает у
+  display-name / badge-счётчика. `_looks_like_username` и `header_y_max` не трогали.
+  Та же функция используется и в шаге 3 свитчера («прочитать текущий аккаунт») —
+  фикс чинит и post-switch verify, и initial-read fast-path.
+- **Tests:** switcher-сьют 88 passed, 1 pre-existing fail (`test_yt_happy_path_returns_accounts`).
+  Полный `pytest` — 14 pre-existing fails на `origin/main` (проверено прогоном тех же
+  файлов на `5372d18`; ни один не вызывает изменённую функцию), 0 регрессий. 3 новых
+  юнит-теста — на реальных упавших дампах задач 5817/5593/5799. Codex review: 0 P1/P2.
+- **Deploy:** prod-чекаут `/root/.openclaw/workspace-genri/autowarm` fast-forward
+  `5372d18 → 433c5b2`, PM2 `autowarm` restart (`exec cwd` подтверждён, path-drift нет).
+- **Live smoke:** ре-выложено 4 задачи из 16 (`publish_queue` reset → pending).
+  - `5996` (relism_e) — упал upstream на `tt_profile_tab_broken` (устройство
+    RFGYA19BMFX в деградированном состоянии — пустые дампы); verify-путь не достигнут,
+    непоказательно.
+  - `5998` (mariaforsale), `5999` (goldenluxaroma), `6000` (spbpropertyguide) — все три
+    прошли свитчер: `tt_2_profile_screen` → **`tt_fp_editor` matched=True** (fast-path —
+    `@handle` распознан корректно). `6000` опубликована (`done`); `5998`/`5999` дошли до
+    publish-фазы и упали на отдельном `tt_upload_confirmation_timeout` (runner-up).
+  - **Ни одной** `tt_post_switch_verify_unrecoverable`. Чистый before/after: вчера task
+    5593 (mariaforsale) упал на verify — сегодня task 5998 (тот же аккаунт) распознан
+    через fast-path.
+- **24h soak:** `tt_post_switch_verify_unrecoverable` 16/24ч → ожидаем ~0
+  (deadline ~2026-05-15 ~16:00 UTC). Query — `## Запросы` выше.
