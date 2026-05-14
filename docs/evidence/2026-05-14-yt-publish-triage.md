@@ -3,6 +3,7 @@
 **Scope:** all `publish_tasks` with `platform='YouTube'` and `status='failed'` created on 2026-05-14 (UTC).
 **Goal:** rank failure causes by volume, pick the top one, open an OpenProject bug.
 **OpenProject ticket:** [#59 — Выкладка (YouTube: после переключения аккаунта публикация уходит в 5-минутный таймаут yt_editor_upload_timeout)](https://openproject.contenthunter.ru/work_packages/59) (type Ошибка, parent Epic #49 «Выкладка баги»).
+**Fix:** PR [GenGo2/delivery-contenthunter#56](https://github.com/GenGo2/delivery-contenthunter/pull/56) — branch `fix/yt-post-switch-foreground-guard`, commit `59e0a61`. Status: open, awaiting review/merge. See [Fix](#fix) below.
 
 ## Today's failed YT tasks (6 total)
 
@@ -86,3 +87,28 @@ Neither degrade-to-pass gate checks the foreground package. The "sparse dump" th
 - Screencasts: `screen_record_url` on `publish_tasks` 5685 / 5717 / 5724.
 - Frames extracted to `/tmp/yt_triage_0514/frames_<id>/` during triage (ephemeral).
 - DB: `publish_tasks.events` JSONB — group by last `events[].meta.category` where `type='error'`.
+
+## Fix
+
+**PR:** [GenGo2/delivery-contenthunter#56](https://github.com/GenGo2/delivery-contenthunter/pull/56) · branch `fix/yt-post-switch-foreground-guard` · commit `59e0a61` · base `f21ee7b`.
+
+**Change** — `account_switcher.py`, `_switch_youtube` post-switch loop, the `status == 'unknown'` branch:
+
+Before, `'unknown'` from `_post_switch_verify_handle` was unconditionally degrade-to-pass (`break` → `_tap_plus_and_verify` → `_ok()`). Now the degrade-to-pass is gated on a foreground-package check via `_detect_foreground_pkg()` (already in the file):
+
+- **Foreign app positively detected in foreground** → `return self._fail(...)` with `error_code = yt_post_switch_app_not_foregrounded`. Converts the silent ~5-min editor-poll timeout into a fast, correctly-attributed failure that frees the device and re-queues cleanly.
+- **YouTube foregrounded, or package undetectable** → conservative degrade-to-pass preserved unchanged — no behaviour change for the FLAG_SECURE / sparse-dump-on-the-right-screen case the original code was protecting.
+
+`_post_switch_verify_handle` docstring updated to match the new caller contract.
+
+**Tests** — 3 new cases in `tests/test_yt_post_switch_verify.py` (TDD: foreign-fg case went RED → GREEN; the other two lock in the conservative edges):
+
+| Test | Scenario | Expected |
+|---|---|---|
+| `..._unknown_with_foreign_foreground_fails` | dump unreadable + foreign app fg | fail fast, never reaches editor flow |
+| `..._unknown_with_yt_foreground_degrades_to_pass` | dump unreadable + YT fg | degrade-to-pass preserved |
+| `..._unknown_with_undetectable_foreground_degrades_to_pass` | dump unreadable + fg undetectable | degrade-to-pass preserved |
+
+`test_yt_post_switch_verify.py` 9/9 · `account_switcher` suite 83/83 · broad YT/switcher sweep 296 passed. One pre-existing unrelated failure — `test_switcher_read_only.py::test_yt_happy_path_returns_accounts` (read-only `read_accounts_list` path) — confirmed failing on clean baseline `f21ee7b`, not a regression of this change. Codex review: clean, no P1.
+
+**Open follow-up** — after merge + prod deploy, run a 24h check that `yt_editor_upload_timeout` failures preceded by `yt_post_switch_handle_unknown` drop, replaced by fast `yt_post_switch_app_not_foregrounded`. This fix makes the failure *fast and correctly-labelled*; it does not by itself recover the publish — if the device-state cause (YT not foregrounded after switch) is frequent enough, a follow-up recovery step (`_yt_ensure_foreground` re-entry) may be worth it.
