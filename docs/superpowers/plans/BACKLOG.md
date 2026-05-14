@@ -1,5 +1,19 @@
 # Backlog tickets
 
+## 2026-05-14 — TT post-switch verify `@handle`-priority (WP #67)
+
+### `tt_post_switch_verify_unrecoverable` — ✅ SHIPPED 2026-05-14 PR #62
+
+Крупнейший незатикеченный баг дня (16/58 TT-падений, 16 устройств). `get_current_account_from_profile` брала верхний токен, прошедший `_looks_like_username` — на экране профиля TikTok это имя профиля / badge-счётчик НАД `@handle`. Свитч проходил, verify давал ложный mismatch. Фикс: ведущий разряд сортировки `is_bare` (`@`-токены приоритетнее). PR GenGo2/delivery-contenthunter#62 (squash `433c5b2`), в проде. Live smoke: 3/3 ре-выкладок распознали аккаунт через fast-path, 0 `tt_post_switch_verify_unrecoverable`. Memory: [[project-tt-post-switch-verify-handle-fix]]. Evidence: `docs/evidence/2026-05-14-tt-publish-failures-triage-eod.md`.
+
+**24h soak deadline ~2026-05-15 16:00 UTC** — acceptance: `tt_post_switch_verify_unrecoverable` 16/24h → ~0. Query — в evidence-доке § «Запросы».
+
+### Открытые runner-up'ы из триажа 2026-05-14 (не затикечены)
+
+- **`tt_upload_confirmation_timeout` (7/день)** — свитч+verify проходят, видео заливается, экран подтверждения не детектится в таймаут (стадия `wait_upload`, не switcher). **Surfaced снова в smoke этого фикса** (tasks 5998/5999 дошли до publish-фазы и упали тут) — следующий кандидат на фикс по объёму.
+- **`tt_profile_tab_broken` (5/день)** — tap «Я» не открывает профиль. PR #50 (TT security prompt dismiss) целился сюда с acceptance `< 2/24h` — 5/день на 2026-05-14 говорит, что PR #50 закрыл не всё; проверить на 24h-verify PR #50, возможно нужен отдельный заход.
+- **retry-suffix gap мэппера** — триаж переподтвердил: `_SWITCHER_STEP_TO_CATEGORY` не матчит `_retry_N` шаги → реальная категория теряется в `publish_failed_generic` / `switch_failed_unspecified`. Уже описан ниже (секция «`switch_failed_unspecified` mapper retry-suffix gap»). 4 задачи 2026-05-14 замаскированы так.
+
 ## 2026-05-14 — WP 53 phantom schemes follow-up
 
 ### Router-level `unic_schemes` reads unfiltered (low priority)
