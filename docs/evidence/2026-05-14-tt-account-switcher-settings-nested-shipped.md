@@ -77,13 +77,26 @@ View click=true [23,1148][1057,1312]         ← настоящая строка
 
 **iter#4 fix:** Pass 2 должен перебирать **все** элементы, совпавшие с триггером, и для каждого пробовать найти кликабельный контейнер — возвращать первую пару (text_el, container), которая срабатывает. Общее улучшение, не костыль. Проверяется против реального XML (`/tmp/tt5853_settings.xml`) ДО деплоя — больше не вслепую.
 
-**24h soak:** актуально после iter#4.
+**iter#4 SHIPPED:** PR #59 (`9a57e47`) — Pass 2 перебирает все text-совпадения. Verified против `/tmp/tt5853_settings.xml` до деплоя.
+
+**Smoke iter#4 (task 5924, `click_and_pay`, `failed` 13:38 UTC) — `tt_drawer_tap_did_not_open_sheet`:**
+
+iter#4 нашёл и тапнул строку «Аккаунт» в Настройках → открылась `I18nSettingManageMyAccountActivity` (Данные об аккаунте / Пароль / Переключиться на личный аккаунт / Скачать данные / Деактивировать). **`drawer → Настройки → Аккаунт` — тупик, переключателя там нет.**
+
+**Ручная разведка на устройстве RF8Y90GCXWX (2026-05-14):** прошёл весь путь через ADB. chevron у имени `[754,495][889,574]` → `ProfileEditActivity` (не то). Низ страницы Настроек → секция «Вход в аккаунт» → **«Сменить аккаунт»** `[165,1784][548,1841]` → тап → **переключатель открылся** (click_and_pay ✓ / velvetlifeline / clickpay_me / Добавить аккаунт). `«Сменить аккаунт»` ниже фолда — initial dump его не содержит. `'сменить аккаунт'` уже есть в `TT_DRAWER_ACCOUNT_TRIGGERS`.
+
+**iter#5 SHIPPED:** PR #60 (`1d35bd2`) — settings-хоп scroll-search (`adb_swipe` вниз → re-dump → re-search, лимит `TT_SETTINGS_SCROLL_MAX=4`, ранний выход на неизменном дампе). Убраны iter#3-артефакты (singular `'аккаунт'` + `_is_add_account` — обе на опровергнутой гипотезе). iter#4 Pass-2-all-matches оставлен. 57 tests green. **Verified против реальных дампов устройства до деплоя:** `settings_top.xml` → None (запускает скролл), `settings_bottom.xml` → строка «Сменить аккаунт» `[23,1722][1057,1886]`.
+
+**Smoke iter#5 (task 5970, `fast_clickpay`, `failed` 14:16 UTC) — непоказательный для iter#5, но НЕ регрессия:**
+
+Задача пошла **probe-direct** путём: `tt_probe_opened_bottomsheet bounds=(330,1243,750,1305) attempt=1` → `tt_3_pick_account count=3 ['hobruk_art','fast_clickpay','user5087310378051']`. Переключатель открылся, аккаунт найден — но settings-scroll код iter#5 НЕ задействовался (probe сразу сработал, без Stories-pivot/меню/Настроек). Упало дальше: `tt_4_target_profile` → `tt_4_target_profile_renav` → retry → `tt_3_open_list_retry_1` fail. error_code `switch_failed_unspecified` = retry-suffix gap мэппера маскирует `tt_post_switch_verify_unrecoverable` — **отдельный баг, runner-up из триажа.**
+
+## Итог серии iter#2–iter#5
+
+Восстановлен путь TikTok к переключателю аккаунтов после серии изменений в приложении: **профиль → «Меню профиля» → drawer → «Настройки и конфиденциальность» → scroll → «Сменить аккаунт» → bottomsheet**. Каждая итерация — live smoke; iter#4/#5 — ещё и verify против реальных дампов; iter#5 — полная ручная разведка пути на устройстве. Серия итераций по `tt_account_menu_unknown_layout` закрыта: путь проверен на устройстве и на реальных дампах, дальнейшее подтверждение — только 24h soak.
 
 ## Что осталось
 
-- [x] Smoke iter#2 (task 5796) — settings-хоп работает, iter#3 найден.
-- [x] iter#3 SHIPPED (PR #58) — singular `'аккаунт'` + codex-P2 add-account exclusion.
-- [x] Smoke iter#3 (task 5853) — settings-хоп работает, iter#4 root cause найден по реальному XML.
-- [ ] **iter#4** — Pass 2 перебирает все text-совпадения, не только первое. Verify против `/tmp/tt5853_settings.xml` до деплоя.
-- [ ] 24h soak после iter#4.
-- Runner-up из триажа `tt_post_switch_verify_unrecoverable` (~12/день) — в backlog, отдельной задачей.
+- [x] iter#2–#5 SHIPPED (PR #52/#54/#57/#59/#60) — полный device-verified путь к переключателю.
+- [ ] **24h soak** — `tt_account_menu_unknown_layout` 13/24ч → ~0 (deadline ~2026-05-15 14:00 UTC). Query — в `docs/evidence/2026-05-13-tt-pattern-b-shipped.md` § "24h soak SQL".
+- [ ] **`tt_post_switch_verify_unrecoverable`** (~12/день, surfaced в smoke 5970) — отдельный баг, отдельной задачей. Переплетён с retry-suffix gap мэппера.
