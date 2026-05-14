@@ -1,6 +1,9 @@
 # Backlog — Задачи агента
 
 ## OPEN
+- [2026-05-14] **TT iter#2–#5 — 24h soak подтверждение** — серия SHIPPED (PR #52/#54/#57/#59/#60): восстановлен device-verified путь к переключателю аккаунтов TikTok (профиль → меню → drawer → Настройки → scroll → «Сменить аккаунт»). iter#5 verified на устройстве RF8Y90GCXWX + против реальных дампов. Осталось: 24h soak — `tt_account_menu_unknown_layout` 13/24ч → ~0 (deadline ~2026-05-15 14:00 UTC). Evidence: `docs/evidence/2026-05-14-tt-account-switcher-settings-nested-shipped.md`. | от: self (TT триаж 2026-05-14)
+- [2026-05-14] **TT `tt_post_switch_verify_unrecoverable` + retry-suffix gap мэппера** — всплыл в smoke 5970 (probe-direct путь, переключатель открылся, аккаунт выбран, но `tt_4_target_profile` verify не подтвердил → retry → fail). error_code `switch_failed_unspecified` = retry-suffix gap мэппера маскирует реальную категорию. Связан с runner-up из триажа (~12/день). Нужен отдельный заход: (1) пофиксить `_SWITCHER_STEP_TO_CATEGORY` чтобы матчил `*_retry_N` шаги, (2) разобраться почему post-switch verify не подтверждает. | от: self (TT триаж 2026-05-14)
+- [2026-05-14] **TT `tt_post_switch_verify_unrecoverable` рецидив** — ~12 падений TT-выкладки/день (runner-up), `tt_4_target_profile`: «unknown header» / «no profile after renav». Уже 2 PR (#34 renav, #39 bool-return) — нужен отдельный заход. Частично замаскирован retry-suffix gap мэппера (5593, 5620 ушли в `switch_failed_unspecified`). Триаж: `docs/evidence/2026-05-14-tt-publish-failures-triage.md`. | от: self (TT триаж 2026-05-14)
 - [2026-05-11] **24h метрика TT music rights handler** — измерить fail-rate `tt_upload_confirmation_timeout` на raspberry=9 за 24h после deploy `8ec5c53`. Expect: < 3 (was 12). Query в evidence doc. | от: self (T10 deferred)
 - [2026-05-10] **`tt_fg_lost` после успешного music rights handle (pt 4523)** — Phase 1 investigation: AI Unstuck multi-tap может накликать nav buttons / background TT после tt_music_rights_accepted. Hypothesis. Sample: pt 4523 events 19:42:40-19:55:15. | от: self (T10 live verify finding)
 - [2026-05-10] **Re-enable unic-sweep PM2 flag (после dup incident 2026-05-08)** — `sudo pm2 unset autowarm:UNIC_SWEEP_DISABLED && sudo pm2 restart autowarm`. Пер memory `project_publish_dup_incident_2026_05_08` — 3 spec'а merged, остался последний шаг re-enable. Verify: `sudo pm2 env autowarm | grep SWEEP`. | от: self (initial backlog scan)
@@ -10,6 +13,7 @@
 - [2026-05-04] **account-checker (delivery-contenthunter)** — research-карта переиспользуемого кода `.ai-factory/plans/account-checker-reusable-code-brief-20260504.md` готова. Открытые вопросы для автора ТЗ: набор признаков, триггер запуска, нужен ли UI. | от: self
 
 ## DONE
+- [2026-05-14] ~~TT switcher iter#2 — `tt_account_menu_unknown_layout`~~ | закрыто: 2026-05-14 | PR #57 `8e7623a`, prod deployed (PM2 autowarm restart), evidence `docs/evidence/2026-05-14-tt-account-switcher-settings-nested-shipped.md`. Settings-nested fallback в `_open_tt_account_switcher`. 55 tests green, codex clean. Smoke/soak — отдельным OPEN-пунктом.
 - [2026-05-10 19:55] ~~TT music rights confirmation dialog handler~~ | закрыто: 2026-05-10 19:55 | PR #28 `8ec5c53`, evidence `docs/evidence/2026-05-10-tt-music-rights-dialog-shipped.md`, live verify pt 4523 handler fired ✅
 - [2026-05-10 11:30] ~~ig_gallery_no_video_candidate Mode A~~ | закрыто: 2026-05-10 16:36 | PR #26 `4643c7d`, Mode B closed pending re-occurrence
 

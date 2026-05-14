@@ -1,39 +1,76 @@
 # Backlog tickets
 
+## 2026-05-14 — WP 53 phantom schemes follow-up
+
+### Router-level `unic_schemes` reads unfiltered (low priority)
+
+WP 53 fix (PR #10) filtered `id > 0` in `schemes_service.get_schemes_with_preferences` + `get_summary` — the client-facing schemes screen. Three router-level reads in `backend/src/routers/schemes.py` still read `unic_schemes` unfiltered:
+
+- `check_readiness` (`:141`) — `SELECT COUNT(*) FROM unic_schemes` → `total_schemes` (gates `previews_ready`)
+- `generate_previews` (`:349`) — `SELECT * FROM unic_schemes ORDER BY id` → schemes sent to the render worker
+- `approved_scheme_ids` (`:450`) — fallback `SELECT id FROM unic_schemes ORDER BY id`
+
+Not urgent: the leak source is closed (`test_schemes_deficits._cleanup_project` now deletes `id <= -1`), so phantoms won't recur. But these are a latent inconsistency if a service row ever reappears via another path. Add `WHERE id > 0` for defense-in-depth when next touching that file. Evidence: `docs/evidence/2026-05-14-wp53-phantom-schemes-fix-shipped.md`.
+
 ## 2026-05-13 session follow-ups
 
 ### 24h verify (next day morning)
 
-Три shipped PR в один день требуют 24h-verify SQL:
+Четыре shipped PR в один день требуют 24h-verify SQL:
 
 | PR | Topic | Deadline (UTC) | Acceptance |
 |---|---|---|---|
 | #48 | Watchdog ping regression | 2026-05-14 08:40 | Pi 3+5 `switch_failed_unspecified` < 5 / 24h |
 | #49 | IG share OK fallback (Tier 1.5) | 2026-05-14 11:45 | `ok_rescued_24h / ok_attempted_24h ≥ 30%` |
 | #50 | TT security prompt dismiss | 2026-05-14 13:25 | `tt_profile_tab_broken < 2/24h` AND `tt_security_prompt_dismissed > 0` |
+| #52 | TT Pattern B (probe-and-pivot) | 2026-05-14 17:30 | `tt_account_sheet_closed_before_parse` ≤ 5/24h AND new codes ≤ 3/24h combined |
 
-SQL pack в `docs/evidence/2026-05-13-*.md § "24h verify"` для каждого PR. После прогона — обновить evidence docs с verdicts + memory entries (статус → close OR iterate).
+SQL pack в `docs/evidence/2026-05-13-*.md § "24h verify"` для каждого PR. PR #52 SQL — `jsonb_array_elements WITH ORDINALITY` (terminal `failed` event без category, нужно сканировать назад). После прогона — обновить evidence docs + memory entries (close OR iterate).
 
-### TT Pattern B — `tt_account_sheet_closed_before_parse` (top open today)
+### TT Pattern B — `tt_account_sheet_closed_before_parse` ✅ SHIPPED 2026-05-13 PR #52
 
-**Top остаточный TT fail после PR #50 (sibling pattern, разный root cause).** 19/24h на 2026-05-13. Drill (task 5338, `clickpay_under` на phone #19): `_tap_profile_header` тапает coord (540, 180) — попадает на видео-превью карточку, а НЕ на header профиля (TT layout change). UI dump retry1 показывает: «clickpay_under · 13 ч. назад», «Оригинальный звук от clickpay_under», «Закрыть», «0 зрителей», «Еще». Это видео-card, не account-switcher trigger.
+12-commit branch (`be62872..69a2dea`) squash-merged как `76ecd4f`. Probe-and-pivot orchestrator закрывает 19/24h root cause (TT app update — username tap открывает Stories/LIVE viewer вместо account-switcher bottomsheet). Memory: [[project_tt_pattern_b_shipped]]. Evidence: `docs/evidence/2026-05-13-tt-pattern-b-shipped.md`. Smoke pq 2149 live; 24h verify deadline 2026-05-14 17:30 UTC.
+
+**Iteration #2 — 2-step settings-nested account switcher (HIGH priority, evidence in hand)**
+
+Live smoke task 5572 (clickpay_go) post-hotfix: orchestrator successfully reached drawer search but `_find_tt_account_switcher_anchor_in_drawer` returned None. `drawer_labels[]` payload reveals new TT requires 2-step navigation: «Меню профиля» → «Настройки и конфиденциальность» → settings page → «Управление аккаунтами». Spec for iter#2 needed: add a settings-nested lookup pass to the orchestrator when first drawer search returns None. Anchors: `['настройки и конфиденциальность', 'настройки', 'settings and privacy', 'settings']`. Cap nesting at 1 level. See `docs/evidence/2026-05-13-tt-pattern-b-shipped.md` § Second smoke for the full drawer label list.
+
+**Open follow-ups (Minor, from final holistic opus review):**
+1. Inline-vs-helper asymmetry on `tt_account_sheet_closed_before_parse` emission (functionally fine).
+2. `menu_dump` redundancy with `back_dump` (~1-2s extra).
+3. `_tap_profile_header` internal `_save_dump` overwritten by orchestrator under same step name (pre-existing).
+4. End-to-end test of menu-path through `_switch_tiktok` missing — smoke is only true verification. **CAUGHT BY THIS — smoke caught `adb_shell→adb` regression (hotfix PR #54) that 6 codex rounds + 48 unit tests missed.**
+
+### `switch_failed_unspecified` mapper retry-suffix gap (new, 2026-05-13)
+
+24h фон 25 fails, после декомпозиции:
+- 17 pre-PR-#48 watchdog-killed — закроется по 24h verify PR #48
+- 6 pre-PR-#48 other (вероятно тоже watchdog или race)
+- **2 post-PR-#48 non-watchdog** — реальный остаток после сегодняшних deploy'ов
+
+Корень: `_SWITCHER_STEP_TO_CATEGORY` в `publisher_kernel.py:76` НЕ знает retry-суффиксы (`tt_1_feed_retry_1`, `tt_3_open_list_retry_1` и пр.) → Pass-2 fallback resolver'а дефолтится на `switch_failed_unspecified`.
+
+Sample failing steps post-PR-#48:
+- task 5326 (TT, datj2k5): fail step `tt_1_feed_retry_1` — TT не запустился после post-switch retry restart. Должен мэппиться на `tt_app_launch_failed`.
+- task 5296 (TT, relisme_co): fail step `tt_3_open_list_retry_1` — switcher's retry. Должен мэппиться на `tt_account_sheet_closed_before_parse`.
 
 Fix варианты:
-1. Alternative anchor — найти «Меню профиля» button at [945,112][1058,225] (top-right, resource-id `action_bar_button_text`) вместо (540, 180) tap
-2. Resource-id-based: искать кликабельный node с конкретным `:id/` суффиксом для profile header
-3. Skip fallback (540, 180) и fail-fast если xml_bounds не нашёл header
+1. Strip `_retry_N` suffix в resolver Pass-2 перед lookup (1 line in `publisher_base._set_error_code_from_events`).
+2. Явные entries для каждой retry-suffixed step в `_SWITCHER_STEP_TO_CATEGORY` (явнее, шире diff).
 
-Distribution: 13/19 на Pi 9, 2/19 на Pi 7, остальное singletons. Sample tasks 5338, 5335, 5334, 5332, 5331 — все clickpay_* accounts на Pi 9.
-
-Approach: спецификации ещё нет. Нужен brainstorming с инспекцией нескольких failed-task XMLs для надёжного anchor.
+**Не блокер сегодня:** 2/24h, и часть «25» исчезнет после PR #48 verify. Чинить завтра после 24h-verifies (2026-05-14 morning UTC).
 
 ### AI Unstuck не firing — possibly self-resolved by PR #48
 
 До PR #48 (08:40 UTC): AI Unstuck не firing 0/22 в TT timeout кейсах. Hypothesis: watchdog regression обрывал AI Unstuck до того, как он успевал что-то сделать. Per memory `project_watchdog_ping_regression_shipped` — теперь watchdog продлевается активностью. Проверить 24h: возвращается ли AI Unstuck к нормальной частоте.
 
-### YT Шаг D — yt_editor_upload_timeout — possibly self-resolved by PR #48
+### YT `yt_editor_upload_timeout` — ✅ ROOT-CAUSED + FIXED 2026-05-14 PR #56
 
-Post-PR #48 (4h sample): 0 `yt_editor_upload_timeout` post-deploy (vs 2/day pre-deploy). Похоже на collateral fix от watchdog regression. Подтвердить 24h post-deploy: если 0 → close backlog item.
+**НЕ self-resolved PR #48.** Триаж 2026-05-14 (OpenProject #59) нашёл 3 свежих `yt_editor_upload_timeout` (tasks 5685/5717/5724) — топ-причина YT-падений за день (3/6), #3 за 7д (14). Root cause: post-switch verify возвращает `'unknown'` → degrade-to-pass всегда, даже когда YouTube не на переднем плане → publisher уходит в 5-мин editor poll вслепую. Скринкасты: device на рабочем столе / Google voice search / Facebook prompt. 14/15 за 7д имеют precursor `yt_post_switch_handle_unknown`.
+
+Фикс — `_switch_youtube` post-switch loop: degrade-to-pass на `'unknown'` теперь gated проверкой foreground-пакета; чужой app в foreground → fail fast с `yt_post_switch_app_not_foregrounded`. PR #56 squash-merge `348d495`, в проде 2026-05-14. Evidence: `docs/evidence/2026-05-14-yt-publish-triage.md`. Memory: [[project_yt_post_switch_foreground_guard]].
+
+**24h verify deadline 2026-05-15 ~13:00 UTC** — SQL в evidence doc § "24h verify". Acceptance: `yt_editor_upload_timeout` после `yt_post_switch_handle_unknown` резко падает, вместо зависаний — быстрый `yt_post_switch_app_not_foregrounded`. Residual ~1/15 (editor genuinely stuck при YT в foreground) остаётся под item ниже.
 
 ---
 
@@ -41,7 +78,7 @@ Post-PR #48 (4h sample): 0 `yt_editor_upload_timeout` post-deploy (vs 2/day pre-
 
 ### Шаг D — yt_editor_upload_timeout (после AI Unstuck)
 
-**STATUS:** likely closed by PR #48 (watchdog ping). Post-deploy 4h sample = 0 fails. Confirm 24h.
+**STATUS 2026-05-14:** дублирующий precursor-вариант (`yt_post_switch_handle_unknown` → editor poll вслепую) закрыт PR #56 — см. item «YT `yt_editor_upload_timeout` — ✅ ROOT-CAUSED + FIXED» выше. ОСТАЁТСЯ residual: ~1/15 за 7д имели `yt_editor_stuck_detected` БЕЗ precursor'а — YouTube был в foreground, но редактор реально завис. Вот этот случай — то, что не покрыто PR #56 и описано ниже.
 
 13 fails/week pre-2026-05-13, single-pattern `YouTube: редактор timeout — Загрузить не найдено (после AI)` в `publisher_youtube.py:1199-1205`. AI Unstuck вызывается (`ai_unstuck_result=True`), что-то делает, но кнопка «Загрузить» не появляется. Screen recordings analysis на task'ах 4892/4444/4441. Hypothesis: editor в caption-screen с задержанной generation animation; AI не дожидается. Fix варианты: лучший detection caption-screen + skip AI, или post-AI wait+retry с другими criteria.
 
