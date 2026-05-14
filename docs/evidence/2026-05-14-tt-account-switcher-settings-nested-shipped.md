@@ -43,15 +43,29 @@
 
 ## Live verify
 
-**Smoke kickoff:** `publish_queue` id `2869` (`clickpay_go`, бывш. task 5732) перевыложен — `UPDATE publish_queue SET status='pending', publish_task_id=NULL`. `dispatchPublishQueue` (5-мин cron) создаст новый `publish_task`.
+**Smoke kickoff:** `publish_queue` id `2869` (`clickpay_go`, бывш. task 5732) перевыложен. `dispatchPublishQueue` создал task `5796` (started 12:33 UTC).
 
-**Ожидаемо:** в событиях нового `publish_task` — `account_switch` с дампом под `tt_3_open_list_settings`, settings-хоп, затем либо `tt_menu_path_opened_bottomsheet` (успех), либо `tt_account_menu_unknown_layout` с заполненным `settings_labels[]` (→ iter#3).
+**Smoke результат (task 5796, `failed`, 12:40 UTC) — settings-хоп подтверждён, найден iter#3:**
 
-**24h soak (deadline ~2026-05-15 10:00 UTC):** `tt_account_menu_unknown_layout` падает с 13/24ч к ~0; новых спайков error-кодов нет. Запрос — в `docs/evidence/2026-05-13-tt-pattern-b-shipped.md` § "24h soak SQL".
+События прошли по новому пути: `tt_3_open_list_probe` → `tt_3_open_list_back` → `tt_3_open_list_menu` → `tt_3_open_list_drawer` → **`tt_3_open_list_settings`** (settings-хоп отработал, дамп сохранён) → `tt_account_menu_unknown_layout`.
+
+`settings_labels[]` payload (settings-хоп **приземлился на правильную страницу настроек**):
+```json
+["Вернуться к предыдущему экрану", "Настройки и конфиденциальность Настройки",
+ "Предпочитаемый контент", "Время и благополучие", "Семейные настройки",
+ "Аккаунт Аккаунт", "Аккаунт", "Конфиденциальность", "Безопасность и разрешения",
+ "Поделиться профилем", "Контент и отображение Контент и отображе", "Уведомления", "ЭФИР"]
+```
+
+**Диагноз iter#3:** на странице настроек строка аккаунтов есть — `«Аккаунт»` (единственное число) — но `TT_DRAWER_ACCOUNT_TRIGGERS` содержит только `аккаунты` / `управление аккаунтами` / `accounts`. `'аккаунты' in 'аккаунт'` → False. Singular `'аккаунт'` не триггер.
+
+**iter#3 (одна строка):** добавить `'аккаунт'` (singular) в `TT_DRAWER_ACCOUNT_TRIGGERS` (в конец, после `accounts` — он подстрока более специфичных, поэтому priority-порядок сохраняется). Закрывает цепочку drawer → Настройки → Аккаунт → switcher. Механизм settings-хопа verified на живом устройстве, graceful-failure отработал точно по дизайну.
+
+**24h soak (deadline ~2026-05-15 11:00 UTC):** актуально после деплоя iter#3.
 
 ## Что осталось
 
-- [ ] Дождаться smoke-результата по queue_id 2869 — дописать сюда.
-- [ ] 24h soak проверка.
-- [ ] Если smoke вернёт `settings_labels[]` без успеха — iter#3 из этого payload'а.
+- [x] Smoke по task 5796 — settings-хоп работает, iter#3 найден (singular `'аккаунт'`).
+- [ ] **iter#3** — добавить `'аккаунт'` в `TT_DRAWER_ACCOUNT_TRIGGERS`, прогнать тесты, PR, деплой, новый smoke. Возможный iter#4: если tap по «Аккаунт» откроет ещё одну страницу вместо bottomsheet (тогда `tt_drawer_tap_did_not_open_sheet` + `sheet_top_labels[]`).
+- [ ] 24h soak после iter#3.
 - Runner-up из триажа `tt_post_switch_verify_unrecoverable` (~12/день) — в backlog, отдельной задачей.
