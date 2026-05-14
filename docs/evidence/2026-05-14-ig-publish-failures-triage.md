@@ -10,12 +10,13 @@ usually a preflight one). Logs + screencasts reviewed for the top 4 categories.
 попадает на пустую вкладку «Черновики Reels» вместо «Недавние»](https://openproject.contenthunter.ru/work_packages/68)
 (type Ошибка, parent Epic #49 «Выкладка баги»).
 
-> **Mid-triage correction:** the two highest categories were *already* tracked.
+> **Mid-triage correction:** 3 of the 4 top categories were *already* tracked or fixed.
 > `ig_picker_wrong_candidate` + the Edits-banner part of `ig_gallery_no_video_candidate`
 > are **WP #61** (fix merged `5372d18`, 2026-05-14 14:22 UTC, status Тестирование).
-> `ig_share_tap_no_progress` is being fixed via GitHub PRs (#49/#51, "выкатили 13.05"
-> per WP #61). So the only *unfiled* high-volume cause is the `ig_gallery_no_video_candidate`
-> **empty-«Черновики» sub-mode** → that is what WP #68 covers. No duplicates were filed.
+> `ig_share_tap_no_progress` was a false-negative, **already fixed** by `52f9285`
+> (2026-05-13 20:28, GitHub #51) — verified clean on 05-14 (see §2). So the only
+> *unfiled* high-volume cause is the `ig_gallery_no_video_candidate` **empty-«Черновики»
+> sub-mode** → that is what WP #68 covers. No duplicates were filed.
 
 ## 7-day catalog (created_at ≥ 2026-05-07, prod-real IG failed tasks)
 
@@ -71,15 +72,40 @@ destinations, and one dominates:
 WP #61's description estimated the Drafts/editor remainder at "~24 of 40"; the 6/8
 sample suggests it is actually the **majority** (~29 of 39) of this category.
 
-### 2. `ig_share_tap_no_progress` — 33 (Share tapped, upload never confirmed)
+### 2. `ig_share_tap_no_progress` — 33 (false-negative — the Share *worked*) → already fixed (`52f9285`), no WP
 
 Chain: caption verified → «кнопка Поделиться нажата» → `wait_upload_iter0_diag` →
-`ig_share_retry` ×2 → `ig_share_tap_no_progress`. Screencasts for 5277/5321 show
-Instagram **back on the Reels feed** during the whole wait window — i.e. the share
-sheet was dismissed/left, but `wait_upload` never saw an upload indicator. None of the
-sampled tasks have a `post_url`. Ambiguous: the post may have published silently
-(false-negative detection → duplicate-publish risk) or the Share tap missed. Needs a
-dedicated screencast pass before this one is filed. Went quiet ~28h ago.
+`ig_share_retry` ×2 → `ig_share_tap_no_progress`.
+
+**Deep screencast pass (5321, 5237, 5208) — root cause is a false negative.** All
+three videos show the IG Reels composer for a few seconds after the Share tap, then
+transition to the **Reels feed** within ~3–15 s — i.e. the post *was* submitted and IG
+navigated away. But `_wait_instagram_upload` (`publisher_instagram.py:2728`) decided
+whether to retry from `_is_ig_editor_still_visible(iter0_ui_xml)`, and the iter0
+`uiautomator` dump returns **stale accessibility state** — the saved iter0 XMLs
+(5321/5237/5208) show a fully-normal composer with `share_button` still
+`clickable+enabled`, even though the device had already moved to the feed. So the
+publisher re-taps «Поделиться» twice (now landing on random reels in the feed), then
+marks `ig_share_tap_no_progress` and fails a task **whose post had actually
+published** — a duplicate-publish risk on re-queue. The code itself records this:
+`publisher_instagram.py:2758` "Evidence (12/12 false-negative … за 2026-05-13)" and
+`:2768` "`ReelViewerActivity` — Reels watch feed (5321 наблюдение)".
+
+**Already fixed and verified.** Commit `52f9285` (2026-05-13 20:28 +03, "pre-Tier-1
+transition probe", GitHub #51) added a `dumpsys activity activities` probe — ground
+truth independent of the stale accessibility tree — that skips the retry path when the
+foreground activity has moved to a success token. Post-fix verification (2026-05-14):
+of 42 IG tasks that ran the probe, **29 caught an averted false-negative**
+(`skip_tier1=true` → `done`) and there were **0 `ig_share_tap_no_progress` recurrences**
+(the 3 probe-task failures that day were all `screencast_pull/stop_failed` — recording
+infra, unrelated). All 33 weekly occurrences predate the fix. → **no new WP.**
+
+Minor residual (hardening note, not a bug): the probe's `SUCCESS_ACT_TOKENS` lists
+`MainTabActivity / ReelViewerActivity / IgFeedActivity` but not
+`InstagramMainActivity`, which is a common post-share foreground activity (many `done`
+tasks on 05-14 had `skip_tier1=false` + `act=InstagramMainActivity`). Currently
+harmless — the downstream main wait-loop catches those — but worth adding if the main
+loop is ever touched.
 
 ### 3. `ig_picker_wrong_candidate` — 15 (Layer-A pre-tap guard false-positives) — NEW → **WP #61**
 
@@ -127,11 +153,12 @@ This is the single largest *unfiled* IG publish-failure cause (~29 of 39 / week,
 active daily). Fix direction: ensure the picker is on the «Недавние» tab before
 searching for a video candidate.
 
-Not filed (already tracked, no duplicates created):
+Not filed (already tracked / already fixed, no duplicates created):
 - `ig_picker_wrong_candidate` + Edits-banner part of `ig_gallery_no_video_candidate`
   → **WP #61** (fix merged today, Тестирование).
-- `ig_share_tap_no_progress` → GitHub PRs #49/#51, "выкатили 13.05" (no OpenProject WP;
-  worth confirming whether one is wanted).
+- `ig_share_tap_no_progress` → confirmed false-negative, **already fixed** by `52f9285`
+  (2026-05-13 20:28, GitHub #51) and verified clean on 05-14 (0 recurrences, 29 averted
+  false-negatives). No WP needed — see §2.
 
 Watch-list after the #61 fix verifies: if `ig_picker_wrong_candidate` `date_mismatch`
 keeps firing, the 60 s tolerance vs minute-truncated thumbnail is a real second cause
