@@ -1,5 +1,15 @@
 # Backlog tickets
 
+## 2026-05-15 — YT post-switch upload state normalization (WP #74)
+
+### `yt_gallery_no_video_candidate` — ✅ SHIPPED 2026-05-15 PR #64
+
+Триаж YT-фейлов за день: 166 fails, 164 = сетевая `adb_devices_unreachable` (исключена, network уже починен), 2 = `yt_gallery_no_video_candidate` (task 6513 oracle_spacee + 6515 oraclevisionn, raspberry 8, проект «Эзотерика Oleg»). На скринкастах оба раза YT после успешного `_ensure_correct_account` остаётся не в upload-state: 6513 завис на системном permission-диалоге «Откройте YouTube доступ к камере и микрофону», 6515 — на Shorts feed с открытой `Описание` bottom-sheet. Watchdog «post-account-switch» бил через 120s, picker фейлился с `all_clickable_count=0`.
+
+PR #64 (3 коммита, squash `4722b81`): **A** `_normalize_yt_state_pre_upload` — `am force-stop` + `am start LAUNCHER` + 2 итерации permission-tap'ов перед probe'ом меню создания; **B** в `_select_gallery_video` parse loop добавлены 'При использовании приложения', 'Только в этот раз', 'Allow', 'Понятно'; **C** meta при fail-fast обогащена `top_resumed_activity` + `current_package` (категория `yt_gallery_no_video_candidate` сохранена — dashboards). 23 теста зелёные, codex без замечаний, prod `pm2 restart 34 autowarm` 16:42 UTC.
+
+**24h live verify deadline ~2026-05-16 16:42 UTC** — acceptance: 0 fails `yt_gallery_no_video_candidate` за 24h при ненулевом потоке YT-задач. Memory: [[project_yt_post_switch_state_normalize_shipped]]. Spec/plan: `docs/superpowers/specs/2026-05-15-yt-post-switch-upload-state-normalization-design.md` + `docs/superpowers/plans/2026-05-15-yt-post-switch-upload-state-normalization.md`.
+
 ## 2026-05-14 — TT post-switch verify `@handle`-priority (WP #67)
 
 ### `tt_post_switch_verify_unrecoverable` — ✅ SHIPPED 2026-05-14 PR #62
