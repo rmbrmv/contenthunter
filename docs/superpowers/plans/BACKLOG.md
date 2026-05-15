@@ -1,5 +1,27 @@
 # Backlog tickets
 
+## 2026-05-15 — TT commercial-music modal handler (WP #75)
+
+### `tt_upload_confirmation_timeout` (новая сигнатура «Коммерческие треки → TikBiz playlist») — ✅ SHIPPED 2026-05-15 PR #66
+
+Триаж TT-фейлов за день: 175 fails, 166 = сетевая `adb_devices_unreachable` (исключена, network уже починен), top non-network = 3 явных `tt_upload_confirmation_timeout` (tasks 6495/6510/6512) + 1 orphan (5202) с той же сигнатурой = 4/9 ≈ 44% non-network падений из одной корневой. На всех 3 screencast'ах TT застрял на одной и той же странице **«Коммерческие треки → TikBiz playlist»** (треки PONCHET, Yang Salah, Beat Automotivo, Happy/Vide..., Countless...) — публикатор не закрывает модал, AI vision возвращает `{x:null,y:null}` для кнопки «Опубликовать», 3-мин `wait_upload` timeout. Разные аккаунты (axilor_prive/brand, clickpay_under), разные устройства (RF8Y80ZTVFZ/RF8YA09S90H/RFGYC31P94Z), разные raspberry (#1/#9) — баг воспроизводим, не device-state. Это **НЕ** music-rights confirmation (диалог *согласия*, закрыт PR #28/#32), а новый **selector с принудительным выбором** коммерческого трека.
+
+PR GenGo2/delivery-contenthunter#66 (squash `2dd53ff`): **3-level detector** (strict + fallback + evidence-only, аналог music-rights) → **cancel-select ladder** (`iter ≤ 2` → tap X, `iter > 2` → выбор 1-го трека через ✓, MAX=4 → `tt_commercial_music_stuck`) → wired в 2 hook'а (`_publish_share_loop` Шаг 5 — основной перед XML-сканом «Опубликовать», `_wait_upload_confirmation` outer loop — defensive). Env kill-switches `TT_COMMERCIAL_MUSIC_HANDLER_ENABLED` (default ON) + `TT_COMMERCIAL_MUSIC_FALLBACK_ENABLED` (default OFF). 9 новых event categories для триажа. 40 unit + 1 integration smoke + 305 passed в TT regression. Subagent-driven-development через 15 plan tasks, codex-review round 2 = 0 findings, final reviewer = ready to merge. PM2 `restart 34 autowarm` + `restart 33 autowarm-testbench` 18:22 UTC.
+
+**24h live verify deadline ~2026-05-16 18:22 UTC** — acceptance:
+1. 0 fails `tt_upload_confirmation_timeout` с сигнатурой `ai_find_tap_no_coords` на Publish-кнопке.
+2. Распределение `tt_commercial_music_cancelled` vs `_track_selected` за 24h. Если 100% → select, cancel-X не закрывает модал, нужен switch policy на select-первым (iter2).
+3. Нет `tt_commercial_music_stuck` events.
+4. Если `tt_commercial_music_unhandled_suspect` (evidence-only) сработает — включить `TT_COMMERCIAL_MUSIC_FALLBACK_ENABLED=true` и собрать XML dumps в `/tmp/autowarm_ui_dumps/`.
+
+Memory: [[project_tt_commercial_music_modal_wip]]. Spec/plan/evidence: `docs/superpowers/specs/2026-05-15-tt-commercial-music-modal-handler-design.md` + `docs/superpowers/plans/2026-05-15-tt-commercial-music-modal-handler.md` + `docs/evidence/2026-05-15-tt-publish-fails-triage.md`.
+
+### Открытые runner-up'ы из триажа 2026-05-15 (не затикечены, малый объём)
+
+- **`tt_account_sheet_closed_before_parse` (2/день)** — bottomsheet со списком аккаунтов не открылся, target не добавлен на устройство. По msg выглядит как data-issue (онбординг аккаунта), не код-баг. Если повторится 7+ дней — взять в discovery.
+- **`tt_profile_tab_broken` (2/день)** — tap «Я» не открывает профиль. Memory `project_tt_post_switch_renav_shipped` упоминает recovery PR #34. 2/день — приемлемый шум, не takeaction. Если вырастет — взять.
+- **`tt_post_switch_verify_unrecoverable` (1/день)** — `tt_post_switch_handle_unknown` без recovery success. PR #34 (post-switch verify recovery) должен покрывать; пристальнее посмотреть если повторится 5+/день.
+
 ## 2026-05-15 — YT post-switch upload state normalization (WP #74)
 
 ### `yt_gallery_no_video_candidate` — ✅ SHIPPED 2026-05-15 PR #64
