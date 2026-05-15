@@ -74,51 +74,34 @@ _TT_COMMERCIAL_MUSIC_PLAYLIST_HINTS = (
 
 ### Action ladder — cancel → select
 
-Counter `self._commercial_music_iter` (init в `_init_commercial_music_state`, вызывается из `_init_wait_upload_overlay_state`). `MAX_COMMERCIAL_MUSIC_ITERATIONS = 4`.
+`MAX_COMMERCIAL_MUSIC_ITERATIONS = 4`. Counter и evidence-флаг хранятся на `self` и инициализируются helper'ом `_init_commercial_music_state` (детали в «Counter init» ниже).
+
+**Разделение обязанностей** (важно для покрытия fallback / evidence-only путей — Codex round 1, P2 #1):
+
+- **Outer gate** (в hook'ах, см. ниже) — решает «обрабатывать ли сейчас». Учитывает БОТЬ strict и fallback detector'ы (когда `TT_COMMERCIAL_MUSIC_FALLBACK_ENABLED=true`), и сам обрабатывает evidence-only/dismissed-логирование. Это позволяет fallback-варианту title попадать в handler.
+- **`_handle_tt_commercial_music_modal(ui_xml, matched_via)`** — выполняет только action ladder (cancel или select). Counter уже инкрементирован outer'ом до вызова. `matched_via ∈ {'strict','fallback'}` пробрасывается в meta.
 
 ```python
-def _handle_tt_commercial_music_modal(self, ui_xml: str) -> bool:
-    # detect (strict → fallback → evidence-only)
-    matched_via = None
-    fallback_enabled = env('TT_COMMERCIAL_MUSIC_FALLBACK_ENABLED', 'false') == 'true'
-    if self._detect_tt_commercial_music_modal(ui_xml):
-        matched_via = 'strict'
-    elif fallback_enabled and self._detect_tt_commercial_music_modal_fallback(ui_xml):
-        matched_via = 'fallback'
-        ...evidence dump + log tt_commercial_music_fallback_match...
-    else:
-        if fallback_enabled and not self._commercial_music_evidence_dumped \
-           and self._detect_tt_commercial_music_modal_evidence_only(ui_xml):
-            ...dump + log tt_commercial_music_unhandled_suspect...
-            self._commercial_music_evidence_dumped = True
-        return False
-
-    self._commercial_music_iter += 1
-    if self._commercial_music_iter > MAX_COMMERCIAL_MUSIC_ITERATIONS:
-        log.error(...)
-        self.log_event('error', 'tt_commercial_music_stuck',
-                       meta={'category': 'tt_commercial_music_stuck',
-                             'iterations': self._commercial_music_iter,
-                             'platform': 'TikTok', 'step': 'tt_5_share_loop'})
-        return False
-
+def _handle_tt_commercial_music_modal(self, ui_xml: str, matched_via: str) -> bool:
     if self._commercial_music_iter <= 2:
         # Path A: cancel via X
         tapped = self._tap_tt_commercial_music_close(ui_xml)
         category = 'tt_commercial_music_cancelled' if tapped \
                    else 'tt_commercial_music_close_not_found'
+        phase = 'cancel'
     else:
-        # Path B: fallback select first track
+        # Path B: select 1st track
         tapped = self._tap_tt_commercial_music_first_track(ui_xml)
         category = 'tt_commercial_music_track_selected' if tapped \
                    else 'tt_commercial_music_track_not_found'
+        phase = 'select'
 
     self.log_event('info' if tapped else 'warning',
                    f'TikTok: commercial-music modal {category}',
                    meta={'category': category, 'platform': 'TikTok',
                          'matched_via': matched_via,
                          'iter': self._commercial_music_iter,
-                         'phase': 'cancel' if self._commercial_music_iter <= 2 else 'select'})
+                         'phase': phase})
     return tapped
 ```
 
@@ -144,18 +127,47 @@ Track-row identity (узнаваем по совместному наличию)
 
 ### Hook points
 
+Outer gate включает strict ИЛИ fallback (когда флаг включён) — это покрывает оба пути detector'а; evidence-only — в else-ветке. Реализация защищена `getattr` на случай, если hook сработает до init (см. Counter init).
+
 1. **`_publish_share_loop` Шаг 5** (publisher_tiktok.py:1256+):
    Внутри `for attempt in range(8):`, в самом начале после `ui = self.dump_ui()`, добавить:
    ```python
    if env('TT_COMMERCIAL_MUSIC_HANDLER_ENABLED', 'true') == 'true':
+       fb_enabled = env('TT_COMMERCIAL_MUSIC_FALLBACK_ENABLED', 'false') == 'true'
+       matched_via = None
        if self._detect_tt_commercial_music_modal(ui):
-           handled = self._handle_tt_commercial_music_modal(ui)
-           if not handled:
-               # stuck OR cancel/select tap не получился — fail attempt
+           matched_via = 'strict'
+       elif fb_enabled and self._detect_tt_commercial_music_modal_fallback(ui):
+           matched_via = 'fallback'
+           dump_path = self._save_dump_for_commercial_music_review(ui, 'fallback')
+           self.log_event('info', 'TikTok: commercial-music modal matched via fallback',
+                          meta={'category': 'tt_commercial_music_fallback_match',
+                                'dump_path': dump_path, 'platform': 'TikTok'})
+
+       if matched_via is not None:
+           self._commercial_music_iter = getattr(self, '_commercial_music_iter', 0) + 1
+           if self._commercial_music_iter > MAX_COMMERCIAL_MUSIC_ITERATIONS:
+               self.log_event('error',
+                   f'tt_commercial_music_stuck: modal persists > '
+                   f'{MAX_COMMERCIAL_MUSIC_ITERATIONS} iterations',
+                   meta={'category': 'tt_commercial_music_stuck',
+                         'iterations': self._commercial_music_iter,
+                         'platform': 'TikTok', 'step': 'tt_5_share_loop'})
                return False
+           handled = self._handle_tt_commercial_music_modal(ui, matched_via)
            time.sleep(2)
-           continue  # перепрочитаем UI на след. итерации share-loop
-       elif self._commercial_music_iter > 0:
+           continue
+       # matched_via is None — модал не обнаружен.
+       if (fb_enabled
+           and not getattr(self, '_commercial_music_evidence_dumped', False)
+           and self._detect_tt_commercial_music_modal_evidence_only(ui)):
+           dump_path = self._save_dump_for_commercial_music_review(ui, 'unhandled_suspect')
+           self.log_event('warning',
+               'TikTok: commercial-music modal-like suspect, not auto-handled',
+               meta={'category': 'tt_commercial_music_unhandled_suspect',
+                     'dump_path': dump_path, 'platform': 'TikTok'})
+           self._commercial_music_evidence_dumped = True
+       if getattr(self, '_commercial_music_iter', 0) > 0:
            self.log_event('info', 'TikTok: commercial-music modal dismissed',
                           meta={'category': 'tt_commercial_music_dismissed',
                                 'platform': 'TikTok',
@@ -164,11 +176,18 @@ Track-row identity (узнаваем по совместному наличию)
            self._commercial_music_iter = 0
    ```
 
-2. **`_wait_upload_confirmation` outer loop** (publisher_tiktok.py:~1568, рядом с другими overlay-handlers): такой же snippet, но `phase='wait_upload'`. Defensive — если модал появится после нажатия Share.
+2. **`_wait_upload_confirmation` outer loop** (publisher_tiktok.py:~1568, рядом с другими overlay-handlers): такой же snippet, но `phase='wait_upload'` и `step='wait_upload'` в `tt_commercial_music_stuck` meta. Defensive — если модал появится после нажатия Share.
 
 ### Counter init
 
-Расширить `_init_wait_upload_overlay_state` (publisher_tiktok.py:216) — добавить `self._commercial_music_iter = 0` и `self._commercial_music_evidence_dumped = False`.
+Новый helper `_init_commercial_music_state(self)`:
+```python
+def _init_commercial_music_state(self) -> None:
+    self._commercial_music_iter = 0
+    self._commercial_music_evidence_dumped = False
+```
+
+Вызывается из `publish_tiktok` (publisher_tiktok.py:1006+) сразу после `self._init_music_rights_state()` и `self._init_wait_upload_overlay_state()` (строки 1012, 1015). Это гарантирует, что атрибуты существуют до входа в share-loop (Codex round 1, P2 #2). В дополнение все обращения в hook'ах используют `getattr(self, '_commercial_music_iter', 0)` / `getattr(self, '_commercial_music_evidence_dumped', False)` — defensive, на случай вызова handler'а из контекста, где init ещё не отработал (тесты).
 
 ### Event categories (новые)
 
@@ -205,10 +224,12 @@ Track-row identity (узнаваем по совместному наличию)
 - `test_detect_fallback_disabled_by_default` — strict miss → handle returns False (без fallback).
 - `test_detect_evidence_only_dump_throttled` — два подряд evidence-only вызова с TT_COMMERCIAL_MUSIC_FALLBACK_ENABLED=true → dump только раз.
 
-**Action ladder tests** (mock UI ops):
-- `test_handle_iter1_cancels` — iter становится 1, вызывается `_tap_tt_commercial_music_close`, событие `tt_commercial_music_cancelled`.
-- `test_handle_iter3_selects_first_track` — iter становится 3 (>2), вызывается `_tap_tt_commercial_music_first_track`.
-- `test_handle_iter_exceeds_max_stuck` — iter=5 > MAX_COMMERCIAL_MUSIC_ITERATIONS=4, event `tt_commercial_music_stuck`, return False.
+**Action ladder tests** (mock UI ops; counter инкрементируется hook'ом, handler сам только тапает):
+- `test_handle_iter1_cancels` — pre-set `_commercial_music_iter=1`, handler вызывает `_tap_tt_commercial_music_close`, событие `tt_commercial_music_cancelled`.
+- `test_handle_iter3_selects_first_track` — pre-set `_commercial_music_iter=3` (>2), handler вызывает `_tap_tt_commercial_music_first_track`, событие `tt_commercial_music_track_selected`.
+- `test_handle_logs_warning_on_close_not_found` — handler возвращает False, event `tt_commercial_music_close_not_found`.
+- `test_hook_stuck_when_iter_exceeds_max` — pre-set `_commercial_music_iter=4`, повторный hook → counter уйдёт в 5 > MAX → event `tt_commercial_music_stuck`, hook возвращает False (вне handler).
+- `test_hook_init_independent_of_wait_upload` — share-loop hook отрабатывает корректно когда `_init_wait_upload_overlay_state()` ещё не вызывался (получает `_commercial_music_iter` через `_init_commercial_music_state()` или getattr).
 
 **Close-X tap tests:**
 - `test_close_button_by_desc_close` — content-desc="Close" → tap.
@@ -228,7 +249,8 @@ Track-row identity (узнаваем по совместному наличию)
 
 - Все методы — в `publisher_tiktok.py` (как и `_handle_tt_music_rights_dialog`).
 - Никаких новых файлов.
-- Константы (markers, MAX, lables) — в начале файла, рядом с `MAX_MUSIC_RIGHTS_ITERATIONS`.
+- Константы (markers, MAX, labels) — в начале файла, рядом с `MAX_MUSIC_RIGHTS_ITERATIONS`.
+- Helper `_save_dump_for_commercial_music_review(self, ui_xml, suffix)` — копия `_save_dump_for_fallback_review` с другим filename-prefix (`tt_commercial_music_<suffix>_task_<id>_<ts>_<uid>.xml`). Никогда не raise'ит.
 
 ### Что НЕ затрагиваем
 
