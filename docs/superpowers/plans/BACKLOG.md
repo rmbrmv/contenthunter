@@ -10,6 +10,12 @@ PR #64 (3 коммита, squash `4722b81`): **A** `_normalize_yt_state_pre_uplo
 
 **24h live verify deadline ~2026-05-16 16:42 UTC** — acceptance: 0 fails `yt_gallery_no_video_candidate` за 24h при ненулевом потоке YT-задач. Memory: [[project_yt_post_switch_state_normalize_shipped]]. Spec/plan: `docs/superpowers/specs/2026-05-15-yt-post-switch-upload-state-normalization-design.md` + `docs/superpowers/plans/2026-05-15-yt-post-switch-upload-state-normalization.md`.
 
+## 2026-05-15 — WP 63 scheduler status sync — ✅ SHIPPED
+
+`fix(scheduler)` PR GenGo2/validator-contenthunter#12 (merged `520aaec`) — клиентский планировщик показывал «✅ Одобрено» уже когда `moderation_status=passed`, не учитывая `content_status`. Для контента с дублем (`passed + needs_review`) автовыкладка не запускалась (вебхук гейтит на `ContentStatus.approved` в `validation.py:132`), но UI рисовал готовность. Чистый классификатор в `frontend/src/utils/slotStatus.ts` + 23 unit-теста + согласованные цвет рамки/пилюли. WP 63 → `Тестирование`, ждём визуального подтверждения Анастасии. Evidence: `docs/evidence/2026-05-15-wp63-scheduler-status-fix-shipped.md`. Memory: [[project_wp63_scheduler_status_shipped]].
+
+**Follow-up (low):** унификация manager-side `frontend/src/components/calendar/SlotCard.vue` на тот же `slotStatusInfo` — бага сейчас нет (manager уже смотрит на `content.status` напрямую), но единый классификатор уменьшит риск регрессии в будущем (из памяти `feedback_validator_two_slot_renderers` — два места рендеринга).
+
 ## 2026-05-14 — TT post-switch verify `@handle`-priority (WP #67)
 
 ### `tt_post_switch_verify_unrecoverable` — ✅ SHIPPED 2026-05-14 PR #62
