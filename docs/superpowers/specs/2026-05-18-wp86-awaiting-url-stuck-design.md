@@ -126,15 +126,28 @@ COMMIT;
 ```sql
 -- migrations/20260518_wp86_retroactive_cleanup__rollback.sql
 -- Возвращает только что промоутнутые задачи обратно в awaiting_url
--- (только те, что были промоутнуты ЭТОЙ миграцией — по маркеру в log)
+-- + симметрично возвращает publish_queue в 'running' (естественное состояние
+-- in-flight задачи: dispatchPublishQueue ставит running, syncQueueStatuses
+-- для awaiting_url ничего не делает — см. server.js).
 BEGIN;
-UPDATE publish_tasks
-SET status = 'awaiting_url',
-    log = COALESCE(log,'') || E'\n[WP #86 rollback 2026-05-18] reverted to awaiting_url'
-WHERE status = 'published_no_url'
-  AND log LIKE '%[WP #86 retroactive 2026-05-18]%';
+
+WITH reverted AS (
+  UPDATE publish_tasks
+  SET status = 'awaiting_url',
+      log = COALESCE(log,'') || E'\n[WP #86 rollback 2026-05-18] reverted to awaiting_url'
+  WHERE status = 'published_no_url'
+    AND log LIKE '%[WP #86 retroactive 2026-05-18]%'
+  RETURNING id
+)
+UPDATE publish_queue pq
+SET status='running', updated_at=NOW()
+FROM reverted r
+WHERE pq.publish_task_id = r.id
+  AND pq.status = 'done';  -- защита: не трогаем pq которые БЫЛИ done легитимно
 COMMIT;
 ```
+
+**Замечание по rollback semantics:** rollback симметричен forward'у, но не «time-machine»-точен — пары pt/pq могут быть в неуместном состоянии если за окно между forward'ом и rollback'ом другие cron'ы их трогали. Это приемлемо: rollback — emergency-инструмент, не штатный flow.
 
 **Порядок выката PR1:** (1) schema migration → (2) deploy кода (server.js, UI) → (3) verify через тестовую запись → (4) retroactive cleanup migration. Иначе orphan-зомби (старая логика поллера + новый статус которого она не понимает).
 
