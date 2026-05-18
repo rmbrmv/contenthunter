@@ -69,7 +69,7 @@ if duration_diff <= 0.5 and size_diff < 0.05:
 ```python
 from typing import Optional
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import select
+from sqlalchemy import func, select
 from ..models.content import ValidatorContent, ContentType
 
 
@@ -81,30 +81,29 @@ async def check_uniqueness(
 ) -> dict:
     """
     Полный клон: тот же sha256 в рамках одного project_id (только video).
-    "Самым ранним" клоном считается запись с наименьшим id.
+    «Оригинал» = запись с минимальным id в hash-группе, ВКЛЮЧАЯ
+    проверяемую. Если проверяемая запись и есть min(id) — не дубль.
     """
     if not content_hash:
         return {"is_duplicate": False, "duplicate_of_id": None}
 
     result = await db.execute(
-        select(ValidatorContent.id).where(
+        select(func.min(ValidatorContent.id)).where(
             ValidatorContent.project_id == project_id,
             ValidatorContent.content_hash == content_hash,
-            ValidatorContent.id != content_id,
             ValidatorContent.content_type == ContentType.video,
-        ).order_by(ValidatorContent.id.asc()).limit(1)
+        )
     )
-    dup_id = result.scalar_one_or_none()
-    return {
-        "is_duplicate": dup_id is not None,
-        "duplicate_of_id": dup_id,
-    }
+    min_id = result.scalar_one_or_none()
+    if min_id is None or min_id == content_id:
+        return {"is_duplicate": False, "duplicate_of_id": None}
+    return {"is_duplicate": True, "duplicate_of_id": min_id}
 ```
 
 Заметки по поведению:
-- НЕ фильтруем `is_duplicate == False` (как в старом коде) — иначе при «duplicate of duplicate» теряется ссылка на самый ранний оригинал.
-- `ORDER BY id ASC LIMIT 1` — стабильный детерминированный выбор «оригинала». При трёх копиях `id ∈ {100, 105, 110}`: 105→100, 110→100 (не 105).
-- Добавить `log.info("uniqueness: content_id=%s match=%s", content_id, dup_id)` для триаж-видимости.
+- В hash-группу включаем саму проверяемую запись (через `func.min`, БЕЗ `id != content_id`). Иначе при re-validation самого раннего оригинала после появления более поздней копии запрос вернёт late-id и **flip'нет оригинал в дубль** — это то, чего быть не должно. Сравнение `min_id == content_id` корректно идентифицирует «я и есть оригинал».
+- При трёх копиях `id ∈ {100, 105, 110}`: 100→not_dup, 105→100, 110→100. Стабильно.
+- Добавить `log.info("uniqueness: content_id=%s min_in_group=%s", content_id, min_id)` для триаж-видимости.
 
 ### 2. `routers/upload.py` — добавить sha256
 
@@ -231,11 +230,12 @@ async def main(dry_run: bool, limit: int | None):
 
 3. **`test_same_file_different_projects`** — тот же файл, разные `project_id` → оба `is_duplicate=False`. Изоляция по проекту.
 
-4. **`test_replace_video_recomputes_hash`** — upload file A → replace-video file B → `content_hash` обновился на hash(B), `is_duplicate` пересчитан.
+4. **`test_backfill_false_positive_unblocks`** — pre-seed два video-record в одном `project_id`, обе с `content_hash=NULL`, **разные** sha256 (через мок `stream_sha256_from_s3`). Первая в production-style: `is_duplicate=False`, `status=approved`. Вторая — ложно помечена старой эвристикой: `is_duplicate=True`, `status=needs_review`, `moderation_status=passed`. После backfill вторая `is_duplicate=False` и `status` переходит `needs_review`→`approved`, `notify_content_approved` **не вызывался** (mock not called).
 
-5. **`test_backfill_false_positive_unblocks`** — pre-seed два video-record (project_id одинаковый, обе с `content_hash=NULL`, **разные** sha256 у файлов через мок `stream_sha256_from_s3`, обе ложно помечены старой эвристикой как `is_duplicate=True` + `status=needs_review` + `moderation_status=passed`) → запуск backfill helper → обе записи `is_duplicate=False`, обе переходят `needs_review`→`approved`, `notify_content_approved` **не вызывался** (assert mock not called).
+5. **`test_backfill_real_duplicate_stays_blocked`** — pre-seed два video-record с **одинаковыми** sha256 (через мок). Первая `is_duplicate=False/approved`, вторая ранее `is_duplicate=True/needs_review/passed`. Backfill: первая остаётся `approved` (получает hash), **вторая остаётся `is_duplicate=True` и `status=needs_review`** (real-positive не разблокируется). Парный regression-guard к тесту 4.
 
-6. **`test_backfill_real_duplicate_stays_blocked`** — pre-seed два video-record с **одинаковыми** sha256 (через мок), второй ранее `is_duplicate=True/needs_review/passed` → backfill → первый `is_duplicate=False/approved`, **второй остаётся `is_duplicate=True` и `status=needs_review`** (real-positive не разблокируется). Это парный regression-guard к тесту 5.
+### Покрытие replace-video
+Отдельного unit-теста на `content.py:replace-video` нет — endpoint требует multipart+S3+auth plumbing, а одностраничный mirror-test всего лишь повторно подтвердил бы, что `hashlib.sha256` работает. Покрытие изменения обеспечивается: (a) codex review PR-диффа, (b) production smoke-проверкой 2123/2132 после backfill, (c) ручной QA через UI после деплоя.
 
 ### Фикстуры
 Два маленьких .mp4 в `backend/tests/fixtures/` (по 10-20 КБ), проходящие preflight (есть video stream + audio stream). Если подходящих нет — генерим через ffmpeg один раз и коммитим.
@@ -262,7 +262,7 @@ async def main(dry_run: bool, limit: int | None):
 
 - [ ] Backend: `check_uniqueness` использует `content_hash`, sha256 пишется в upload+replace-video
 - [ ] Frontend: banner-текст обновлён в `ContentDetail.vue` и `ValidationDetails.vue`
-- [ ] Все 6 тестов зелёные на live-DB
+- [ ] Все 5 тестов зелёные на live-DB
 - [ ] Backfill script написан, прогнан `--dry-run`, stats посмотрены, прогнан `--apply`
 - [ ] Записи 2123 и 2132 (и аналогичные false-positives) фактически разблокированы и `status=approved` (либо явно отмечены как НЕ-разблокируемые с причиной)
 - [ ] WP #77 — комментарий с house-style summary (Что было не так → Что сделано → Что осталось) и close
