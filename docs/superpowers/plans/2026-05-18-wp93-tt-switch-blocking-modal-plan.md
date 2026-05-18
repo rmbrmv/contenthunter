@@ -30,8 +30,11 @@
 - `publisher_kernel.py` — добавить `'tt_switch_blocked': 'tt_switch_blocked'` в step→error_code map.
 - `tests/fixtures/PROVENANCE.md` — задокументировать 3 новых fixture.
 
-**Modify (rmbrmv/contenthunter — отдельный коммит на ветке `feat/wp93-tt-picker-wrong-row`, уже создана):**
-- Этот план файл (`docs/superpowers/plans/2026-05-18-wp93-tt-switch-blocking-modal-plan.md`).
+**Уже existing на rmbrmv/contenthunter (feat/wp93-tt-picker-wrong-row, не часть Tasks ниже):**
+- `docs/superpowers/specs/2026-05-18-wp93-tt-switch-blocking-modal-design.md` (spec, commit `d119356b3`).
+- `docs/superpowers/plans/2026-05-18-wp93-tt-switch-blocking-modal-plan.md` (этот файл, commit `b27175429` + последующие iterations).
+
+Эти doc-файлы НЕ нужно коммитить во время execution Tasks — они существуют в отдельном репо и обновляются housekeeping-коммитами в текущей session.
 
 ---
 
@@ -95,16 +98,17 @@ test "$(git branch --show-current)" = "feat/wp93-tt-switch-blocking-modal" || \
 
 ```bash
 cd /root/.openclaw/workspace-genri/autowarm/tests/fixtures
-curl -sSL -o tt_switch_blocked_phone_email_7372.xml \
+# -f: fail-on-HTTP-error (без -f curl сохраняет HTML 404-страницу как fixture)
+curl -fsSL -o tt_switch_blocked_phone_email_7372.xml \
   "https://save.gengo.io/autowarm/ui_dumps/tiktok/task7372_switch_7372_tt_4_target_profile_1779114421.xml"
-curl -sSL -o tt_feed_after_modal_dismiss_7372.xml \
+curl -fsSL -o tt_feed_after_modal_dismiss_7372.xml \
   "https://save.gengo.io/autowarm/ui_dumps/tiktok/task7372_switch_7372_tt_4_target_profile_after_modal_dismiss_1779114431.xml"
-curl -sSL -o tt_profile_screen_7372.xml \
+curl -fsSL -o tt_profile_screen_7372.xml \
   "https://save.gengo.io/autowarm/ui_dumps/tiktok/task7372_switch_7372_tt_2_profile_screen_1779114389.xml"
 ls -l tt_switch_blocked_phone_email_7372.xml tt_feed_after_modal_dismiss_7372.xml tt_profile_screen_7372.xml
 ```
 
-Expected: 3 файла на диске, размеры ~7K / ~20K / ~56K соответственно.
+Expected: 3 файла на диске, размеры ~7K / ~20K / ~56K соответственно. Если curl возвращает non-zero — STOP, URL мог истечь (S3 может ротировать старые dumps). Альтернатива: использовать ранее скачанные локальные копии из `/tmp/wp93/` (если ещё там).
 
 - [ ] **Step 1.2: Smoke-проверить ключевой fixture**
 
@@ -289,7 +293,14 @@ def _tt_detect_switch_blocking_modal(
     """
     if not xml:
         return None
-    elements = parse_ui_dump(xml)
+    # Defensive: parse_ui_dump уже обрабатывает ParseError → [], но не
+    # гарантирует safety от иных Exception (re.error, attribute errors на
+    # malformed nodes). Helper в hot-path; на любое исключение возвращаем
+    # None и продолжаем на старый verify-flow.
+    try:
+        elements = parse_ui_dump(xml)
+    except Exception:
+        return None
     if not elements:
         return None
     for heading, button, reason in _TT_SWITCH_BLOCKING_MODALS:
@@ -635,6 +646,37 @@ def test_switcher_detector_calls_notify_escalation(monkeypatch):
     assert 'factory_id=42' in body
 
 
+def test_switcher_detector_calls_set_block_with_expected_payload(monkeypatch):
+    """Integration: set_block_by_username вызван с точным набором arg/kwarg.
+
+    Особое внимание — platform='tt' (короткий формат, см. account_blocks.py
+    VALID_PLATFORMS / _COLUMN_BY_PLATFORM, set_block_by_username сам
+    конвертирует в 'tiktok' внутри). Если кто-то передаст 'tiktok' или
+    'TikTok' напрямую — assert упадёт.
+    """
+    xml = _read_fixture('tt_switch_blocked_phone_email_7372.xml')
+    sw = _make_switcher_with_blocking_modal_xml_v2(monkeypatch, xml)
+    fake_blocks = MagicMock()
+    fake_blocks.set_block_by_username = MagicMock(return_value=42)
+    fake_notifier = MagicMock()
+    monkeypatch.setitem(sys.modules, 'account_blocks', fake_blocks)
+    monkeypatch.setitem(sys.modules, 'notifier', fake_notifier)
+
+    sw._maybe_handle_switch_blocking_modal(
+        xml_after_pick=xml,
+        target='expertcontentlab',
+        attempt=0,
+    )
+    fake_blocks.set_block_by_username.assert_called_once_with(
+        'expertcontentlab', 'tt',
+        reason='phone_or_email_link_required',
+        publish_task_id=7372,
+        step='tt_switch_blocked',
+        last_seen_screen='tt_4_target_profile',
+        heading_substr='Необходимо обновить аккаунт',
+    )
+
+
 def test_layer2_does_not_match_phone_email_button():
     """После удаления regression-строки из _TT_POST_SWITCH_DISMISSIBLE_MODALS,
     Layer 2 НЕ должен матчить нашу модалку (по `Привязать номер...` Button)."""
@@ -866,15 +908,19 @@ Expected: видеть блок:
 
 - [ ] **Step 7.3: Wiring-assertion (TDD-замена для нормального integration-теста на полный `_switch_tiktok`)**
 
-Существующие integration-тесты вызывают `_maybe_handle_switch_blocking_modal` напрямую (через mock proxy), потому что полный `_switch_tiktok` flow требует слишком много зависимостей. Чтобы убедиться что Task 7.2 правильно подключил вызов в `_switch_tiktok`, делаем grep-проверку на физическое наличие:
+Существующие integration-тесты вызывают `_maybe_handle_switch_blocking_modal` напрямую (через mock proxy), потому что полный `_switch_tiktok` flow требует слишком много зависимостей. Чтобы убедиться что Task 7.2 правильно подключил вызов в `_switch_tiktok` (детектор + assignment + return), делаем 3 grep-проверки на физическое наличие всех трёх частей wiring'а:
 
 ```bash
 cd /root/.openclaw/workspace-genri/autowarm/
-# Должна быть последовательность: _maybe_screenshot(label) → _maybe_handle_switch_blocking_modal → if _blocked_result is not None
-awk '/self\._maybe_screenshot\(label\)/{flag=1; line=NR} flag && /_maybe_handle_switch_blocking_modal/ && NR-line<10 {found=1; print "OK: wiring found at line " NR; exit} END{if(!found){print "FAIL: detector call missing after _maybe_screenshot(label)"; exit 1}}' account_switcher.py
+# (1) detector call после _maybe_screenshot(label) в пределах 12 строк
+awk '/self\._maybe_screenshot\(label\)/{flag=1; line=NR} flag && /_blocked_result = self\._maybe_handle_switch_blocking_modal/ && NR-line<12 {print "OK [1/3]: assignment at line " NR; found=1; exit} END{if(!found){print "FAIL [1/3]: detector assignment missing after _maybe_screenshot(label)"; exit 1}}' account_switcher.py
+# (2) `if _blocked_result is not None:` check
+grep -nF "if _blocked_result is not None:" account_switcher.py | head -1
+# (3) `return _blocked_result` propagation
+grep -nF "return _blocked_result" account_switcher.py | head -1
 ```
 
-Expected: `OK: wiring found at line NNNN`. Если FAIL — Step 7.2 не вступил в силу, Edit ещё раз.
+Expected: `OK [1/3]: assignment at line NNNN`, плюс 2 непустых grep-результата. Если что-то FAIL — Step 7.2 не вступил в силу полностью, Edit ещё раз.
 
 - [ ] **Step 7.4: Run все тесты — все 12 должны PASS, кроме layer2-теста**
 
