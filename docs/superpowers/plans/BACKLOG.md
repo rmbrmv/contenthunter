@@ -1,5 +1,51 @@
 # Backlog tickets
 
+## 2026-05-18 — Publish-fails триаж (WP #79) — 8 child-WPs spawned
+
+### ✅ SHIPPED 2026-05-18 (merge `dd4dbb7f6`, OpenProject WP #79 → Тестирование)
+
+Discovery/triage WP от Анастасии — «проверить почему не выкладываются некоторые клиенты» (Релизми, Онлайн школа). Scope расширен по согласованию с пользователем на всех активных клиентов с fail-rate 7d >50% (18 пар client×platform, 11 клиентов) + клиентов с полным простоем (Pimble #79, Эль-косметик #82, Anecole #84).
+
+**Главная находка** — `validator_unic_content = 0` у **14 активных проектов** при наличии `validator_content`. 3 простоя — видимая часть; остальные 11 живут на legacy approved-контенте, скоро встанут. Класс-уровневая блокировка uniqualization-стадии (worker упал / не enrol'ит новые проекты / изменилась схема).
+
+Видео-анализ (5 буckets через ffmpeg + Vision Read) подтвердил:
+- `switch_failed_unspecified::NULL` (17) = adb_push timeout на медиа >70MB (известный backlog, [[project_adb_push_network_issue]]).
+- `switch_failed_unspecified::publish_failed_generic` (9) = **НОВЫЙ** — TT account-picker bottomsheet silently fails (tap'ом не открывается). НЕ покрыт WP #82.
+- `NULL::NULL` (8) = **НОВЫЙ** YT false-negative — публикация прошла, watchdog URL polling 30с убил статус.
+- `process_interrupted` (8) = PM2 deploy/restart kill, **infrastructure noise** ([[feedback_process_interrupted_is_pm2_noise]] — исключать из fail-rate).
+- `adb_device_not_ready` (7) = ops, **единственное устройство RF8YA0V7LEH** в USB unauthorized.
+
+**8 child-WP в OpenProject (parent=#79, assignee=danil):**
+- **#95** [pipeline][P1] Uniqualization stall: 14 active projects with 0 `validator_unic_content` — **главный приоритет**, полная блокировка для 14 клиентов
+- **#96** TT account-picker bottomsheet silently fails (publish_failed_generic, 9 fails 7d)
+- **#97** YT post-publish URL polling даёт false-negative (NULL::NULL, 8 false-fails 7d, мгновенный backfill 8 тасков → done)
+- **#98** adb_push chunked-push для медиа >70MB (17 fails 7d, известный backlog)
+- **#99** [ops] re-cable / re-auth device RF8YA0V7LEH (USB unauthorized, 7 fails) — quick win
+- **#100** [ops] re-login TT my_clickpay на RFGYC31P26P (account_not_in_list ×3)
+- **#101** [ops] re-login TT clickpay_easy на RFGYC2VWBKN + my_clickpay (×5)
+- **#102** [investigation] ig_target_not_in_picker — split ops (specific accounts/devices) vs code (UI parser race) (12 fails 7d)
+
+**Already-shipped, упоминание без WP:** `tt_upload_confirmation_timeout` (40+6=46 fails, WP #82 PR #69), `yt_editor_upload_timeout` (3 fails, WP #80 PR #68). Мониторим 24-48ч.
+
+**Tail-buckets без WP (9, с обоснованием в отчёте):** `ig_share_tap_no_progress` (24 — покрыт IG share retry tier2 shipped 2026-05-11), `tt_account_sheet_closed_before_parse` (20 — overlap с #96), `tt_post_switch_verify_unrecoverable` (17 — shipped 2026-05-11), `tt_profile_tab_broken` (17), `tt_account_menu_unknown_layout` (14 — overlap с #96), `date_mismatch::ig_picker_wrong_candidate` (11), `ig_gallery_no_video_candidate` (9), `ig_camera_open_failed` (8), `yt_create_menu_not_reached` (11 — частично WP #80). Открывать только при росте / regression к 2026-05-25.
+
+**OTA-инцидент 2026-05-15** исключён из 7d окна как отдельный root cause ([[feedback_ota_screen_blocks_adb_preflight]]).
+
+Spec/plan через 2 раунда codex review (0 P1) до коммита. Subagent-driven execution: 8 implementer-агентов sequential, summary комментарий id=259 на WP #79.
+
+OpenProject WP #79 → «Тестирование» (lockVer 5→6). Memory: [[project_wp79_publish_fails_triage_shipped]] + [[feedback_process_interrupted_is_pm2_noise]]. Spec: `docs/superpowers/specs/2026-05-18-wp79-publish-fails-triage-design.md`, plan: `docs/superpowers/plans/2026-05-18-wp79-publish-fails-triage.md`, отчёт: `docs/evidence/2026-05-18-wp79-publish-triage.md`.
+
+### Priority order для пользователя
+
+1. **#95** (полная блокировка для 14 проектов) — начать с `pm2 list | grep -i uniq` + `pm2 logs <name>` на VPS.
+2. **#99** ([ops] quick win — 7 fails выключается одним re-cable).
+3. **#97** (дешёвый код-фикс — поднять watchdog или сменить success-detection на статус, backfill 8 тасков).
+4. **#96 / #98** (средние код-фиксы).
+5. **#100/#101** ([ops] параллельно с #99).
+6. **#102** (investigation) — после фиксов остальных.
+
+---
+
 ## 2026-05-18 — Validator video uniqueness: sha256 dedupe + backfill (WP #77)
 
 ### ✅ SHIPPED 2026-05-18 PR #13 (`c59fb9e`)
