@@ -376,7 +376,7 @@ ORDER BY hits DESC;
 ### Kill-switch
 
 - `YT_FOREIGN_FOREGROUND_GUARD_DISABLE=1` → `allow_recovery=False`. Guard всё ещё detect'ит чужой foreground и эмитит `yt_foreign_foreground_detected` + `yt_foreign_foreground_guard_disabled` события, но НЕ делает BACK / force-stop / relaunch.
-- Включить на prod: `export YT_FOREIGN_FOREGROUND_GUARD_DISABLE=1` в ecosystem config + `pm2 restart 34 autowarm --update-env`. Совпадает с паттерном WP #82.
+- Включить на prod: добавить `YT_FOREIGN_FOREGROUND_GUARD_DISABLE: '1'` в `env: {}` ecosystem-config'а autowarm (либо `pm2 set autowarm:env.YT_FOREIGN_FOREGROUND_GUARD_DISABLE 1`), затем `pm2 restart 34 autowarm --update-env`. Совпадает с паттерном WP #82.
 - Документация: добавить флаг в `PUBLISH-NOTES.md` раздел «Feature flags».
 
 ### Что НЕ меняется
@@ -460,7 +460,7 @@ def test_normalize_calls_foreign_foreground_guard():
 2. **Synthetic foreign foreground** — `adb shell am start -n com.sec.android.app.samsungapps/.initialization.ForceLoginSamungAccountActivity` (если устройство держит этот dialog). Триггерим publish_youtube_short на testbench, смотрим в DB events: должен появиться `yt_foreign_foreground_detected` + либо `..._recovered`, либо `..._unrecoverable`. Если ForceLogin недоступен — fallback на mock-foreign (`am start com.android.calculator2/.Calculator`).
 3. **Happy path не сломан** — обычный testbench-smoke publish_youtube_short с чистым YT-состоянием: должен пройти без `yt_foreign_foreground_detected` (или с `foreign_detected:False`).
 
-Acceptance перед PR-merge: оба сценария зелёные + 14/14 unit-тестов + `pytest tests/` целиком зелёный (нет collateral регрессий).
+Acceptance перед PR-merge: оба сценария зелёные + 13 unit-тестов нового файла + 4 интеграционных (1 в `test_publisher_youtube_state_normalize.py` + 3 в `test_publisher_youtube_picker.py`) + `pytest tests/` целиком зелёный (нет collateral регрессий).
 
 ### Codex review
 
