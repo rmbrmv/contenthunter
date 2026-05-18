@@ -1,5 +1,35 @@
 # Backlog tickets
 
+## 2026-05-18 — TT post-switch promo-modal dismiss (WP #67 Layer 2)
+
+### ✅ SHIPPED 2026-05-18 PR #70 (`aa11d63`)
+
+После Layer 1 (PR #62 от 2026-05-14, `@`-handle priority) `tt_post_switch_verify_unrecoverable` упал с 16/день до 1–2/день. WP #67 18.05 переведён обратно в «В разработке» — за 4 суток (15-18 мая) пришло 5 residual fails, у которых **другая** root cause: после переключения TT показывает блокирующий promo-модал, profile скрыт за ним. 4/5 кейсов (6514/6631/6704/6786) — байт-в-байт идентичная модалка «Привязать номер телефона или эл. почту» / «Не сейчас» (7603 байт). 1/5 (task 7307) — после renav вылез другой модал «Сохранить данные для входа» / «Не сейчас».
+
+PR GenGo2/delivery-contenthunter#70 (squash `aa11d63`): Variant A — module-level whitelist `_TT_POST_SWITCH_DISMISSIBLE_MODALS = ((title, button), ...)` (2 evidence-seeded entry) + pure module helper `_tt_try_dismiss_post_switch_modal(xml) -> Optional[(title, button)]` (требует ОБА: title_substr `in el.label` И clickable `el.label.strip().lower() == button.lower()`) + instance method `_try_dismiss_and_redump(...)` (probe → tap_element → POST_TAP_WAIT_S sleep → dump_ui → returns `(title, new_xml)`) + 2 probe-site вставки в `_tt_handle_post_switch_unknown` (pre-feed-detect + post-renav-re-verify). Cap=1 dismiss/site, total ≤2/handle. Никаких новых error_code — `_attempted` event до fail'а различает старый/новый путь.
+
+3 новых event: `tt_post_switch_modal_dismiss_attempted` (info), `tt_post_switch_recovered_via_modal_dismiss` (account_switch), `tt_post_switch_modal_dismiss_no_recovery` (warning, `reverify_status ∈ {tap_failed, unknown, mismatch}`). Все 4 caller-side события содержат `title_substr` для triage (Codex iter#1 fix).
+
+16 тестов (10 unit + 6 integration) на реальных prod-dumps (`tt_post_switch_modal_phone_email_6514.xml` + `tt_post_switch_modal_save_login_7307_renav.xml`). Full switcher suite — 214/215 passed (1 pre-existing fail baseline, 0 регрессий). Codex review full diff via stdin — 0 P1/P2.
+
+Prod deploy: `git pull --ff-only` в `/root/.openclaw/workspace-genri/autowarm` + `sudo pm2 restart autowarm` (2026-05-18 14:15 UTC). PM2 exec cwd OK, restart clean (без tracebacks).
+
+Smoke re-queued 2 из 5 residual:
+- task 7373 (just_clickpay) → `done`, без модалки (happy path не сломан).
+- task 7372 (expertcontentlab) → probe сработал корректно (XML 7603→19628, модалка закрылась), но post-dismiss попали на чужой профиль «ᵂᴴᴵᵀᴱ ＢＩＴＡ» — picker-bug, **не WP #67 scope**, заведён отдельный WP #93.
+
+24h soak deadline ~2026-05-19 14:15 UTC — acceptance: `tt_post_switch_verify_unrecoverable` ≤1/день (учесть picker-bug). Новая модалка не из whitelist даст `tt_post_switch_handle_unknown` БЕЗ `_attempted` события → расширяется одной строкой в whitelist.
+
+OpenProject WP #67 → «В тестировании» (комментарий id=239). Memory: [[project_tt_post_switch_modal_dismiss_shipped]]. Spec/plan: `docs/superpowers/specs/2026-05-18-tt-post-switch-modal-dismiss-design.md` + `docs/superpowers/plans/2026-05-18-tt-post-switch-modal-dismiss-plan.md`. Evidence: `docs/evidence/2026-05-18-tt-post-switch-modal-dismiss-shipped.md`.
+
+### Follow-ups в backlog
+
+- **WP #93 (новый):** picker-bug — task 7372 после dismiss попали на чужой профиль «WHITE BITA» вместо expertcontentlab. Account picker tap пошёл не в тот ряд. Низкоприоритетен пока не накопится ≥2 evidence.
+- **Minor:** добавить тест-кейс `post_renav dismiss → reverify=mismatch` (низкий приоритет).
+- **Refactor:** если IG/YT тоже потребуется dismiss — переименовать `_try_dismiss_and_redump` → `_tt_try_dismiss_and_redump` для platform-prefix consistency.
+
+---
+
 ## 2026-05-18 — TT `tt_upload_confirmation_timeout` false-negative (WP #82)
 
 ### ✅ SHIPPED 2026-05-18 PR #69 (`ae41054`)
