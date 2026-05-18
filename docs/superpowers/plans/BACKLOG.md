@@ -1,5 +1,35 @@
 # Backlog tickets
 
+## 2026-05-18 — TT `tt_upload_confirmation_timeout` false-negative (WP #82)
+
+### ✅ SHIPPED 2026-05-18 PR #69 (`ae41054`)
+
+Триаж TT-фейлов за день (2026-05-18 UTC): 14 failed / 33 total. Топ — **10/14 `tt_upload_confirmation_timeout`** (≈71%) у разных аккаунтов и устройств. По iter1 UI-дампам видно — видео **уже опубликовано** (профиль `tkachenko_biohacking · 1 с. назад` + кнопка `Get more views`), но `_wait_upload_confirmation` 5+ минут крутится и убивается watchdog'ом. False-negative из-за 4 связанных багов в одной функции:
+
+1. Success-detector `_tt_infer_post_publish_success` стоял ПОСЛЕ retap-ветки и generic dialog handler — они preemptили.
+2. `share_btn_clickable` substring `'поделиться'` хватал overlay `«Поделиться видео. Уже поделились:»` на post-publish feed → false retap loop (6750/6788/6814).
+3. `_detect_tt_contacts_perm` искал только `«доступ к контактам»` — FB-friends dialog `«доступ к списку ваших друзей в Facebook»` (6789/6809) проваливался в generic handler.
+4. Promo-модал «Улучшенные входящие сообщения для бизнеса» (6750 iter10+/6804) re-presentился TT'ом после dismiss → infinite loop.
+
+PR GenGo2/delivery-contenthunter#69 (squash `ae41054`): 7 atomic TDD-коммитов. **Change 1** early success-check в начале wait-loop с deduped dumpsys + `inferred_path_used` parity (`c320681`). **Change 2** fresh-post маркеры `Get more views` Button + timestamp regex `· N с. назад` (`da05399`) — работают и при flaky dumpsys. **Change 3** exact-match `('Поделиться', 'Post', 'Publish')` (`825df47`). **Change 4(a)** `_TT_PERM_DIALOG_VARIANTS` list (`e705498`). **4(b)** новый `_handle_tt_promo_inbox_modal` tri-state cap=5 → `inferred_success` (`8860111`). **4(c)** `_handle_tt_contacts_perm` тоже tri-state cap → `inferred_success` (`ee50743`). Plus реальные XML-fixtures (`7e46032`).
+
+3 env kill-switches default ON: `TT_POSTPUBLISH_EARLY_CHECK_ENABLED`, `TT_POSTPUBLISH_FRESH_POST_MARKERS_ENABLED`, `TT_PROMO_INBOX_MODAL_HANDLER_ENABLED`. 11 новых unit-тестов с реальными XML-fixtures из инцидента + 5 уточняющих fix-pass тестов через subagent-driven dev (codex review spec — clean; 3 круга code-quality review с fix-pass'ами для double-dumpsys, регекса, env-gate convention).
+
+Prod deploy: `pm2 restart 34 autowarm` 10:30 UTC (sudo, после `git pull --ff-only origin main`). Re-queued 10 TT-задач инцидента (6750/6751/6768/6781/6788/6789/6792/6804/6809/6814) → publish_queue=pending для проверки fix'а в живую.
+
+**24h live verify deadline ~2026-05-19 10:30 UTC** — acceptance:
+1. `tt_upload_confirmation_timeout` count за 24h ≤2/день (вместо 10).
+2. Events `tt_post_publish_inferred_fresh_post` / `_from_promo_loop` / `_from_perm_loop` появляются > 0 (доказательство что новые пути активны).
+3. Re-queued 10 задач завершаются в `done` (не `failed`).
+4. `tt_promo_inbox_modal_dismissed` events растут (если promo-модал реален).
+
+OpenProject WP #82, memory: [[project_tt_upload_confirmation_false_negative_shipped]]. Spec/plan: `docs/superpowers/specs/2026-05-18-tt-upload-confirmation-false-negative-design.md` + `docs/superpowers/plans/2026-05-18-tt-upload-confirmation-false-negative-plan.md`.
+
+### Открытые runner-up'ы из триажа 2026-05-18 (не затикечены, малый объём)
+
+- **`tt_profile_tab_broken` (3/день)** — tap «Я» не открывает профиль. Memory `project_tt_post_switch_renav_shipped` упоминает recovery PR #34; 3/день — приемлемо, не takeaction. Если вырастет 7+/день — взять в discovery.
+- **`tt_post_switch_verify_unrecoverable` (1/день)** — `tt_post_switch_handle_unknown` без recovery success. PR #34 должен покрывать; пристальнее если повторится 5+/день.
+
 ## 2026-05-15 — TT commercial-music modal handler (WP #75)
 
 ### `tt_upload_confirmation_timeout` (новая сигнатура «Коммерческие треки → TikBiz playlist») — ✅ SHIPPED 2026-05-15 PR #66
