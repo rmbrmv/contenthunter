@@ -94,21 +94,42 @@ test "$(git branch --show-current)" = "feat/wp93-tt-switch-blocking-modal" || \
 - Create: `/root/.openclaw/workspace-genri/autowarm/tests/fixtures/tt_profile_screen_7372.xml`
 - Modify: `/root/.openclaw/workspace-genri/autowarm/tests/fixtures/PROVENANCE.md`
 
-- [ ] **Step 1.1: Скачать 3 fixture с S3**
+- [ ] **Step 1.1: Скачать 3 fixture с S3 (с локальным fallback)**
 
 ```bash
 cd /root/.openclaw/workspace-genri/autowarm/tests/fixtures
-# -f: fail-on-HTTP-error (без -f curl сохраняет HTML 404-страницу как fixture)
-curl -fsSL -o tt_switch_blocked_phone_email_7372.xml \
-  "https://save.gengo.io/autowarm/ui_dumps/tiktok/task7372_switch_7372_tt_4_target_profile_1779114421.xml"
-curl -fsSL -o tt_feed_after_modal_dismiss_7372.xml \
-  "https://save.gengo.io/autowarm/ui_dumps/tiktok/task7372_switch_7372_tt_4_target_profile_after_modal_dismiss_1779114431.xml"
-curl -fsSL -o tt_profile_screen_7372.xml \
-  "https://save.gengo.io/autowarm/ui_dumps/tiktok/task7372_switch_7372_tt_2_profile_screen_1779114389.xml"
+
+# Primary: S3. -f: fail-on-HTTP-error (без -f curl сохраняет HTML 404-страницу как fixture).
+S3_BASE="https://save.gengo.io/autowarm/ui_dumps/tiktok"
+FALLBACK="/tmp/wp93"  # местная копия с brainstorm session
+
+fetch() {
+  local out="$1" url="$2" local_copy="$3"
+  if curl -fsSL -o "$out" "$url"; then
+    echo "  S3 OK: $out"
+  elif [ -f "$local_copy" ]; then
+    echo "  S3 failed, fallback to local copy: $local_copy"
+    cp "$local_copy" "$out"
+  else
+    echo "  STOP: neither S3 nor local fallback available for $out"
+    return 1
+  fi
+}
+
+fetch tt_switch_blocked_phone_email_7372.xml \
+  "$S3_BASE/task7372_switch_7372_tt_4_target_profile_1779114421.xml" \
+  "$FALLBACK/tt_4_target_profile.xml" || exit 1
+fetch tt_feed_after_modal_dismiss_7372.xml \
+  "$S3_BASE/task7372_switch_7372_tt_4_target_profile_after_modal_dismiss_1779114431.xml" \
+  "$FALLBACK/tt_4_after_modal_dismiss.xml" || exit 1
+fetch tt_profile_screen_7372.xml \
+  "$S3_BASE/task7372_switch_7372_tt_2_profile_screen_1779114389.xml" \
+  "$FALLBACK/tt_2_profile_screen.xml" || exit 1
+
 ls -l tt_switch_blocked_phone_email_7372.xml tt_feed_after_modal_dismiss_7372.xml tt_profile_screen_7372.xml
 ```
 
-Expected: 3 файла на диске, размеры ~7K / ~20K / ~56K соответственно. Если curl возвращает non-zero — STOP, URL мог истечь (S3 может ротировать старые dumps). Альтернатива: использовать ранее скачанные локальные копии из `/tmp/wp93/` (если ещё там).
+Expected: 3 файла на диске, размеры ~7K / ~20K / ~56K соответственно. Если оба пути (S3 и `/tmp/wp93/`) недоступны — STOP, обратиться к prior session за артефактами.
 
 - [ ] **Step 1.2: Smoke-проверить ключевой fixture**
 
@@ -906,9 +927,11 @@ Expected: видеть блок:
             )
 ```
 
-- [ ] **Step 7.3: Wiring-assertion (TDD-замена для нормального integration-теста на полный `_switch_tiktok`)**
+- [ ] **Step 7.3: Wiring-assertion (implementation smoke, не integration test)**
 
-Существующие integration-тесты вызывают `_maybe_handle_switch_blocking_modal` напрямую (через mock proxy), потому что полный `_switch_tiktok` flow требует слишком много зависимостей. Чтобы убедиться что Task 7.2 правильно подключил вызов в `_switch_tiktok` (детектор + assignment + return), делаем 3 grep-проверки на физическое наличие всех трёх частей wiring'а:
+⚠ **Известное ограничение:** существующие integration-тесты (Task 5) вызывают `_maybe_handle_switch_blocking_modal` напрямую через mock proxy, потому что полный `_switch_tiktok` flow требует слишком много dependent'ов (ADB, dump_ui, _save_dump, post_switch_verify, recovery flow, _fail). Поэтому grep-assertion ниже — это **implementation smoke**, а не настоящий integration test. Он ловит missing/мисplaced вставку, но не докажет правильность semantics в боевом flow. Smoke-проверка на re-queued task 7372 (Task 11.2 test-plan) — последний bastion для этого.
+
+Делаем 3 grep-проверки на физическое наличие всех трёх частей wiring'а в `_switch_tiktok`:
 
 ```bash
 cd /root/.openclaw/workspace-genri/autowarm/
