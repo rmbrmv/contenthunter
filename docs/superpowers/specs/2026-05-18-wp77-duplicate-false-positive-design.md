@@ -271,3 +271,16 @@ async def main(dry_run: bool, limit: int | None):
 ## Next step
 
 После approval этой спеки — переход в `superpowers:writing-plans` для детализированного implementation plan.
+
+## Implementation note (post-mortem, 2026-05-18)
+
+Во время P4 code review выяснилось, что у валидатора есть **второй (главный)** upload-путь, не учтённый в этой спеке: `/api/upload/presign` → client uploads to S3 directly → `/api/upload/complete`. В `/complete` handler у backend'а нет `file_bytes` — файл уже в S3. Spec ошибочно покрывал только `/upload/file` (direct multipart) и `replace-video`.
+
+Scope расширен прямо в имплементации:
+- Добавлена точка записи hash в `/upload/complete` (видео-ветка) — backend стримит файл из S3 в executor, считает sha256.
+- Helper `compute_s3_object_sha256(s3_key) -> str` вынесен в новый файл `backend/src/services/content_hash_service.py` — переиспользуется и `/complete` handler'ом, и backfill-скриптом (хотя план изначально предполагал inline-helper только в backfill).
+- В `/complete` хеш считается non-fatal: при S3 hiccup лог warning + content_hash=NULL, upload не падает. Backfill подхватит позже.
+
+Это закрыло critical gap: без `/complete` фикс был бы мёртвым для production (большинство uploads идут через presign-путь).
+
+Также во время codex review плана был пойман flip-баг: в первоначальной формулировке `check_uniqueness` использовала `WHERE id != content_id ORDER BY id ASC LIMIT 1`, что при re-validation самого раннего оригинала после появления более поздней копии flip'нуло бы оригинал в дубль. Правильная семантика — `func.min(id)` over hash-группу INCLUDING саму запись, с проверкой `min_id == content_id`. Эта секция в спеке выше уже исправлена; план зафиксировал правильную версию с первого implementer-dispatch'а.

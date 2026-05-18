@@ -1,5 +1,49 @@
 # Backlog tickets
 
+## 2026-05-18 — Validator video uniqueness: sha256 dedupe + backfill (WP #77)
+
+### ✅ SHIPPED 2026-05-18 PR #13 (`c59fb9e`)
+
+Жалоба Анастасии в WP #77 (2026-05-18): ролики 2123 (project 96) и 2132 (project 99) висели в «Требует одобрения», но не были дубликатами — разные файлы из одной серии (TT-стайл шорты ~18с с похожим CRF). Старая `uniqueness_service.check_uniqueness` использовала duration±0.5с + size diff<5%, что фактически ловит **любые два** коротких видео одного жанра. Поле `content_hash` существовало в схеме `ValidatorContent` с самого старта (`index=True`), но **никогда не вычислялось** — ложно-помеченных копий со временем накопилось 16/443.
+
+PR GenGo2/validator-contenthunter#13 (squash `c59fb9e`): полная замена на `sha256(file_bytes).hexdigest()` в трёх точках записи видео:
+- `routers/upload.py` `/file` (прямой multipart) — inline hashlib после `file.read()`.
+- `routers/upload.py` `/complete` (presign+S3, **главный prod-путь** — обнаружено в code review P4, изначально пропустил в спеке) — backend сам стримит файл из S3 через `compute_s3_object_sha256(s3_key)` в `loop.run_in_executor`. Non-fatal: при S3 hiccup оставляет NULL, не валит upload.
+- `routers/content.py` `/replace-video` — inline hashlib + явный сброс `is_duplicate`/`duplicate_of_id` (codex P12 P2 fix — без сброса UI видел stale state между commit и `_do_full_validation`).
+
+Helper `compute_s3_object_sha256` вынесен в `backend/src/services/content_hash_service.py` (8MB chunks, `S3ObjectNotFoundError` для missing keys, переиспользует `get_s3_client()`). Этот же helper используется backfill-скриптом.
+
+`check_uniqueness(project_id, content_hash, content_id, db)` использует `func.min(id)` over hash-группу INCLUDING саму проверяемую запись; `min_id == content_id → не дубль`. Это защищает от flip-бага: при re-validation самого раннего оригинала после появления более поздней копии запрос с `id != content_id ORDER BY id ASC LIMIT 1` вернул бы late-id и flip'нул бы оригинал в дубль (поймано codex review при review плана).
+
+Backfill `backend/scripts/backfill_content_hash.py --dry-run|--apply [--limit N]`: 443 candidate rows, ORDER BY id ASC, stream-hash в executor. Dry-run использует in-memory `dry_seen_hashes: dict[(pid, sha)] → first_id` для предсказания same-batch duplicates (codex P12 P2 fix — без этого `--apply` показал бы non-zero `marked_duplicate` после dry-run с нулём). Auto-unblock правило: `(was is_duplicate=True AND status=needs_review AND moderation_status=passed) AND теперь не дубль → status=approved`. **НЕ зовёт `notify_content_approved` webhook** — explicit decision (риск массовых мгновенных уникализаций на исторические записи).
+
+5 live-DB тестов в `backend/tests/test_uniqueness_hash.py` (autouse `engine.dispose` fixture из conftest):
+- `test_identical_files_marked_duplicate` (RED-then-GREEN базовый кейс)
+- `test_different_files_not_duplicate` (**regression-guard** на убитую duration+size эвристику — фикстуры sample_a/b.mp4: ~2с длительность, 4.44% size diff, разные sha)
+- `test_same_file_different_projects` (project isolation)
+- `test_backfill_false_positive_unblocks` (production-realistic seed: first=approved/no-dup, second=needs_review/is_duplicate→разблокировка БЕЗ webhook)
+- `test_backfill_real_duplicate_stays_blocked` (пара 4 — identical bytes → second остаётся blocked)
+
+Production --apply (2026-05-18 16:31 UTC, на checkout `/root/.openclaw/workspace-genri/validator/`):
+- 443 processed, 65 marked_duplicate (real), **16 auto_unblocked** (false-positives), 0 errors, 0 skipped_missing
+- 2123 → status=approved ✅ (главная жалоба)
+- 2132 → is_duplicate=False (status уже был in_uniqualization — ручной override до backfill, не разблокирован)
+- 2120/2130 → hash записан, статус не изменён (был ok)
+- 2130 остался needs_review, но moderation_status=**flagged** — отдельная причина, не дубликат
+
+Backend перезапущен через `sudo systemctl restart validator-backend.service` сразу после merge — новые uploads через `/complete` пишут hash сразу же.
+
+11 коммитов, 12 файлов, +578/-30. Codex review full diff via stdin — 1 false-positive P1 (asyncio не импортирован — verified, import был ещё в origin/main) + 2 P2 поправлены. Frontend banner: «🛑 Это точная копия контента #N (тот же файл)» + кликабельный `<router-link>` на оригинал, обновлён в ContentDetail.vue + ValidationDetails.vue (по [[feedback_validator_two_slot_renderers]] — оба места рендеринга).
+
+OpenProject WP #77 → «Готово» (comment id=261). Memory: [[project_wp77_content_hash_dedupe_shipped]]. Spec/plan: `docs/superpowers/specs/2026-05-18-wp77-duplicate-false-positive-design.md` + `docs/superpowers/plans/2026-05-18-wp77-content-hash-dedupe.md`.
+
+### Out of scope (не сделано в этом PR)
+
+- **Perceptual hash** для уникализированных копий (pHash от кадров + Hamming distance) — отдельная фича, если когда-нибудь понадобится ловить «тот же ролик, чуть пересжатый», то это новый WP. Текущая логика **по дизайну** пропускает re-encoded клоны.
+- **Uniqueness для post/carousel** — клиент не жалуется, scope не расширяли (image uniqueness в `validation.py:235` так и оставлен `is_duplicate=False`).
+- **Permission на «Одобрить дубль» для client** — кнопка остаётся manager/admin only (как и было). Permission-модель не трогали.
+- **Composite index `(project_id, content_hash)` partial** — solo-index по content_hash из исходной схемы уже даёт selective план для текущих объёмов. Если EXPLAIN покажет seq-scan на росте — отдельная миграция.
+
 ## 2026-05-18 — TT post-switch promo-modal dismiss (WP #67 Layer 2)
 
 ### ✅ SHIPPED 2026-05-18 PR #70 (`aa11d63`)
