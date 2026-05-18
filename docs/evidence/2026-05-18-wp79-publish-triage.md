@@ -149,56 +149,56 @@ WHERE vp.active=true AND COALESCE(ucc.c,0)=0 AND vcc.c>0
 - **type:** code-bug (не классифицирован ранее, требует расследования)
 - **affected:** Максим Иванов IG ×8, Relisme IG ×1, ClickPay IG ×11, Content hunter IG ×4
 - **verified_rc:** нет видеодоказательств в этом окне; гипотеза — share-кнопка зависает после tap (нет прогресса к следующему экрану)
-- **child-WP:** `<WP #TBD>` — расследование ig_share_tap_no_progress
+- **child-WP:** TAIL — известный код-баг IG share, покрыт IG share retry tier2 (shipped 2026-05-11). 24 fails 7d за shipped-окном — мониторим, если не упадёт значительно к 2026-05-25, открыть отдельный WP на регрессию.
 
 ### Bucket 3: `tt_account_sheet_closed_before_parse::tt_account_sheet_closed_before_parse` — n=20
 
 - **type:** code-bug
 - **affected:** ClickPay TT ×13, Relisme TT ×1, Feminista TT ×3, Art Estate TT ×3
 - **verified_rc:** TT account-picker sheet закрылся до того, как парсер успел прочитать список аккаунтов
-- **child-WP:** `<WP #TBD>` — TT account sheet race condition
+- **child-WP:** TAIL — родовая связь с WP #96 (TT account picker bottomsheet silent fail). Возможно общий root cause — UI-timing race в TT account sheet. Открыть отдельный WP, если после фикса #96 эти 20 fails не уйдут.
 
 ### Bucket 4: `tt_post_switch_verify_unrecoverable::tt_post_switch_verify_unrecoverable` — n=17
 
 - **type:** investigation (связан с WP #82 Layer patterns, но отдельный failure mode)
 - **affected:** Forsal TT ×2, Content hunter TT ×1, Парфюмерия TT ×5, Relisme TT ×3, Максим Иванов TT ×4, Art Estate TT ×2
 - **verified_rc:** не подтверждён; верификация профиля после switch falls через два retry
-- **child-WP:** `<WP #TBD>` — расследование tt_post_switch_verify
+- **child-WP:** TAIL — post-switch verify recovery shipped 2026-05-11 (see project_tt_post_switch_verify-* в памяти). 17 residual fails 7d — мониторим, если не упадут к 2026-05-25, открыть регрессионный WP.
 
 ### Bucket 5: `tt_profile_tab_broken::tt_profile_tab_broken` — n=17
 
 - **type:** investigation
 - **affected:** Forsal TT ×1, ClickPay TT ×3, Парфюмерия TT ×1, Relisme TT ×7, Feminista TT ×3, Art Estate TT ×2
 - **verified_rc:** нет; профиль-таб TT не открывается / не обнаруживается
-- **child-WP:** `<WP #TBD>` — расследование tt_profile_tab_broken
+- **child-WP:** TAIL — old known issue в TT-backlog. 17 fails 7d Relisme/Feminista/Art Estate TT. Не открываем новый WP — есть в общем TT-стабилизация backlog.
 
 ### Bucket 6: `switch_failed_unspecified::NULL` — n=17
 
 - **type:** code-bug (известный backlog)
 - **affected:** Content hunter TT ×5, Content hunter IG ×7, Content hunter YT ×5 (все — Content hunter)
 - **verified_rc:** adb_push timeout на oversized media (>70MB). Screencast не запускался, т.к. watchdog срабатывал дважды (180s each), исчерпывал 1 relaunch retry. Никакого UI-взаимодействия не происходило.
-- **child-WP:** `<WP #TBD>` — adb_push timeout на медиа >70MB (chunked-push backlog)
+- **child-WP:** **WP #98** — adb_push timeout на медиа >70MB (chunked-push backlog)
 
 ### Bucket 7: `tt_account_menu_unknown_layout::tt_account_menu_unknown_layout` — n=14
 
 - **type:** code-bug
 - **affected:** Forsal TT ×2, Content hunter TT ×2, ClickPay TT ×10
 - **verified_rc:** TT account menu показал нераспознанный layout — парсер не смог найти известные UI-элементы
-- **child-WP:** `<WP #TBD>` — tt_account_menu layout changes (связан с bucket 3)
+- **child-WP:** TAIL — связан с bucket 3 и WP #96 (общий UI-layout TT account drift). Отдельный WP только если после фикса #96 эти 14 fails не уйдут.
 
 ### Bucket 8: `ig_target_not_in_picker::ig_target_not_in_picker` — n=12
 
 - **type:** investigation (mixed: ops + code)
 - **affected:** Relisme IG ×5, ClickPay IG ×7
 - **verified_rc:** частично ops (конкретные аккаунты/устройства не залогинены), частично code (UI picker race)
-- **child-WP:** `<WP #TBD>` — ig_target_not_in_picker split investigation
+- **child-WP:** **WP #102** — ig_target_not_in_picker split investigation
 
 ### Bucket 9: `date_mismatch::ig_picker_wrong_candidate` — n=11
 
 - **type:** investigation
 - **affected:** Максим Иванов IG ×2, ClickPay IG ×9
 - **verified_rc:** нет; picker выбирает неправильный медиа-файл по дате
-- **child-WP:** `<WP #TBD>` — date_mismatch / ig_picker_wrong_candidate
+- **child-WP:** TAIL — IG picker берёт не тот файл по дате. 11 fails 7d (ClickPay IG ×9). Sub-issue, открывать отдельный WP при росте >15.
 
 ### Bucket 10: `yt_create_menu_not_reached::yt_create_menu_not_reached` — n=11
 
@@ -212,21 +212,21 @@ WHERE vp.active=true AND COALESCE(ucc.c,0)=0 AND vcc.c>0
 - **type:** investigation
 - **affected:** Максим Иванов IG ×1, Relisme IG ×6, ClickPay IG ×2
 - **verified_rc:** нет; IG gallery-picker не нашёл видео-кандидата
-- **child-WP:** `<WP #TBD>` — ig_gallery_no_video_candidate
+- **child-WP:** TAIL — 9 fails 7d, Relisme IG ×6. Sub-issue, общий с #102 (ig_target_not_in_picker family). При росте >15 — отдельный WP.
 
 ### Bucket 12: `switch_failed_unspecified::publish_failed_generic` — n=9
 
 - **type:** code-bug (НОВЫЙ)
 - **affected:** ClickPay TT ×5, Relisme TT ×3, Art Estate TT ×1
 - **verified_rc:** TikTok account-picker bottomsheet не открывался после account switch (шаг tt_3_open_list). Устройство находилось на экране профиля clickpay_life; оба попытки (original + retry_1) находили usable XML, но bottomsheet никогда не появлялся. НЕ покрыт WP #82.
-- **child-WP:** `<WP #TBD>` — TT account-picker bottomsheet silently fails (publish_failed_generic)
+- **child-WP:** **WP #96** — TT account-picker bottomsheet silently fails (publish_failed_generic)
 
 ### Bucket 13: `NULL::NULL` — n=8
 
 - **type:** code-bug (НОВЫЙ false-negative)
 - **affected:** BigKefBot YT ×7, Relisme TT ×1
 - **verified_rc:** YouTube публиковал успешно ("Публикация успешна: YouTube" залогировано, post-warm завершён), но статус засчитывался как failed из-за тайм-аута polling нового video URL (30s watchdog на шаге завершения). 7 из 8 — BigKefBot YT.
-- **child-WP:** `<WP #TBD>` — YT false-negative: watchdog URL polling times out after successful publish
+- **child-WP:** **WP #97** — YT false-negative: watchdog URL polling times out after successful publish
 
 ### Bucket 14: `process_interrupted::process_interrupted` — n=8
 
@@ -240,7 +240,7 @@ WHERE vp.active=true AND COALESCE(ucc.c,0)=0 AND vcc.c>0
 - **type:** investigation
 - **affected:** Relisme IG ×2, ClickPay IG ×6
 - **verified_rc:** нет; IG camera не открылась (либо неправильный режим, либо UI не ответил)
-- **child-WP:** `<WP #TBD>` — ig_camera_open_failed
+- **child-WP:** TAIL — 8 fails 7d, ClickPay IG ×6. Sub-issue, при росте >15 — отдельный WP.
 
 ### Bucket 16: `switch_failed_unspecified::adb_device_not_ready` — n=7
 
@@ -369,22 +369,30 @@ OTA убрал 56-78% raw fails — без него метрика была бы
 
 ---
 
-## Предлагаемые child-WP
+## Созданные child-WP (8 штук)
 
-| тип | subject | parent | rationale |
-|-----|---------|--------|-----------|
-| pipeline [P1] | [pipeline][P1] Uniqualization stall: 14 активных проектов с 0 unic_content (Pimble/Anecole/Эль-косметик +11) | #79 | systemic, 19+ дн простоя, ещё 11 на очереди |
-| code-bug | TT account-picker bottomsheet silently fails (switch_failed_unspecified::publish_failed_generic) | #79 | NEW, 9 fails 7d, ClickPay/Relisme/Art Estate TT |
-| code-bug | YT publish SUCCESS but watchdog URL polling FALSE-NEGATIVE (NULL::NULL bucket) | #79 | NEW, 8 false-negatives 7d, BigKefBot YT ×7 |
-| code-bug | adb_push timeout на медиа >70MB (chunked-push backlog, switch_failed_unspecified::NULL) | #79 | 17 fails 7d, Content hunter all platforms, известный backlog |
-| code-bug | ig_share_tap_no_progress — share tap не прогрессирует (n=24) | #79 | 24 fails 7d, Максим Иванов/ClickPay/Content hunter IG |
-| code-bug | TT account sheet race: closed_before_parse + menu_unknown_layout (n=34 combined) | #79 | 20+14 fails 7d, ClickPay TT доминирует |
-| ops | [ops] re-cable/re-auth device RF8YA0V7LEH (USB unauthorized, 7 fails) | #79 | ops fix, все платформы |
-| ops | [ops] re-login TT accounts на устройствах ClickPay (my_clickpay/clickpay_easy, 8 fails) | #79 | ops fix, tt_account_not_in_list |
-| investigation | ig_target_not_in_picker — split ops (конкретные аккаунты/устройства) vs code (UI parser race) | #79 | mixed signal, 12 fails 7d |
-| investigation | date_mismatch::ig_picker_wrong_candidate — IG picker выбирает не тот файл (n=11) | #79 | 11 fails 7d, ClickPay IG ×9 |
+| WP | тип | subject | bucket |
+|----|-----|---------|--------|
+| #95 | Ошибка | [pipeline][P1] Uniqualization stall: 14 active projects with 0 validator_unic_content (Anecole/Pimble/+12) | systemic — Часть 3 |
+| #96 | Ошибка | tt: account-picker bottomsheet silently fails to open (publish_failed_generic, 9 fails 7d) | bucket 12 |
+| #97 | Ошибка | yt: post-publish URL polling даёт false-negative (NULL::NULL bucket, 8 false-fails 7d) | bucket 13 |
+| #98 | Ошибка | adb_push: chunked-push для медиа >70MB (switch_failed_unspecified::NULL, 17 fails 7d) | bucket 6 |
+| #99 | Задача | [ops] re-cable / re-auth device RF8YA0V7LEH (USB unauthorized, 7 fails) | bucket 16 |
+| #100 | Задача | [ops] re-login TT my_clickpay на RFGYC31P26P (tt_account_not_in_list ×3) | sub-bucket account_not_in_list |
+| #101 | Задача | [ops] re-login TT clickpay_easy на RFGYC2VWBKN + my_clickpay (account_not_in_list ×5) | bucket tt_account_not_in_list |
+| #102 | Задача | [investigation] ig_target_not_in_picker — split ops (specific accounts/devices) vs code (UI parser race) (12 fails 7d) | bucket 8 |
 
-(T8 финализирует точный список и создаёт WP в OpenProject. Минимум 8-10 child-WP.)
+## Buckets, не получившие отдельного WP (с обоснованием)
+
+- `ig_share_tap_no_progress` (n=24) — TAIL, покрыто IG share retry tier2 (shipped 2026-05-11). Мониторим до 2026-05-25, при отсутствии падения — открыть регрессионный WP.
+- `tt_account_sheet_closed_before_parse` (n=20) — TAIL, родовой с WP #96 (TT bottomsheet timing). Открыть отдельно, если после фикса #96 не уйдёт.
+- `tt_post_switch_verify_unrecoverable` (n=17) — TAIL, post-switch verify shipped 2026-05-11. Мониторим, при сохранении — регрессионный WP.
+- `tt_profile_tab_broken` (n=17) — TAIL, в общем TT-стабилизация backlog.
+- `tt_account_menu_unknown_layout` (n=14) — TAIL, связан с #96 (общий UI-layout). Отдельно при сохранении после фикса.
+- `date_mismatch::ig_picker_wrong_candidate` (n=11) — TAIL, sub-issue. WP при росте >15.
+- `ig_gallery_no_video_candidate` (n=9) — TAIL, sub-issue family #102.
+- `ig_camera_open_failed` (n=8) — TAIL, sub-issue. WP при росте >15.
+- `yt_create_menu_not_reached` (n=11) — частично покрыто WP #80 (shipped 2026-05-18). Мониторим.
 
 ---
 
