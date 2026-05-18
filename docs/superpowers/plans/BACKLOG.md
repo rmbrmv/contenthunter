@@ -1,5 +1,32 @@
 # Backlog tickets
 
+## 2026-05-18 — YT foreign-foreground guard (WP #74 Round 2)
+
+### ✅ SHIPPED 2026-05-18 PR #72 (`c9f75d5`)
+
+Round 1 (PR #64, 15.05) закрыл 2/2 исходных кейса `yt_gallery_no_video_candidate`. 18.05 task 6899 (axilorj_ewelry, raspberry 1) поймал новый класс: **`ForceLoginSamungAccountActivity` (Samsung Galaxy Store)** перехватил foreground после `_normalize_yt_state_pre_upload` — force-stop YT тут бессилен, это чужой пакет (`com.sec.android.app.samsungapps`, не `com.google.android.youtube`). Force-stop YT убирает только наш собственный процесс; foreign overlay/activity остаётся и блокирует gallery probe → fail-fast.
+
+PR GenGo2/delivery-contenthunter#72 (squash `c9f75d5`): 11 atomic TDD-коммитов через subagent-driven-development. **Helper-функция** `_parse_top_resumed_activity` (module-level regex `r'topResumedActivity=ActivityRecord\{[^}]*?\s+([\w.]+)/([^\s/}]+)'` + `lstrip('.')`) — Task 1. **Skeleton** `_dismiss_foreign_foreground(*, source, allow_recovery=True)` с probe → allowlist check — Task 2. **Kill-switch** env-flag `YT_FOREIGN_FOREGROUND_GUARD_DISABLE=1` + `allow_recovery=False` — Task 3. **Escalation (a)** skip-tap (UI dump + tap по skip-keys) + helpers `_foreign_reprobe`, `_emit_foreign_foreground_outcome` — Task 4. **Escalation (b)** BACK×2 с re-probe между шагами — Task 5. **Escalation (c)** force-stop foreign + relaunch YT с blocklist halt для системных пакетов — Task 6. **Checkpoint #1** в хвост `_normalize_yt_state_pre_upload` (non-blocking) — Task 7. **Checkpoint #2** перед fail-fast в `_select_gallery_video` с 1-уровневой retry-рекурсией (`_foreign_retry_left` keyword param default=1) + meta enrichment — Task 8.
+
+Allowlist (не считается foreign): `com.google.android.youtube{,.tv}`, `com.{android,google.android,samsung.android}.permissioncontroller`. Blocklist (no force-stop даже если foreground): `android`, `com.android.{systemui,settings}`, `com.google.android.{gms,packageinstaller}`. Зонтичный `error_code = yt_gallery_no_video_candidate` СОХРАНЁН для дашбордов; 7 новых meta-категорий (`yt_foreign_foreground_detected/recovered/unrecoverable/unrecoverable_blocklist/guard_disabled/probe_failed` + `yt_gallery_retry_after_foreign_recovery`).
+
+12 unit + 4 integration = 16 новых тестов, 36/36 YT-suite зелёные. Codex review — 0 P1. Pre-merge live smoke на real testbench device (RF8Y80ZTVFZ через raspberry 1): real-world dumpsys корректно парсится (4/4 devices), Settings как foreign успешно triggers BACK×2 + blocklist halt (Settings в BLOCKLIST → halt без force-stop), event emission цепочка validated.
+
+Prod deploy: PR squash-merged 18:31 UTC, `git pull origin main` в `/root/.openclaw/workspace-genri/autowarm/`, `sudo pm2 restart 34 autowarm` (uptime 0s, online). OpenProject WP #74 → Тестирование (id 9), comment id 266.
+
+**24h live verify deadline ~2026-05-19 18:40 UTC** — acceptance:
+1. Любой `yt_gallery_no_video_candidate` с `meta.foreign_foreground_recovered=true` → guard живой (success path сработал).
+2. Любой `yt_gallery_no_video_candidate` БЕЗ `meta.foreign_foreground_detected` → старый класс фейлов (gallery не открылась) — НЕ регрессия от guard'а.
+3. `meta.foreign_foreground_unrecoverable_reason='still_foreign'` — повторений 0 при ненулевом потоке YT-задач.
+
+OpenProject WP #74, memory: [[project_yt_foreign_foreground_guard_shipped]]. Spec/plan/evidence: `docs/superpowers/specs/2026-05-18-yt-foreign-foreground-guard-design.md` + `docs/superpowers/plans/2026-05-18-yt-foreign-foreground-guard-plan.md` + `docs/evidence/2026-05-18-wp74-round2-smoke.md`.
+
+### Открытые follow-up'ы
+
+- **Launcher blocklist** (low priority, не блокер для verify): добавить `com.sec.android.app.launcher` (Samsung Home), `com.android.launcher`, `com.android.launcher3`, `com.google.android.apps.nexuslauncher` в `FOREIGN_FORCE_STOP_BLOCKLIST`. Symmetry с другими system pkgs (settings уже в blocklist). В pre-merge smoke Samsung Home выявлен как foreign — force-stop launcher технически работает (Android респавнит instantly), но heavy-handed. Стоимость: ~5 LOC + 1 тест. Можно отдельным mini-PR после verify.
+
+---
+
 ## 2026-05-18 — TT `tt_upload_confirmation_timeout` false-negative (WP #82)
 
 ### ✅ SHIPPED 2026-05-18 PR #69 (`ae41054`)
