@@ -57,9 +57,9 @@ AccountSwitcher._switch_tiktok (per attempt):
   ...
   _find_and_tap_account(target, ...)             # tap picker row
   time.sleep(AFTER_SWITCH_WAIT_S)
-  xml_after_pick = self.p.dump_ui(retries=1)     # existing
-  self._save_dump('tt_4_target_profile', xml)    # existing (uploads to S3)
-  self._maybe_screenshot(label)                  # existing
+  xml_after_pick = self.p.dump_ui(retries=1)        # existing
+  self._save_dump(label, xml_after_pick)            # existing (uploads to S3; label = 'tt_4_target_profile' or retry suffix)
+  self._maybe_screenshot(label)                     # existing
   [NEW]
   blocked = _tt_detect_switch_blocking_modal(xml_after_pick)
   if blocked is not None:
@@ -105,10 +105,13 @@ AccountSwitcher._switch_tiktok (per attempt):
 ```python
 # WP #93 2026-05-18 — блокирующие pre-switch модалки.
 # Формат: (heading_substr, refusal_button_substr, block_reason).
-# Match-правило: heading_substr содержится в элементе class=TextView,
-# clickable=false, лежащем в верхней половине модалки; refusal_button
-# содержится в элементе class=Button, clickable=true.
-# Защита от Layer 2 ловушки, где title_substr матчился по тексту BUTTON.
+# Match-правило: heading_substr содержится в элементе с clickable=false
+# (heading — текст модалки, не нажимается); refusal_button содержится в
+# элементе с clickable=true (нажимаемая кнопка). Защита от Layer 2 ловушки,
+# где title_substr матчился по тексту BUTTON: heading-проверка отвергает
+# clickable элементы, поэтому совпадение по button-тексту невозможно.
+# (UIElement в parse_ui_dump хранит text/content_desc/clickable/bounds —
+# поля class нет, отличаем headings от buttons по clickable.)
 _TT_SWITCH_BLOCKING_MODALS: tuple[tuple[str, str, str], ...] = (
     ('Необходимо обновить аккаунт', 'Не сейчас', 'phone_or_email_link_required'),
 )
@@ -122,28 +125,27 @@ def _tt_detect_switch_blocking_modal(
 ) -> Optional[tuple[str, str, str]]:
     """Return (heading_substr, button_substr, reason) if modal matches, else None.
 
-    Matches when there exists a TextView element (NOT clickable) whose label
-    contains heading_substr, AND a Button element (clickable) whose label
-    equals button_substr (case-insensitive, trimmed). Both must coexist
-    in the same dump. This is intentionally stricter than Layer 2 to avoid
-    matching button labels as headings.
+    Matches when there exists a NON-clickable element whose label contains
+    heading_substr (heading), AND a clickable element whose label equals
+    button_substr (case-insensitive, trimmed). Both must coexist in the
+    same dump. Heading-check requires NON-clickable explicitly to avoid
+    the Layer 2 trap (where title_substr matched a button label and led to
+    nuisance dismiss of a refusal button).
     """
     if not xml:
         return None
     elements = parse_ui_dump(xml)
+    if not elements:
+        return None
     for heading, button, reason in _TT_SWITCH_BLOCKING_MODALS:
         heading_lc = heading.lower()
         button_lc = button.lower()
         has_heading = any(
-            heading_lc in (el.label or '').lower()
-            and not el.clickable
-            and 'TextView' in (el.cls or '')
+            heading_lc in el.label.lower() and not el.clickable
             for el in elements
         )
         has_button = any(
-            (el.label or '').strip().lower() == button_lc
-            and el.clickable
-            and 'Button' in (el.cls or '')
+            el.clickable and el.label.strip().lower() == button_lc
             for el in elements
         )
         if has_heading and has_button:
@@ -151,7 +153,7 @@ def _tt_detect_switch_blocking_modal(
     return None
 ```
 
-(Точные имена полей `el.label`, `el.clickable`, `el.cls`  — следовать существующему API `parse_ui_dump`. В plan-фазе сверим.)
+`UIElement` (account_switcher.py:298) хранит `text`, `content_desc`, `clickable`, `bounds`; `el.label` = `(text + ' ' + content_desc).strip()`. Поля `cls` нет — отличие heading от button через `clickable`.
 
 ### 4.3 Изменение `_TT_POST_SWITCH_DISMISSIBLE_MODALS` (`account_switcher.py:225`)
 
@@ -206,9 +208,9 @@ _TT_POST_SWITCH_DISMISSIBLE_MODALS: tuple[tuple[str, str], ...] = (
 ### 5.4 Edge cases
 - **`set_block` fails** (DB недоступна): warn, fail с error_code всё равно эмитим. Аудит-трейл в `tt_block` теряем, но event с `category='tt_switch_blocked'` уже в `publish_tasks.events`.
 - **`notify_escalation` fails**: warn, fail не блокируется. Telemetry event сохранён.
-- **dump fails** (S3 ↑network): `_save_dump` уже обрабатывает best-effort. Detector использует `xml` из памяти. URL в event meta может быть None.
+- **dump fails** (S3 / network): `_save_dump` уже обрабатывает best-effort. Detector использует `xml_after_pick` из памяти. URL в event meta может быть None.
 - **аккаунт уже blocked** ранее: `set_block_by_username` перезаписывает payload (existing IG human_check behavior) — last evidence свежее, OK.
-- **detector false positive**: низкий риск — heading «Необходимо обновить аккаунт» специфичен, требование обоих сигналов (TextView+heading И Button+button-text) делает совпадение строгим. Unit-тест на real prod dump task 7372.
+- **detector false positive**: низкий риск — heading «Необходимо обновить аккаунт» специфичен, требование обоих сигналов (NON-clickable элемент с heading-substr И clickable элемент с button-text) делает совпадение строгим. Unit-тест на real prod dump task 7372.
 - **detector false negative** (новый heading, не в whitelist): остаточный `tt_post_switch_verify_unrecoverable` всплывёт в 24h soak; добавляем строку в `_TT_SWITCH_BLOCKING_MODALS` (тот же паттерн что и для Layer 2 расширения).
 
 ## 6. Error handling & telemetry
@@ -298,8 +300,14 @@ _TT_POST_SWITCH_DISMISSIBLE_MODALS: tuple[tuple[str, str], ...] = (
    Ожидаем JSON с `reason='phone_or_email_link_required'`, `detected_at`, `publish_task_id`, `heading_substr`.
 
 ### 7.5 24h soak (deadline +24h post-deploy)
-- `SELECT count(*) FROM publish_tasks WHERE error_code='tt_switch_blocked' AND created_at >= NOW() - INTERVAL '24 hours';` → ожидаем 3-5 (исторический baseline по 6514, 6631, 6704, 6786 за 2026-05-13..18).
-- `SELECT count(*) FROM publish_tasks WHERE error_code='tt_post_switch_verify_unrecoverable' AND events::text NOT ILIKE '%phone_or_email_link_required%' AND created_at >= NOW() - INTERVAL '24 hours';` → ожидаем меньше чем pre-deploy baseline (отделили blocking-modal часть).
+
+Pre-deploy baseline (за 2026-05-13..18, выборка по `error_code='tt_post_switch_verify_unrecoverable'`):
+- 24 task'а за 7 дней (~3-4/день в среднем).
+- Из них 4 идентифицированы как «блокирующая модалка обновления аккаунта» (6514, 6631, 6704, 6786) — ~0.6/день.
+
+После деплоя:
+- `SELECT count(*) FROM publish_tasks WHERE error_code='tt_switch_blocked' AND created_at >= NOW() - INTERVAL '24 hours';` → ожидаем 0-2 (большинство этих аккаунтов уже среди 4 evidence, добавлены в tt_block ранее retry'ями).
+- `SELECT count(*) FROM publish_tasks WHERE error_code='tt_post_switch_verify_unrecoverable' AND created_at >= NOW() - INTERVAL '24 hours';` → ожидаем ≤ pre-deploy (3-4/день минус блокирующая часть).
 - Если новые `tt_post_switch_verify_unrecoverable` task'и имеют похожий XML паттерн (другой heading) → расширяем `_TT_SWITCH_BLOCKING_MODALS` одной строкой и тестом.
 
 ## 8. Артефакты
@@ -311,5 +319,5 @@ _TT_POST_SWITCH_DISMISSIBLE_MODALS: tuple[tuple[str, str], ...] = (
 
 ## 9. Открытые вопросы
 
-- **Точное имя поля `parse_ui_dump`** возвращаемых элементов (`label` vs `text` vs `content_desc`, `cls` vs `class`) — сверить при написании implementation plan чтением `account_switcher.py` parse-helpers (уже используются в `_tt_try_dismiss_post_switch_modal`, тот же паттерн).
-- **header_y_max** filtering для heading — не используется сейчас в спецификации, потому что bottomsheet с модалкой занимает большую часть экрана, и Y-фильтр не нужен; если в plan-фазе обнаружим heading в нижней половине экрана у других модалок — добавим Y-фильтр (например `y < 1500`) опционально.
+- **Y-фильтр для heading**: сейчас не используется — bottomsheet с модалкой занимает большую часть экрана и Y-фильтрация не нужна. Если в будущих evidence появятся модалки с heading в нижней половине экрана у других сценариев — добавим опциональный Y-фильтр (например `y < 1500`) в helper.
+- **Notifier-rate-limit для уже-blocked аккаунтов**: каждый повторный attempt вызовет `notify_escalation` ещё раз. Если это создаст шум — обернуть escalation в проверку `if not is_blocked(acc_id, 'tt'): notify_escalation(...)`. Решение по факту первых 24h в проде.
