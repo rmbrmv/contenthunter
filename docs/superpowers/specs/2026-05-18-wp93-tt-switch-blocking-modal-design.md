@@ -61,7 +61,15 @@ AccountSwitcher._switch_tiktok (per attempt):
   self._save_dump(label, xml_after_pick)            # existing (uploads to S3; label = 'tt_4_target_profile' or retry suffix)
   self._maybe_screenshot(label)                     # existing
   [NEW]
-  blocked = _tt_detect_switch_blocking_modal(xml_after_pick)
+  # Defensive try/except: detector в hot-path не должен ломать switch
+  # из-за корявого dump'а или regex-edge-case. parse_ui_dump уже
+  # обрабатывает ParseError, но любой другой Exception (re.error и т.п.)
+  # тут гасим, продолжаем на старый verify-flow.
+  try:
+      blocked = _tt_detect_switch_blocking_modal(xml_after_pick)
+  except Exception as de:
+      log.warning(f'switcher.tt.detect_blocking_modal_failed: {de}')
+      blocked = None
   if blocked is not None:
       heading, button, reason = blocked
       self.p.log_event('error',
@@ -74,6 +82,10 @@ AccountSwitcher._switch_tiktok (per attempt):
                 'attempt': attempt + 1,
                 'step': 'tt_switch_blocked'})
       try:
+          # set_block_by_username(username, platform, reason, **context) —
+          # **context kwargs принимаются и складываются в JSONB payload
+          # (см. account_blocks.py:51 set_block signature, существующий
+          # IG human_check call в publisher_base.py:4217).
           acc_id = account_blocks.set_block_by_username(
               target, 'tt', reason=reason,
               publish_task_id=self.p.task_id,
@@ -170,11 +182,15 @@ _TT_POST_SWITCH_DISMISSIBLE_MODALS: tuple[tuple[str, str], ...] = (
 
 Точка вставки: в `account_switcher.py` после `self._save_dump(label, xml_after_pick)` и `self._maybe_screenshot(label)` (около строки ~2562), ДО вызова `self._post_switch_verify_handle(...)`. Внутри цикла `for attempt in range(MAX_PICK_ATTEMPTS)` — detector работает для каждого attempt'а (модалка может появиться на любом).
 
-### 4.5 Новый error_code в `publisher_kernel.py:159` map
+### 4.5 Новый error_code в `publisher_kernel.py` step→error_code map
+
+`publisher_kernel.py` содержит **step → error_code** mapping (см. существующие `'tt_4_target_profile': 'tt_post_switch_verify_unrecoverable'`, `'ig_human_check_required': 'ig_human_check_required'`). Добавляем:
 
 ```python
 'tt_switch_blocked': 'tt_switch_blocked',  # WP #93 2026-05-18
 ```
+
+Это работает потому, что в §3 мы вызываем `self._fail(..., step='tt_switch_blocked')` — resolver видит `step` и через map даёт `error_code='tt_switch_blocked'`. Event'овая `meta.category='tt_switch_blocked'` сохраняется параллельно и подхватывается через fallback-путь `_resolve_publish_fail_category` (см. publisher_base.py:1871) если step-mapping почему-то промахнётся.
 
 ### 4.6 Что НЕ меняется
 - `account_blocks.py` — переиспользуем `set_block_by_username` без изменений.
@@ -211,7 +227,9 @@ _TT_POST_SWITCH_DISMISSIBLE_MODALS: tuple[tuple[str, str], ...] = (
 - **dump fails** (S3 / network): `_save_dump` уже обрабатывает best-effort. Detector использует `xml_after_pick` из памяти. URL в event meta может быть None.
 - **аккаунт уже blocked** ранее: `set_block_by_username` перезаписывает payload (existing IG human_check behavior) — last evidence свежее, OK.
 - **detector false positive**: низкий риск — heading «Необходимо обновить аккаунт» специфичен, требование обоих сигналов (NON-clickable элемент с heading-substr И clickable элемент с button-text) делает совпадение строгим. Unit-тест на real prod dump task 7372.
+- **detector false negative — heading в clickable parent**: Android dumps в некоторых случаях сворачивают text внутри clickable FrameLayout/ViewGroup parent'а; тогда heading_substr вернёт `clickable=true` и не сматчится. В нашем prod-dump task 7372 heading TextView clickable=false подтверждён — для known fixture работает. Если в 24h soak увидим новые task'и с XML где heading «Необходимо обновить...» сидит в clickable parent — расширяем helper: добавим second pass который игнорирует clickable-фильтр heading'а (но строгое равенство для button сохраняем).
 - **detector false negative** (новый heading, не в whitelist): остаточный `tt_post_switch_verify_unrecoverable` всплывёт в 24h soak; добавляем строку в `_TT_SWITCH_BLOCKING_MODALS` (тот же паттерн что и для Layer 2 расширения).
+- **detector raises exception** (re.error, malformed elements): обёрнут try/except в call-site (§3), `blocked = None`, продолжаем на старый verify-flow. Telemetry-warning логируется.
 
 ## 6. Error handling & telemetry
 
@@ -321,3 +339,4 @@ Pre-deploy baseline (за 2026-05-13..18, выборка по `error_code='tt_po
 
 - **Y-фильтр для heading**: сейчас не используется — bottomsheet с модалкой занимает большую часть экрана и Y-фильтрация не нужна. Если в будущих evidence появятся модалки с heading в нижней половине экрана у других сценариев — добавим опциональный Y-фильтр (например `y < 1500`) в helper.
 - **Notifier-rate-limit для уже-blocked аккаунтов**: каждый повторный attempt вызовет `notify_escalation` ещё раз. Если это создаст шум — обернуть escalation в проверку `if not is_blocked(acc_id, 'tt'): notify_escalation(...)`. Решение по факту первых 24h в проде.
+- **Robust heading-detection**: spec фиксирует strict `clickable=false` для heading. Если 24h soak покажет XML edge-cases (heading в clickable parent), решаем: (a) ослабить heading-фильтр до «любой элемент с substr» при сохранении strict button=clickable; либо (b) добавить proximity-check (heading и button в одной модальной dialog-области по координатам).
