@@ -13,7 +13,7 @@
 **Repo / workspace:**
 - Spec и plan живут в `/home/claude-user/contenthunter` (rmbrmv/contenthunter).
 - Код и тесты живут в `/root/.openclaw/workspace-genri/autowarm/` (GenGo2/delivery-contenthunter).
-- ВНИМАНИЕ: на prod чекауте есть post-commit auto-push hook → main. Все изменения делаем на feature-branch `feat/wp93-tt-switch-blocking-modal` локально, push отдельной командой. Никаких прямых коммитов в `main` autowarm-репа.
+- ⚠ **Auto-push hook**: `.git/hooks/post-commit` (см. файл) пушит **любую current branch** на GenGo2/delivery-contenthunter сразу после каждого commit (`git push origin "$BRANCH" -q`). Это безопасно для feature-branch — branch появится на remote, но merge в main всё равно идёт ТОЛЬКО через PR. Главное правило: **никаких commits в `main` autowarm-репа**. Step P3 (preflight) явно проверяет что мы на feature branch перед любой работой; каждый Task контролирует currentbranch перед commit.
 
 ---
 
@@ -66,6 +66,18 @@ pytest tests/test_account_switcher_modal_dismiss.py -q 2>&1 | tail -10
 ```
 
 Expected: WP #67 тесты зелёные (16 passed). Если красные сразу — STOP, чинить baseline до старта работы.
+
+- [ ] **Step P4: Подтвердить current branch перед каждым commit**
+
+Каждый Task с `git commit` должен начинаться с проверки:
+
+```bash
+cd /root/.openclaw/workspace-genri/autowarm/
+test "$(git branch --show-current)" = "feat/wp93-tt-switch-blocking-modal" || \
+  { echo "STOP: не на feature branch — выходим"; exit 1; }
+```
+
+Если check fail'ит — НЕ commit'ить, разобраться (особенно после возможного `git stash`/`git checkout` в параллельной сессии).
 
 ---
 
@@ -852,7 +864,19 @@ Expected: видеть блок:
             )
 ```
 
-- [ ] **Step 7.3: Run все тесты — все 12 должны PASS, кроме layer2-теста**
+- [ ] **Step 7.3: Wiring-assertion (TDD-замена для нормального integration-теста на полный `_switch_tiktok`)**
+
+Существующие integration-тесты вызывают `_maybe_handle_switch_blocking_modal` напрямую (через mock proxy), потому что полный `_switch_tiktok` flow требует слишком много зависимостей. Чтобы убедиться что Task 7.2 правильно подключил вызов в `_switch_tiktok`, делаем grep-проверку на физическое наличие:
+
+```bash
+cd /root/.openclaw/workspace-genri/autowarm/
+# Должна быть последовательность: _maybe_screenshot(label) → _maybe_handle_switch_blocking_modal → if _blocked_result is not None
+awk '/self\._maybe_screenshot\(label\)/{flag=1; line=NR} flag && /_maybe_handle_switch_blocking_modal/ && NR-line<10 {found=1; print "OK: wiring found at line " NR; exit} END{if(!found){print "FAIL: detector call missing after _maybe_screenshot(label)"; exit 1}}' account_switcher.py
+```
+
+Expected: `OK: wiring found at line NNNN`. Если FAIL — Step 7.2 не вступил в силу, Edit ещё раз.
+
+- [ ] **Step 7.4: Run все тесты — все 12 должны PASS, кроме layer2-теста**
 
 ```bash
 cd /root/.openclaw/workspace-genri/autowarm/
@@ -861,7 +885,7 @@ pytest tests/test_tt_switch_blocking_modal.py -v 2>&1 | tail -20
 
 Expected: 11 PASSED, 1 FAILED (`test_layer2_does_not_match_phone_email_button` — regression ещё не удалена).
 
-- [ ] **Step 7.4: Commit вставку**
+- [ ] **Step 7.5: Commit вставку**
 
 ```bash
 cd /root/.openclaw/workspace-genri/autowarm/
@@ -987,11 +1011,14 @@ grep -n "tt_post_switch\|canonical\|VALID_ERROR_CODES" tests/test_canonical_erro
 
 Если whitelist есть — добавить `'tt_switch_blocked'`. Если нет — пропустить.
 
-- [ ] **Step 9.4: Run полный набор тестов — должны PASS**
+- [ ] **Step 9.4: Run полный набор тестов — должны PASS (guarded)**
 
 ```bash
 cd /root/.openclaw/workspace-genri/autowarm/
-pytest tests/test_tt_switch_blocking_modal.py tests/test_canonical_error_codes.py tests/test_error_code_mapper.py -v 2>&1 | tail -20
+TESTS="tests/test_tt_switch_blocking_modal.py"
+[ -f tests/test_canonical_error_codes.py ] && TESTS="$TESTS tests/test_canonical_error_codes.py"
+[ -f tests/test_error_code_mapper.py ] && TESTS="$TESTS tests/test_error_code_mapper.py"
+pytest $TESTS -v 2>&1 | tail -20
 ```
 
 Expected: все зелёные. Если что-то падает — fix inline (вероятно нужно расширить whitelist в test_canonical_error_codes).
@@ -1009,17 +1036,19 @@ git commit -m "feat(tt): WP #93 step 5 — step->error_code mapping tt_switch_bl
 
 ### Task 10: Полный test suite — никаких регрессий
 
-- [ ] **Step 10.1: Run все switcher-related тесты**
+- [ ] **Step 10.1: Run все switcher-related тесты (guarded по существованию)**
 
 ```bash
 cd /root/.openclaw/workspace-genri/autowarm/
-pytest tests/test_account_switcher.py \
-       tests/test_account_switcher_tt.py \
-       tests/test_account_switcher_modal_dismiss.py \
-       tests/test_tt_switch_blocking_modal.py \
-       tests/test_canonical_error_codes.py \
-       tests/test_error_code_mapper.py \
-       -v 2>&1 | tail -30
+TESTS=""
+for f in tests/test_account_switcher.py tests/test_account_switcher_tt.py \
+         tests/test_account_switcher_modal_dismiss.py \
+         tests/test_tt_switch_blocking_modal.py \
+         tests/test_canonical_error_codes.py tests/test_error_code_mapper.py; do
+  [ -f "$f" ] && TESTS="$TESTS $f"
+done
+echo "Запускаем: $TESTS"
+pytest $TESTS -v 2>&1 | tail -30
 ```
 
 Expected: все зелёные. Если что-то красное — STOP, разбираться корень. Не маркировать complete с регрессией.
