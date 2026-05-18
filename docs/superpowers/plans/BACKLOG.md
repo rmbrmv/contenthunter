@@ -1,5 +1,44 @@
 # Backlog tickets
 
+## 2026-05-18 — Publish: задачи зависают в `awaiting_url` (WP #86)
+
+### ✅ COMPLETE 2026-05-18 — 3 PRs SHIPPED (`d68b285` + `5e6c3b3` + `701d213`)
+
+После успешной публикации задачи зависали в `awaiting_url` пока 48ч-timeout не сбрасывал их в `failed` (псевдо-провал, публикация-то прошла). Snapshot 2026-05-18 14:02 UTC: **45 stuck** (IG 27/TT 12/YT 6); за 24ч **0 задач** закрылись `done` с profile URL'ом — terminal-перехода для «опубликовано без specific URL» не существовало. 3 root cause: poller сломан (LIMIT 30 starvation новых задач + NULL `started_at` zombies + per-task budget отсутствовал) + однопроходная capture-механика (`_auto_get_*_url(45)`) + нет terminal-статуса для exhausted.
+
+Решение — **β phased rollout 3 PR'а** (spec в `docs/superpowers/specs/2026-05-18-wp86-awaiting-url-stuck-design.md`):
+
+**PR1 foundation** (PR GenGo2/delivery-contenthunter#71, squash `d68b285`): schema migration (`url_capture_attempts INT`, `pre_publish_video_ids JSONB`, `url_capture_last_attempt_at TIMESTAMP` + partial index `idx_publish_tasks_status_updated WHERE status IN (processing, awaiting_url)`); url-poller fix (`LIMIT 30→100 env-driven`, `ORDER BY started_at→updated_at ASC` для fairness, `COALESCE(started_at, updated_at)` в 48ч timeout для NULL-zombie); attempts++ + промоут в новый terminal-статус `published_no_url` при `attempts >= URL_CAPTURE_MAX_ATTEMPTS` (default 30 = ~1ч); `syncQueueStatuses: published_no_url → pq.status='done'` (не `failed`, иначе re-queue → дубль публикации); жёлтый badge `✅ Без URL` в 4 publish_tasks renderers + status-filter dropdown + `pub-stat-done` counter; retroactive-cleanup миграция `20260518_wp86_retroactive_cleanup.sql` (15 stuck задач промоутнуто, publish_queue симметрично в `done`). Pure-helpers `shouldPromoteToPublishedNoUrl` + `getUrlPollerLimit` + `getUrlCaptureMaxAttempts` экспорт'нуты для tests (TDD, 17→23 unit tests). Subagent-driven dev через 18 tasks; codex/code-quality review нашёл 5 Important fixes + 2 dead-code reverts (audit lesson: `grep status='done'` находит hits на 3 разных таблицах — autowarm_tasks/publish_tasks/publish_queue — verify FROM-clause обязателен).
+
+**PR3 server-side** (PR #73, squash `5e6c3b3`): A3 YouTube Data API через `scripts/yt_data_api_query.py` (Python CLI wrapper над `analytics_collector.youtube_api_get_videos`, exit code 2 на quota/403 → graceful fallback на yt-dlp); A5 differential id-diff — bot до publish сохраняет top-5 video-id'ов в `pre_publish_video_ids` JSONB (через `_snapshot_pre_publish_video_ids` helper в publisher_base, вызывается из TT+YT publishers), poller через `scrapeAllVideosDiff` pure-helper делает `current_ids - pre_snapshot - other_used = новые id`. Kill-switches `URL_CAPTURE_USE_YT_API=0`, `URL_CAPTURE_USE_DIFF=0`. 5 commits, 9 новых pytest + 5 unit tests JS, npm 150/150 pass. **Адаптация:** `youtube_api_get_videos` в analytics_collector возвращает только statistics — wrapper использует `playlistItems` endpoint напрямую (2 API calls).
+
+**PR2 bot-side** (PR #74, squash `701d213`): A1 wave-retry для TT (3×45s с pull-to-refresh между waves, early-exit на specific URL через `_is_specific_reel_url`) — replaces single 45s attempt; A2 `_capture_via_notifications` helper (universal для TT+IG) через `adb shell dumpsys notification --noredact` + parse + foreign-account guard. **DONE_WITH_CONCERNS:** recon на тест-телефонах показал что TT/IG/YT **НЕ embed URL в text-полях** dumpsys notification — URL в PendingIntent (opaque для shell). A2 в текущем prod возвращает `None` для всех 3 платформ. Infra оставлена (~0.5s/publish overhead) с kill-switch `URL_CAPTURE_USE_NOTIF=0` + активируется автоматом если platform начнёт embed URL в notification text. **Реальная ценность PR2 = A1 TT wave-retry.** Kill-switches `URL_CAPTURE_BOT_WAVES=1` возвращает single-call legacy. 13 unit tests + recon evidence в `docs/evidence/2026-05-18-wp86-pr2-notification-recon.md`.
+
+Все 3 PR'а merged squash, NO force-push. 1 merge conflict в `publisher_base.py` (оба PR добавили helpers рядом) — resolved через git merge, не rebase/force. 7 env-var kill-switches default ON. PM2 `restart 34 autowarm` (sudo) 18:04 UTC.
+
+**Метрики после deploy** (6h window):
+- `awaiting_url` stuck: **45 → 0**
+- `published_no_url`: 0 → **20** (15 retroactive + 5 natural через PR1 poller)
+- `done`: 31
+- `failed`: 1
+
+**24h post-deploy verify (~2026-05-19 18:00 UTC) acceptance:**
+1. `awaiting_url` queue depth среднее <5 за сутки (vs 45 baseline).
+2. `% specific-URL done` > 95% (vs ~85% baseline).
+3. `published_no_url` < 5% от всех успешных публикаций (хвост невосстановимых через все 4 capture-механики).
+4. Events `url_capture_via_yt_api` (PR3 A3) + `url_capture_via_diff` (PR3 A5) + `url_capture_via_share_wave` (PR2 A1) появляются > 0 для соответствующих платформ.
+5. `failed` от 48h timeout (псевдо-провалы публикаций) ≈0/день (vs ~10% baseline).
+6. Никаких regression'ов: посты не дублируются, `cleanupStuckTasks` совместим с новым `published_no_url`.
+
+OpenProject WP #86 status «Готово», memory: [[project_wp86_published_no_url_complete]]. Spec/plans: `docs/superpowers/specs/2026-05-18-wp86-awaiting-url-stuck-design.md` + `docs/superpowers/plans/2026-05-18-wp86-pr{1,2,3}-*-plan.md`. Evidence: `docs/evidence/2026-05-18-wp86-pr1-local-smoke.md` + `docs/evidence/2026-05-18-wp86-pr2-notification-recon.md`.
+
+### Открытые backlog'и (отложены, не блокеры)
+
+- **A1 wave-retry для IG/YT** — отложено в PR2 из-за multi-path complexity (IG имеет 2-step API+UI structure; YT имеет 6 call sites `_get_youtube_url_via_ui` с internal 3-try). Если метрики 24h покажут что IG/YT capture хвост существенный — отдельный mini-PR.
+- **IG pre-snapshot (A5)** — в PR3 реализован только для TT+YT, IG требует отдельного path через `web_profile_info` API. Если IG diff matching ценен — отдельный mini-PR.
+- **Notification scrape (A2) reality** — в текущем prod dead (URL в PendingIntent), но infra и helpers готовы. Если на новых телефонах notification permissions enable'ятся ИЛИ TT/IG embed URL в notification text в regional builds — A2 активируется через kill-switch.
+- **Per-account shadowban detection** — если конкретные аккаунты постоянно дают `published_no_url` (yt-dlp/API возвращают 0 несмотря на successful publish) — это сигнал shadow-ban'а. Отдельная discovery WP при N+ повторений.
+
 ## 2026-05-18 — TT `tt_upload_confirmation_timeout` false-negative (WP #82)
 
 ### ✅ SHIPPED 2026-05-18 PR #69 (`ae41054`)
