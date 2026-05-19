@@ -1,5 +1,46 @@
 # Backlog tickets
 
+## 2026-05-19 — YT: Layer 1 strict_verify substring → exact-match (WP #88)
+
+### ✅ SHIPPED 2026-05-19 PR #81 (`a519bca`)
+
+Layer 1 в `_tap_plus_and_verify` (account_switcher.py, после WP #80) проверял `editor_triggers` через permissive substring `t.lower() in ui.lower()`. Триггер `'Видео'` (substring `'видео'`) ложно матчился с `content-desc='Приостановить видео'` (Shorts player pause overlay). 4/15 кейсов 2026-05-18 проходили Layer 1 как false-positive → Layer 3 ловил позже через ~9 с (yt_editor_not_reached). Defense in depth работало, но точность Layer 1 страдала.
+
+**Что сделано:**
+
+- Layer 1 переехал с substring на **exact-match по node text/content-desc** через `xml.etree.ElementTree.fromstring` (account_switcher.py:4358-4385). Opt-in под `strict_verify=True` — только YT-путь (один call site `_switch_youtube`), IG/TT остаются на legacy substring без побочных изменений.
+- `ParseError` → `hits=[]` → существующая ветка fail-fast `yt_create_menu_not_reached`.
+- 4 новых unit-теста: Shorts overlay reject, Create-menu accept, malformed XML fallback, IG/TT non-strict regression.
+- 232/232 yt+switcher тестов зелёные. 1 pre-existing main fail (`test_yt_happy_path_returns_accounts`) не связан.
+- Codex review 0 P1 (spec + code diff).
+
+**Risk:** если YouTube сменит casing/wording (`'видео'` строчное, `'Видео '` с trailing space) — Layer 1 даст false-negative и упадёт как `yt_create_menu_not_reached`. Митигация — обновить `UI_CONSTANTS['YouTube']['editor_triggers']` (single source of truth). Layer 2/3 продолжат работать.
+
+Spec/plan: `docs/superpowers/specs/2026-05-19-wp88-yt-layer1-exact-match-design.md` + `docs/superpowers/plans/2026-05-19-wp88-yt-layer1-exact-match-plan.md`. OpenProject WP #88 → Готово (comment #294).
+
+---
+
+## 2026-05-19 — YT: post-publish URL polling false-negative (WP #97)
+
+### ✅ SHIPPED 2026-05-19 PR #78 (`d5043a4`) — WP hypothesis опровергнута
+
+WP-гипотеза была неверной: 30 с «watchdog_fired» — observability noise от S3 upload (>30 с при ~260MB screenrec), не вызывает failed. 8 false-negs 7д (Bucket 13) — **pre-WP-#86 historical artifact**. Реальный класс багов (status `awaiting_url` exhausted) уже закрыт через [[WP #86]] url-poller (PR #71/#73/#74).
+
+**Ground-truth открытым:** на каналах пострадавших аккаунтов (quickrouterider, gerog-r7z, friendlyridescommunity, oracle_spacee) реально опубликованных видео из тех дат **нет** (yt-dlp + YT Data API confirm `videoCount=3-4`, latest 2026-05-01). Возможно YT-rejection, а не false-neg.
+
+**Что сделано:**
+
+- Новый env-var `YT_STEP_TIMEOUT_ZAVERSHENIE_SEC` (default 120, fallback на default при invalid input — `abc`/`0`/`-5`/empty). Установка в 30 = revert behavior. Применяется только к шагу «Завершение» (publisher_kernel.py), другие шаги не затронуты.
+- 9 unit-тестов: default / custom override / kill-switch revert / invalid string / zero / negative / empty / others_not_affected / substring_match.
+- Backfill SQL для 8-9 старых задач (статус `failed` без `error_code` + URL-poller log + `/shorts` post_url) — **manual run**, документирован в PR body и OpenProject comment.
+- Codex review 0 P1 (spec + plan + code).
+
+**Открытый вопрос:** если Bucket 13 вырастет пост-WP-#86 — открыть отдельный WP на real verification (channel `videoCount` delta).
+
+Spec/plan: `docs/superpowers/specs/2026-05-19-wp97-yt-url-polling-design.md` + `docs/superpowers/plans/2026-05-19-wp97-yt-url-polling-plan.md`. OpenProject WP #97 → Готово (comment #295).
+
+---
+
 ## 2026-05-19 — YT: `yt_create_menu_not_reached` foreground guard (WP #87)
 
 ### ✅ SHIPPED 2026-05-19 PR #79 + hotfix PR #83 (`c836074` + `d02f6ef`)
