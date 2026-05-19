@@ -1,5 +1,44 @@
 # Backlog tickets
 
+## 2026-05-19 — IG: ig_app_launch_failed stale-uiautomator (WP #105)
+
+### ✅ SHIPPED 2026-05-19 PR #76 (`f480219`)
+
+Триаж IG-фейлов 7д (2026-05-12…2026-05-19) выявил топ-1 непокрытый класс `ig_app_launch_failed` — 14 fails/7д, 3 fails сегодня, 13 уникальных устройств на ВСЕХ 6 raspberries (Pi #2/3/5/7/9/10). Топ-1 (`ig_share_tap_no_progress`, WP #73), топ-3 (`ig_target_not_in_picker`, WP #102) уже в backlog'е; топ-2 (`ig_picker_wrong_candidate`, WP #61) и топ-6 (`ig_gallery_no_video_candidate`, WP #61/#68) уже Готово — 0 свежих fails после 2026-05-14/15 это подтверждает.
+
+**Root cause (13/13 fails 7д):** два метода foreground detection используют разные источники. `_ensure_app_foregrounded` (pre-check) видит IG через `dumpsys topResumedActivity` и эмитит `ig_app_foregrounded_after_recovery: attempt=2` (success). Immediately после — `_open_app._foreground_pkg` использует `uiautomator dump` как primary; на Samsung S21 uiautomator отстаёт до 60-90s после `am start` — видит `com.sec.android.app.launcher` пока ActivityManager уже знает что IG в foreground. 3 am-start retries не помогают (IG уже запущен, uiautomator всё ещё stale). `_open_app` fails через 86s. Скриншот +1s после fail показывает IG на экране (task 7821 clickpay_now + task 7692 contentexpert_ — оба evidence-tasks 2026-05-19).
+
+**Решение — defense-in-depth в `account_switcher.py:_open_app` (PR GenGo2/delivery-contenthunter#76, squash `f480219`):**
+
+- **L1** `_foreground_pkg(target_pkg)` — cross-source check (dumpsys + uiautomator). Trust target когда `pkg_ui==target` (UI ground-truth) ИЛИ `pkg_dump==target && pkg_ui ∈ {launcher, empty}` с подтверждающим poll'ом до 2.4s. Для permission/sbrowser overlay возвращается uiautomator package — `_dismiss_blocking_overlays` отрабатывает (НЕ short-circuit на real overlay).
+- **L2** Settle-wait до 15s polling после 3 am-start attempts — ловит race «IG arrives 1-5s после last poll».
+- **L3** Observability: `switcher_foreground_pkg_disagree` event при расхождении источников + `current_pkg_dumpsys` в meta при final fail.
+
+Codex review: **3 round'а до 0 P1/P2** (правки confirming-poll + permissioncontroller-safety из round 2/3). 7 новых mock-based тестов + 1 update в test_overlay_dismiss (cross-source меняет dumpsys call count). 74 теста зелёные в test_account_switcher + test_overlay_dismiss. Pre-existing main фейлы (vision/orchestrator/publish_guard/intermediate_probes) НЕ затронуты — verified `git stash` reproduction.
+
+Deploy: PR #76 squash-merged 2026-05-19 11:46 UTC, prod автоматически синкнулся через git pull (f480219). PM2 restart НЕ требовался — Python публикатор spawnится свежим процессом на каждую задачу (server.js spawn).
+
+**Метрики после deploy (T+217min, 5 IG задач):**
+- `ig_app_launch_failed` fails post-deploy: **0** ✅ (vs baseline ~2/день)
+- `switcher_foreground_pkg_disagree` events (L1): **1** ✅ proof-of-life (cross-source ловит реальное расхождение в проде)
+- `switcher_settle_wait_recovered` events (L2): 0 (паттерн отлавливается L1 раньше — норма)
+- Other post-deploy fails: 3 (camera/caption/picker — другие классы, не наш WP)
+
+Verification window incomplete на момент закрытия — выкладочное окно сегодня закрылось в 12:00 UTC (publish_queue пуст), для статистики нужен следующий утренний цикл ~04-09 UTC. WP #105 в OpenProject — статус «Тестирование», переход в «Готово» после 24h positive verification.
+
+Spec/plan/evidence: `docs/superpowers/specs/2026-05-19-wp105-ig-app-launch-stale-uiautomator-design.md` + `docs/superpowers/plans/2026-05-19-wp105-ig-app-launch-stale-uiautomator-plan.md` + `docs/evidence/2026-05-19-wp105-ig-app-launch-shipped.md`. OpenProject WP #105 (assignee Данил, comment id 282).
+
+Memory: [[project_wp105_ig_app_launch_stale_uiautomator_shipped]].
+
+### Связанные открытые WP
+
+- **WP #73** `ig_share_tap_no_progress` (31 fails/7д, 5 сегодня) — топ-1 IG, в backlog'е, refresh-комментарий 2026-05-19 запостил
+- **WP #102** `ig_target_not_in_picker` (19 fails/7д) — в backlog'е
+- **WP #8** `ig_camera_open_failed` (8 fails/7д) — нет WP, низкий приоритет, не покрыт текущим фиксом
+- **WP #74 Round 2** YT foreign-foreground guard — концептуально близкая защита pattern shipped 2026-05-18 PR #72
+
+---
+
 ## 2026-05-18 — YT foreign-foreground guard (WP #74 Round 2)
 
 ### ✅ SHIPPED 2026-05-18 PR #72 (`c9f75d5`)
