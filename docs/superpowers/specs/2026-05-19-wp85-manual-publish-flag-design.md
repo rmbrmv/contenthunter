@@ -290,12 +290,13 @@ JOIN account_projects ap ON ap.post_id = fp.post_id
 JOIN validator_schedule_slots s ON s.project_id = ap.project_id
 JOIN validator_content c ON c.id = s.content_id
 WHERE s.content_id IS NOT NULL
-  AND s.matched_at IS NULL
-  AND s.status <> 'published'
+  AND s.matched_at IS NULL     -- единственная idempotency guard; status='published' auto-слоты тоже кандидаты для backup-подтверждения
   AND s.slot_date BETWEEN (fp.post_ts::date - $WINDOW * interval '1 day')::date
                       AND (fp.post_ts::date + $WINDOW * interval '1 day')::date
 LIMIT $BATCH;
 ```
+
+**Замечание про auto-слоты со status='published':** для них matcher тоже работает (backup-подтверждение URL и факта публикации, если auto-pipeline проставил `status='published'` но `matched_at` пуст). UPDATE при этом не меняет `status` (уже published) — только заполняет `matched_post_id/url/at/confidence`. Это критично для статистики «manual_unconfirmed» и evidence-trail для admin'а.
 
 **Шаг 2 — match score** (для каждой пары post×slot):
 
@@ -321,8 +322,9 @@ function normalizeText(s) {
 **Шаг 4 — UPDATE** (idempotent guard):
 
 ```sql
+-- Заполняем matched_* всегда; status переводим в 'published' только если ещё не published.
 UPDATE validator_schedule_slots
-SET status = 'published',
+SET status = CASE WHEN status <> 'published' THEN 'published'::slot_status ELSE status END,
     matched_post_id = $post_id,
     matched_post_url = $url,
     matched_at = now(),
@@ -330,11 +332,10 @@ SET status = 'published',
     updated_at = now()
 WHERE id = $slot_id
   AND content_id = $expected_content_id
-  AND matched_at IS NULL
-  AND status <> 'published';
+  AND matched_at IS NULL;        -- единственная idempotency guard
 ```
 
-Сопутствующий UPDATE `validator_content.status='published'` (для consistency `is_published` UI-флага).
+Сопутствующий UPDATE `validator_content.status='published'` (если ещё не published) — для consistency `is_published` UI-флага. Если content уже published, no-op.
 
 ### 7.4 Защита auto-pipeline от manual слотов
 
@@ -439,7 +440,8 @@ WHERE id = $slot_id
 - `matcher_disabled_db_flag_skips_all`.
 - `match_respects_batch_limit`.
 - `match_concurrent_with_toggle_off_idempotent`.
-- `match_skips_already_published_slot`.
+- `match_backfills_matched_on_already_published_auto_slot` — UPDATE заполняет matched_* без смены status.
+- `match_skips_when_matched_at_already_set` — idempotency guard.
 - `match_respects_slot_content_id_guard`.
 
 ### 10.3 Frontend (Vitest)
