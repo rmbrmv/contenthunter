@@ -290,13 +290,23 @@ JOIN account_projects ap ON ap.post_id = fp.post_id
 JOIN validator_schedule_slots s ON s.project_id = ap.project_id
 JOIN validator_content c ON c.id = s.content_id
 WHERE s.content_id IS NOT NULL
-  AND s.matched_at IS NULL     -- единственная idempotency guard; status='published' auto-слоты тоже кандидаты для backup-подтверждения
+  AND s.matched_at IS NULL
+  -- matcher работает для: (a) manual слотов; (b) auto-слотов уже-published (backup-подтверждение).
+  -- Filled auto-слоты не трогаем — это работа auto-pipeline; иначе создадим дубль публикации.
+  AND (s.manual_publish = true OR s.status = 'published')
   AND s.slot_date BETWEEN (fp.post_ts::date - $WINDOW * interval '1 day')::date
                       AND (fp.post_ts::date + $WINDOW * interval '1 day')::date
 LIMIT $BATCH;
 ```
 
-**Замечание про auto-слоты со status='published':** для них matcher тоже работает (backup-подтверждение URL и факта публикации, если auto-pipeline проставил `status='published'` но `matched_at` пуст). UPDATE при этом не меняет `status` (уже published) — только заполняет `matched_post_id/url/at/confidence`. Это критично для статистики «manual_unconfirmed» и evidence-trail для admin'а.
+**Скоп matcher'а по типу слота:**
+
+| `manual_publish` | `status` | Действие matcher'а |
+|:-:|:-:|---|
+| `true` | `filled` | UPDATE: проставить `status='published'` + matched_*. Основной кейс. |
+| `true` | `published` | UPDATE: matched_* (status уже published — не меняем). |
+| `false` | `published` | UPDATE: matched_* (backup-confirmation URL/post evidence для auto). |
+| `false` | `filled` | **Skip.** Auto-pipeline ещё в работе; matcher не должен опередить и сделать дубль. |
 
 **Шаг 2 — match score** (для каждой пары post×slot):
 

@@ -1190,8 +1190,12 @@ const emit = defineEmits<{
 }>()
 
 const isSlotPast = computed(() => {
+  // WP #85 codex P2: сравнение строго по дате (без учёта часов),
+  // чтобы бадж «не найден» не загорался в полночь дня слота.
   if (!props.slot?.slot_date) return false
-  return new Date(props.slot.slot_date) < new Date()
+  const today = new Date()
+  const todayStr = `${today.getFullYear()}-${String(today.getMonth()+1).padStart(2,'0')}-${String(today.getDate()).padStart(2,'0')}`
+  return props.slot.slot_date < todayStr
 })
 
 const matchedConfidencePct = computed(() => {
@@ -1643,13 +1647,16 @@ async function runSlotMatcher(pool, opts = {}) {
       JOIN validator_projects vp ON vp.project = fra.project
     )
     SELECT acp.post_id, acp.caption, acp.url, acp.post_ts, acp.project_id, acp.platform,
-           s.id AS slot_id, s.content_id, s.slot_date,
+           s.id AS slot_id, s.content_id, s.slot_date, s.status, s.manual_publish,
            c.description, c.title
     FROM account_projects acp
     JOIN validator_schedule_slots s ON s.project_id = acp.project_id
     JOIN validator_content c ON c.id = s.content_id
     WHERE s.content_id IS NOT NULL
       AND s.matched_at IS NULL
+      -- WP #85 codex P1: matcher только для manual слотов ИЛИ для уже-published auto
+      -- (backup-confirmation evidence). Не трогаем filled auto-слоты — это работа auto-pipeline.
+      AND (s.manual_publish = true OR s.status = 'published')
       AND s.slot_date BETWEEN (acp.post_ts::date - ($1::int) * interval '1 day')::date
                           AND (acp.post_ts::date + ($1::int) * interval '1 day')::date
     LIMIT $2
