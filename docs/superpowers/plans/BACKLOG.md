@@ -1,5 +1,52 @@
 # Backlog tickets
 
+## 2026-05-19 — YT: `yt_create_menu_not_reached` foreground guard (WP #87)
+
+### ✅ SHIPPED 2026-05-19 PR #79 + hotfix PR #83 (`c836074` + `d02f6ef`)
+
+Триаж сегодняшних YT-фейлов (35/39 created, 97% fail rate, 8 raspberries) показал топ-bug — `yt_create_menu_not_reached` (26) + `yt_editor_not_reached` (7). В 6/6 проверенных UI dump'ах foreground на шаге `yt_6_create_menu` = `com.sec.android.app.launcher` (Samsung лончер), хотя на предыдущем `yt_5_target_profile` = `com.google.android.youtube`. 24/25 fails сопровождаются warning'ом `yt_post_switch_handle_unknown` на шаге target_profile.
+
+**Root cause (двухслойный):**
+
+1. `account_switcher.py:100 'plus_button': {'coords': (540, 2320), ...}` — попадало в Samsung navigation HOME (y=2317). При промахе `tap_element` fallback тапал по HOME → YT в фон → drift в лончер.
+2. `tap_element(['Создать', 'Create'])` всегда промахивался — реальный `content-desc` YT FAB на этом устройстве/версии — **«Создание видео»** (взято из live UI dump task 8381, bounds=[432,2070][648,2205], центр (540, 2137)).
+
+**Что сделано:**
+
+PR #79 (`feat/yt-create-menu-fg-guard`, merged 13:18 UTC):
+- **Layer A** — координата `(540, 2320)` → `(540, 2240)` (наполовину фикс, см. ниже).
+- **Layer B** — при `strict_verify` промах `tap_element` → `_yt_ensure_foreground` retry до coord-fallback. Если всё-таки fallback — warning event `yt_plus_button_element_missing_fallback`.
+- **Layer C** — после tap'а проверяем foreground; drift → recovery + retap, или fail-fast с новым `error_code='yt_create_menu_app_not_foregrounded'`.
+- **Layer D (kill-switch)** — env `YT_CREATE_MENU_GUARD_ENABLED=0` откатывает Layer B/C.
+- IG/TT (`strict_verify=False`) — поведение не меняется (regression-guard test).
+- 10 commits TDD-style, 23 unit-теста, codex review 0 P1.
+
+Hotfix PR #83 (`feat/wp87-hotfix-yt-plus-coords-desc`, merged 16:02 UTC):
+- Layer A coord: `(540, 2240)` → `(540, 2137)` (live UI dump bounds.center).
+- `desc`: `['Создать', 'Create']` → `['Создание видео', 'Create a video', 'Создать', 'Create']`.
+- 11 unit-тестов обновлены, codex review 0 P1.
+- **Why hotfix:** PR #79 был наполовину фиксом — координата (540, 2240) тоже мимо (gap между YT bottom-nav и system navbar). Урок — для UI-координат сверять с `bounds.center` из реального dump'а, не вычислять по скриншоту.
+
+**Validation (после hotfix deploy, re-queue 72 задач):**
+
+| status | n |
+|---|---|
+| failed | 18 |
+| running | 10 |
+| pending | 6 |
+| **awaiting_url** | **1** (первый успех публикации) |
+
+`yt_create_menu_not_reached` **исчез из failed** — мы доходим до Create-меню. Топ failed теперь:
+- `yt_editor_not_reached` (15) — **другая стадия** post-create-menu (Layer 1 пропускает tap через `yt_create_menu_absent_skip_tap`, потом editor verify падает). Это территория [[project_yt_editor_upload_timeout_shipped]] + WP #88 backlog.
+- `yt_app_not_foregrounded` (1) — наш Layer C сработал штатно: drift detected, recovery не помог, fail-fast.
+
+### Открытые follow-up'ы
+
+- **WP #88** (Бэклог) — «YT Layer 1 strict_verify: ужесточить substring → exact-match детектор» — стал актуальнее с появлением `yt_editor_not_reached` как нового топа.
+- Tail остатки: `yt_picker_target_absent` (1), `yt_accounts_btn_missing_postmortem` (1) — единичные, не открывать пока без growth.
+
+---
+
 ## 2026-05-19 — IG: ig_app_launch_failed stale-uiautomator (WP #105)
 
 ### ✅ SHIPPED 2026-05-19 PR #76 (`f480219`)
