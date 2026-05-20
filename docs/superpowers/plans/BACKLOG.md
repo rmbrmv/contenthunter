@@ -1,5 +1,25 @@
 # Backlog tickets
 
+## 2026-05-20 — TT: переключение аккаунта тапает аватарку со Stories (WP #112)
+
+### ✅ SHIPPED 2026-05-20 PR #85 (`8280c6b`, delivery-contenthunter main)
+
+Триаж TT-фейлов за 2026-05-20 (после исключения сетевой adb-проблемы): топ-1 = `tt_account_sheet_closed_before_parse` **10/27 (37%)**, ×3 к следующему бакету (`tt_account_not_in_list` 3, `tt_upload_confirmation_timeout` 3, `tt_post_switch_verify_unrecoverable` 3, `tt_profile_tab_broken` 3, хвост по 1). Воспроизводится на 7/10 задачах бакета — разные устройства (RFGYC31P*, RF8Y*) и проекты (ClickPay/Forsal/Art Estate) → системно. Скринкаст task 8528/8702: переключатель аккаунтов не открывается, вместо него открывается просмотрщик Stories.
+
+**Root cause (`account_switcher.py`):** TikTok выкатил Stories на аватарку профиля; узел аватарки несёт `content-desc="storyringhas_consumed_story_true"`. В строке есть `_`, поэтому `_looks_like_username()` (правило «токен с разделителем = username») принимал её за username, и `_tap_profile_header()` тапал центр аватарки (540,337) — открывая Stories вместо переключателя. Настоящий username (`clickpay_world`, y≈503, ниже аватарки) не достигался, т.к. аватарка идёт в dump'е раньше. Текст ошибки врал про «залогинен только один аккаунт» (аккаунты есть).
+
+**Что сделано:**
+
+- `_looks_like_username` отвергает `_TT_STORY_RING_MARKERS` (closed-set `storyringhas_consumed_story_true`/`_false`) → header-tap доходит до настоящего username'а. Узкий set (codex P3) — легитимные хендли с похожим префиксом не трогает.
+- Остаток в том же PR: `_detect_tt_stories_viewer` распознаёт экран Stories ещё и по счётчику зрителей (`_TT_STORIES_VIEWERS_RE`, owner-story/LIVE-specific) — крестик-иконка не матчила `Закрыть`/`Close`, из-за чего recovery (BACK→меню) не срабатывал. + честный текст ошибки.
+- Тесты: +4 (storyring blocklist, header-tap target, owner-view X-icon detect, viewers standalone). TT-наборы зелёные (100 passed), 0 регрессий (12 pre-existing env/DB-фейлов идентичны на чистом дереве). Codex: 3 раунда, 0 P1/P2.
+
+**Деплой:** path-scoped — обновлён только `account_switcher.py` в `/root/.openclaw/workspace-genri/autowarm/` (чужой WIP `server.js`/`changelog.md` соседней сессии не тронут). **PM2 restart не нужен** — публикатор запускается per-task (`server.js spawn python3`), следующая задача подхватывает код; рестарт загрузил бы чужой uncommitted `server.js`. 0 задач выполнялось в момент деплоя.
+
+**Risk:** низкий — изменение бьёт лишь TT account-switch, восстанавливает исходный замысел (`profile_title_header_y_range` уже был (120,700) под username под аватаркой). **Verification PENDING:** подтверждение на TT-задачах, созданных после деплоя (`tt_account_sheet_closed_before_parse` из-за Stories не должен появляться).
+
+Триаж: `docs/evidence/2026-05-20-tt-publish-fails-triage.md` (+ детальный в autowarm: `evidence/publish-triage/tt_account_sheet_closed_before_parse-20260520-task8528.md`). OpenProject WP #112 → Тестирование (переход в «Готово» после подтверждения на live-задачах).
+
 ## 2026-05-20 — YT: `yt_editor_not_reached` — guard фейлит на экране обрезки (WP #113)
 
 ### ✅ SHIPPED 2026-05-20 (`de02f17`, delivery-contenthunter main)
