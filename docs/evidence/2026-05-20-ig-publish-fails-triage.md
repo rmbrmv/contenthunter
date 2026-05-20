@@ -99,3 +99,7 @@ IG переименовал главную активность (`MainTabActivit
 - Screencast 8604: `https://save.gengo.io/autowarm/screenrecords/instagram/task8604_fail_screenrec_8604_1779261054.mp4`
 - Screencast 8602: `https://save.gengo.io/autowarm/screenrecords/instagram/task8602_fail_screenrec_8602_1779260917.mp4`
 - Примеры задач: 8604, 8602, 8597, 8594, 8590, 8529 (2026-05-20); 6822, 6819, 6801, 6799, 6798, 6763 (2026-05-18).
+
+## ✅ SHIPPED 2026-05-20
+
+Фикс задеплоен в тот же день — прод main коммит `7a66a0a` (delivery-contenthunter). `publisher_instagram.py`: `SUCCESS_ACT_TOKENS` += `InstagramMainActivity` под kill-switch `IG_MAIN_ACTIVITY_SUCCESS_ENABLED` (default true) + основной wait-loop переведён на общий `SUCCESS_ACT_TOKENS`. 22/22 IG-теста зелёные, codex review 0 issues, PM2 restart не нужен (per-task spawn). WP #73 → Тестирование. Подробности — `docs/superpowers/plans/BACKLOG.md`.

@@ -1,5 +1,28 @@
 # Backlog tickets
 
+## 2026-05-20 — IG: `ig_share_tap_no_progress` ложно-негатив (WP #73)
+
+### ✅ SHIPPED 2026-05-20 (`7a66a0a`, delivery-contenthunter main)
+
+Триаж IG-фейлов за окно 2026-05-14..05-20 (после исключения сетевой adb-проблемы): топ-1 = `ig_share_tap_no_progress` (24/нед, 13 аккаунтов / 12 устройств → код-баг). Оказался **ложно-негативом**: Reel реально публикуется, но детектор успеха не распознаёт. Скринкасты task 8604 (`estate_m.ivanov`) и 8602 (`expertestate1`) — разные аккаунты/устройства — в момент «фейла» показывают опубликованный Reel в профиле с кнопками «Статистика»/«Продвигать». 16/18 свежих задач: post-share `topResumedActivity = InstagramMainActivity`.
+
+**Root cause (`publisher_instagram.py`):** success-детектор искал устаревшую активность `MainTabActivity` в двух местах — `SUCCESS_ACT_TOKENS` (pre-Tier1 probe) и основной wait-loop. Текущий билд IG репортит post-publish активность как `InstagramMainActivity` (подстрока `MainTabActivity` в неё не входит) → probe не выставлял `skip_tier1` → Tier-2 ladder ретапил «Поделиться» по stale editor-дампу uiautomator → ложный фейл. Прежняя WP-гипотеза трактовала `InstagramMainActivity` как «share улетел в feed = провал» — опровергнута скринкастами (это успех).
+
+**Что сделано:**
+
+- `SUCCESS_ACT_TOKENS` += `InstagramMainActivity` под kill-switch `IG_MAIN_ACTIVITY_SUCCESS_ENABLED` (default true; `false` = revert).
+- Основной wait-loop сверяется с общим `SUCCESS_ACT_TOKENS` вместо литерала `MainTabActivity` (единый источник истины с probe — иначе фейл лишь переименовывался в `ig_upload_confirmation_timeout`). + `import os`.
+- Тесты: +2 новых (regression по 8604/8602 + kill-switch), обновлены 5 Tier-1 + 2 diag (дефолт стаба больше не InstagramMainActivity), застаблена URL-capture цепочка. **22/22 IG-теста зелёные**; 358 publisher-тестов зелёные (3 fail pre-existing, падают и на проде).
+- Codex review: 0 issues.
+
+**Деплой:** path-scoped коммит `7a66a0a` (только `publisher_instagram.py` + тесты; чужой WIP server.js/changelog.md не тронут), auto-push. **PM2 restart не нужен** — публикатор запускается per-task (`server.js spawn python3 publisher.py`), следующая задача подхватывает код.
+
+**Risk:** `InstagramMainActivity` — общая главная активность; теоретически возможен ложно-позитив при аварийном выходе на home без публикации. Митигация: probe срабатывает только ПОСЛЕ Share-tap, и есть kill-switch. Наблюдение ~сутки: `ig_share_tap_no_progress` должен пойти вниз.
+
+Триаж: `docs/evidence/2026-05-20-ig-publish-fails-triage.md`. Зеркало WP #82 (TT false-negative). OpenProject WP #73 → Тестирование (comments #324/#326).
+
+---
+
 ## 2026-05-19 — YT: Layer 1 strict_verify substring → exact-match (WP #88)
 
 ### ✅ SHIPPED 2026-05-19 PR #81 (`a519bca`)
