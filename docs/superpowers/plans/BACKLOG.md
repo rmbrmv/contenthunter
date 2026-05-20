@@ -1,5 +1,27 @@
 # Backlog tickets
 
+## 2026-05-20 — Ручная выкладка: операторская очередь готовых уникализаций (WP #107)
+
+### ✅ Code-complete + MERGED 2026-05-20 — validator-contenthunter#18 + delivery-contenthunter#86 (pending deploy by Данил)
+
+Продолжение WP #85. Операторский раздел «Выкладка → Ручная выкладка» (admin-only): для слотов, отмеченных на ручную выкладку, автоматически формируется очередь готовых пар «одно уник.видео × один аккаунт × публикация».
+
+**Архитектура (Вариант A):** новая таблица `validator_manual_publish_queue` в openclaw, **физически отделена от `publish_queue`** — `dispatchPublishQueue` берёт строго `publish_queue.status='pending'`, поэтому manual-строки никогда не уедут на устройство автоматом. Гранулярность = 1 строка на (unic_result × аккаунт × платформа). Наполняет autowarm-крон `assignManualPublishQueue` (сиблинг `assignUnicResultsToQueue`, переиспользует вынесенные в `queue_pairing.js` резолверы scheme→pack→device→accounts). Auto-путь по-прежнему пропускает manual-слоты (guard WP #85 не тронут).
+
+**Статусы:** `operator_status` ∈ queued|in_progress|published (text+CHECK). Отмена — через `cancelled_at IS NOT NULL` (не значение статуса); partial unique index + populator NOT EXISTS фильтруют `cancelled_at IS NULL` → cancelled-строка не блокирует пере-постановку после toggle ON→OFF→ON. Переходы: take/return/publish/rework (409 на недопустимый). «Отметить выкладку» открывает модалку с красным баннером, требует дата-время(МСК)+ссылку (422 если пусто), проставляет `matched_post_url` на слоте если пусто (петля с матчером WP #85). Toggle-OFF гасит queued-строки слота.
+
+**Frontend:** `/manual-publish` (паттерн таблицы из `UsersManagement.vue`: sticky thead, мультисортировка Ctrl, фильтры по колонкам+сброс, группировка по телефону) + `PublicationCard.vue` (Teleport как `SchemeDetailModal`; копирование по клику, плеер, скачивание, режим подтверждения) + composable `useManualPublishTable.ts` + utils clipboard/accountUrl/datetimeMsk (МСК=UTC+3) + сайдбар-секция «Выкладка».
+
+**Деплой (за Данилом, порядок):** validator `alembic upgrade head` (миграция 006, создаёт таблицу) → autowarm `pm2 restart autowarm` → validator `npm run build`. Kill-switch ENV `MANUAL_QUEUE_POPULATE_ENABLED=false`.
+
+**Тесты:** validator pytest 167 (новый `test_manual_publish_queue` 6/6; +2 pre-existing Anthropic-mock фейла, не наши); autowarm `npm test` 0 fail (+8 новых); frontend vitest 6/6. Codex review спеки+плана (0 P1). Финальное холистическое ревью (opus): READY. Smoke по реальной БД: populator SELECT-join возвращает строки (manual-слоты 21244/21246), `ON CONFLICT ... WHERE` partial-index валиден (BEGIN/ROLLBACK).
+
+**Gotcha (пойман live-DB тестом):** `GET /queue` без фильтра падал `asyncpg AmbiguousParameterError` на `:status IS NULL` → фикс `CAST(:status AS text)` (тот же класс, что `pipeline_reversal.py` `CAST(:keep_slot_id AS INTEGER)`). Правило: bind-параметр в `IS NULL`/`IS DISTINCT FROM` контексте требует явного CAST; node-фейки это не ловят.
+
+**Follow-up (не блокер):** `rework` не откатывает `matched_post_url` на слоте (по спеке — «оставляем как историю»); edge publish→rework→republish может оставить старую ссылку (`mark_published` guard `WHERE matched_post_url IS NULL`). Решить позже, нужно ли чистить operator-sourced matched_*.
+
+Spec/plan: `docs/superpowers/specs/2026-05-20-wp107-manual-publish-queue-design.md` + `docs/superpowers/plans/2026-05-20-wp107-manual-publish-queue.md`. Память: `project_wp107_manual_publish_queue`. OpenProject WP #107 → Тестирование (после деплоя+проверки → Готово).
+
 ## 2026-05-20 — TT: переключение аккаунта тапает аватарку со Stories (WP #112)
 
 ### ✅ SHIPPED 2026-05-20 PR #85 (`8280c6b`, delivery-contenthunter main)
