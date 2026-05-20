@@ -1,5 +1,28 @@
 # Backlog tickets
 
+## 2026-05-20 — YT: `yt_editor_not_reached` — guard фейлит на экране обрезки (WP #113)
+
+### ✅ SHIPPED 2026-05-20 (`de02f17`, delivery-contenthunter main)
+
+Триаж YT-фейлов за 2026-05-20 (после исключения сетевой adb-проблемы): доминанта = `yt_editor_not_reached` **62/74 (84%)**, success-rate ≈ 2.6%. Свежая регрессия: editor_not_reached 0 (≤17 мая) → 6 (18) → 85 (19) → 62 (20), совпадает с серией YT-правок (WP #80/#87/#88). Системно: 51 устройство, 8 raspberry, разные аккаунты/проекты → код-баг. Скринкаст task 8551 (`@oraclevisionn`): аккаунт переключён, бот доходит до экрана обрезки Shorts (`CreationModesActivity`, «Кадрировать»/«Далее») и зависает — «Далее» не нажата.
+
+**Root cause (`publisher_youtube.py`):** коммит `0c01f7e` (18 мая, WP #80 Layer 3) добавил fail-fast `_verify_yt_editor_reached()` **перед** editor-loop. Guard признаёт редактор только по EditText title/desc, тексту «Добавьте название»/«Загрузить» или активити Upload/Share/Compose. Экран обрезки `CreationModesActivity` не подходит: его нет в allowlist, а UIAutomator слеп на video-surface (видео анимирует → отдаётся стейл home-feed, `edit_fields_count=0`) → `return False` → `yt_editor_not_reached`, **не доходя** до editor-loop, который уже умеет тапать «Далее» (933,2103). Доказательство рабочести loop: до guard'а task 5855 (14 мая) тем же Path B доходил до «Загрузить» на шаге 2.
+
+**Что сделано:**
+
+- В `_verify_yt_editor_reached()` `CreationModesActivity` теперь считается on-track (`return True`) → запускается проверенный editor-loop, который проходит «Далее» → редактор → «Загрузить». По сути восстановлено поведение, работавшее до 18 мая.
+- Kill-switch `YT_VERIFY_CREATIONMODES_ONTRACK=0` → старое поведение (fail-fast).
+- Тесты: +2 (on-track pass + kill-switch revert), **9/9 YT editor-guard зелёные**. Изменения только в `publisher_youtube.py` (IG/TT не тронуты).
+- Codex review: без регрессий.
+
+**Деплой:** path-scoped cherry-pick `de02f17` поверх параллельного IG-фикса `7a66a0a` (только `publisher_youtube.py` + тест; чужой WIP `server.js`/`changelog.md` не тронут), auto-push. **PM2 restart не нужен** — публикатор запускается per-task (`server.js spawn python3 publisher.py <id>`), следующая задача подхватывает код. PR #84 закрыт (влит в main).
+
+**Risk:** низкий — изменение аддитивное, бьёт лишь YT, восстанавливает доказанно работавшее поведение, kill-switch наготове. Worst case (если «Далее» не проходит): bounded `yt_editor_upload_timeout` (существующий путь). **Verification PENDING:** YT публикуется пачкой 05:00–12:00 UTC; сегодняшняя прошла до выкатки → подтверждение на утренней пачке 21 мая (`yt_editor_not_reached` должен упасть, появиться info `yt_verify_creationmodes_ontrack`, вырасти `done`).
+
+Триаж: `docs/evidence/2026-05-20-yt-publish-fails-triage.md`. Класс desync как в WP #105 (uiautomator слеп на анимирующих surface). OpenProject WP #113 → В разработке.
+
+---
+
 ## 2026-05-20 — IG: `ig_share_tap_no_progress` ложно-негатив (WP #73)
 
 ### ✅ SHIPPED 2026-05-20 (`7a66a0a`, delivery-contenthunter main)
