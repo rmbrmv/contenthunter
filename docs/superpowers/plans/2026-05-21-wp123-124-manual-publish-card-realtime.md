@@ -176,6 +176,22 @@ test('takeGroup by another operator → 409 with taken_by name', async () => {
   );
 });
 
+test('takeGroup does NOT claim queued rows if another operator holds part of the pack', async () => {
+  await setup();
+  // USER_A holds ONE platform of the pack (simulates per-id take / partial leftover state)
+  await pool.query(`UPDATE validator_manual_publish_queue
+    SET operator_status='in_progress', taken_by_id=$2, taken_at=now() WHERE id=$1`, [Q_IG, USER_A]);
+  // USER_B tries to take the pack → must 409 AND must NOT claim the still-queued rows
+  await assert.rejects(
+    () => mpq.takeGroup(pool, RESULT, USER_B),
+    (e) => { assert.equal(e.httpStatus, 409); assert.equal(e.taken_by, 'ksenia'); return true; }
+  );
+  const { rows } = await pool.query(
+    `SELECT operator_status, taken_by_id FROM validator_manual_publish_queue WHERE id = ANY($1)`, [[Q_TT, Q_YT]]);
+  assert.ok(rows.every(r => r.operator_status === 'queued' && r.taken_by_id === null),
+    'queued rows must stay unclaimed — no split ownership');
+});
+
 test('returnGroup reverts only in_progress rows, keeps published', async () => {
   await setup();
   await mpq.takeGroup(pool, RESULT, USER_A);
@@ -208,26 +224,36 @@ async function listGroup(pool, unicResultId) {
 }
 
 // WP #124: atomically claim ALL queued rows of a pack for one operator.
-// Concurrency guard: WHERE operator_status='queued' AND taken_by_id IS NULL.
-// If nothing claimed and someone already holds it → 409 carrying their name.
+// Pack-level ownership guard (codex P1): claim only if NO OTHER operator already
+// holds any row of the group (NOT EXISTS) — otherwise a second operator could grab
+// the still-queued rows of a partially-held pack (split ownership). If blocked → 409
+// with the holder's name. Re-entrant: the SAME operator may claim leftover queued
+// rows (e.g. a freshly populated platform) without error.
 async function takeGroup(pool, unicResultId, userId) {
   const { rows } = await pool.query(`
     UPDATE validator_manual_publish_queue
     SET operator_status='in_progress', taken_by_id=$2, taken_at=now(), updated_at=now()
     WHERE unic_result_id=$1 AND operator_status='queued' AND cancelled_at IS NULL
-      AND taken_by_id IS NULL
+      AND NOT EXISTS (
+        SELECT 1 FROM validator_manual_publish_queue h
+        WHERE h.unic_result_id=$1 AND h.cancelled_at IS NULL
+          AND h.taken_by_id IS NOT NULL AND h.taken_by_id <> $2
+      )
     RETURNING id`, [unicResultId, userId]);
   if (!rows.length) {
     const { rows: cur } = await pool.query(`
-      SELECT au.username AS taken_by
+      SELECT q.taken_by_id, au.username AS taken_by
       FROM validator_manual_publish_queue q
       LEFT JOIN autowarm_users au ON au.id = q.taken_by_id
       WHERE q.unic_result_id=$1 AND q.cancelled_at IS NULL AND q.taken_by_id IS NOT NULL
       LIMIT 1`, [unicResultId]);
-    if (cur.length) {
+    if (cur.length && cur[0].taken_by_id !== userId) {
       const e = httpErr(409, 'Задача уже у кого-то в работе');
       e.taken_by = cur[0].taken_by;
       throw e;
+    }
+    if (cur.length && cur[0].taken_by_id === userId) {
+      return listGroup(pool, unicResultId); // re-entrant: already ours, nothing left queued
     }
     throw httpErr(404, 'Нет строк для взятия в работу');
   }
@@ -547,11 +573,10 @@ async function mpqLoad() {
   mpqRows = data.items || [];
   mpqRender();
   if (mpqCardUnic != null) mpqRenderCard();
-  mpqStartPoll();
 }
 ```
 
-(Поллинг `mpqStartPoll`/`mpqPoll` добавляется в Task 4.)
+(Поллинг `mpqStartPoll`/`mpqPoll` добавляется в Task 4 — в этой задаче `mpqLoad` его НЕ вызывает, чтобы Task 3 не падал с `ReferenceError` до Task 4. Codex P2.)
 
 - [ ] **Step 2: Сделать карточку на весь экран**
 
@@ -619,6 +644,23 @@ async function mpqPoll() {
   if (mpqCardUnic != null && !mpqCardHasUnsavedInput()) mpqRenderCard();
 }
 ```
+
+- [ ] **Step 1b: Запустить поллинг из `mpqLoad`**
+
+Теперь, когда `mpqStartPoll` определён, добавить его вызов в конец `mpqLoad` (в Task 3 он был намеренно опущён). Заменить в `mpqLoad`:
+
+```javascript
+  if (mpqCardUnic != null) mpqRenderCard();
+}
+```
+на:
+```javascript
+  if (mpqCardUnic != null) mpqRenderCard();
+  mpqStartPoll();
+}
+```
+
+(`mpqStartPoll` идемпотентен — повторные вызовы `mpqLoad` не плодят таймеры.)
 
 - [ ] **Step 2: Live-smoke (реалтайм + защита «уже в работе»)**
 
