@@ -1,5 +1,23 @@
 # Backlog tickets
 
+## 2026-05-21 — Валидатор: убрать разделы «Менеджер» и «Продюсер» (WP #71)
+
+### ✅ SHIPPED+DEPLOYED 2026-05-21 — validator-contenthunter#21 (merge `c14bbeb`)
+
+Запрос Анастасии (описание пустое, scope уточнён с Данилом): полностью убрать из фронтенда валидатора разделы «Менеджер» и «Продюсер» со всеми подразделами — у всех ролей, **включая админа**. Клиент не трогать. Полный цикл superpowers: brainstorm→spec→plan (codex 0 P1 на обоих)→subagent-driven (Tasks 1-7: имплементеры по группам + spec-ревью + codex на полном диффе + контроллерская верификация).
+
+**Решения (с Данилом):** глубина = «интерфейс целиком» (меню + маршруты + страницы + эксклюзивные компоненты); бэкенд и данные НЕ трогаем; доступ = убрать у всех включая админа, роли `manager`/`producer` в авторизации/БД **СОХРАНИТЬ** (можно вернуть).
+
+**Архитектура (только фронтенд, `validator-contenthunter/frontend`):** удалены 11 маршрутов manager/producer из `router/index.ts` + добавлен catch-all `/:pathMatch(.*)* → /dashboard` (catch-all не было; старые/закладочные ссылки давали бы пустую страницу); убраны секции меню в `AppSidebar.vue` (десктоп + мобайл); post-login редиректы ролей manager/producer → `/dashboard` (`LoginPage.vue` ×2 + `TgCallbackPage.vue`; раньше вели на удалённые `/manager`,`/producer` = 404); подчищены title-мэппинги в `AppHeader.vue`; удалены 11 страниц (`pages/manager/*`, `pages/producer/*`) + 3 эксклюзивных компонента (`ClientGrid`, `FuelGauge`, `WeeklyGrid`). Сохранены `isManager`/`isProducer` в `stores/auth.ts`, общие компоненты (`PlatformIcon`/`DropZone`/`UploadProgress`), весь бэкенд. Guard-тест `router/__tests__/routes.spec.ts` (нет manager/producer-маршрутов + есть catch-all). Админ инспектирует клиента через переключатель проектов на Планировщике (`/dashboard` имеет roles client/manager/producer/admin) — функция удалённого `ClientView` дублируется.
+
+**Деплой:** `npm run build` → postbuild авто-копирует в `/var/www/validator` (= прод-деплой; для проверки без деплоя — `npx vue-tsc --noEmit`). PR #21 смержен в main, локальный main синхронизирован. В новом бандле нет чанков/ссылок manager/producer; старые хеш-чанки в `/var/www/validator/assets` оставлены намеренно (cp без удаления → защищает юзеров со stale index до hard-reload).
+
+**Тесты/ревью:** vue-tsc чист; vitest 18/18. Codex на полном диффе дал 2×P1 — **оба ложные** (codex видит только дифф): «WeeklyGrid нужен планировщику» (клиентский dashboard его НЕ импортирует, vue-tsc чист) и «manager/producer не авторизованы на /dashboard» (route имеет эти роли, строка вне диффа). Опровергнуты grep'ом + чтением строки 12 роутера.
+
+**Уроки:** (1) валидатор-фронт `npm run test` имеет ПРЕД-СУЩЕСТВУЮЩИЙ красный сюйт `slotStatus.test.ts` (импортирует `node:test`, несовместим с бандлером vitest; есть и на main) — это baseline-шум, НЕ регрессия. (2) codex-ревью на удалениях склонен к diff-blindness false-positive про «осиротевшие» зависимости — сверять с vue-tsc + grep по всему `src`, не принимать вслепую.
+
+Spec/plan: `docs/superpowers/specs|plans/2026-05-21-wp71-remove-manager-producer-sections*`. Память: `project_wp71_remove_manager_producer`. OpenProject WP #71 → **Тестирование** (ждёт браузер-приёмки Данила → Готово).
+
 ## 2026-05-21 — Ручная выкладка: группировка по видео + реалтайм + guard автопубликации (WP #123/#124/#125)
 
 ### ✅ SHIPPED+DEPLOYED 2026-05-21 — delivery-contenthunter#95 (#125, merge `f421811`) + #96 (#123/#124, merge `861f63f`)
