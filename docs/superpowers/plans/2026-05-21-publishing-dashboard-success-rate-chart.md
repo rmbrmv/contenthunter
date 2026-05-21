@@ -492,17 +492,21 @@ git commit -m "feat(dashboard): assembleSeries — series rows to aligned {rate,
 
 - [ ] **Step 1: Failing-тесты**
 
-Добавить `isDashboardTimeseriesEnabled` в импорт. Новый describe:
+Добавить `isDashboardTimeseriesEnabled` в импорт и `after` в require `node:test` (вверху файла строка 13 → `const { test, describe, after } = require('node:test');`). Новый describe:
 
 ```js
 const { isDashboardTimeseriesEnabled } = require('../server.js');
 
 describe('isDashboardTimeseriesEnabled — env kill-switch (default on)', () => {
   const orig = process.env.DASHBOARD_TIMESERIES_ENABLED;
+  after(() => {
+    // Восстановить env ПОСЛЕ тестов (иначе протечёт в другие тесты процесса).
+    if (orig === undefined) delete process.env.DASHBOARD_TIMESERIES_ENABLED;
+    else process.env.DASHBOARD_TIMESERIES_ENABLED = orig;
+  });
   test('unset → true', () => { delete process.env.DASHBOARD_TIMESERIES_ENABLED; assert.equal(isDashboardTimeseriesEnabled(), true); });
   test('"0" → false', () => { process.env.DASHBOARD_TIMESERIES_ENABLED = '0'; assert.equal(isDashboardTimeseriesEnabled(), false); });
   test('"1" → true', () => { process.env.DASHBOARD_TIMESERIES_ENABLED = '1'; assert.equal(isDashboardTimeseriesEnabled(), true); });
-  process.env.DASHBOARD_TIMESERIES_ENABLED = orig;
 });
 ```
 
@@ -828,7 +832,7 @@ const DASH_SERIES_META = [
   ['tiktok',    'TikTok',    '#14b8a6'],
   ['youtube',   'YouTube',   '#ef4444'],
 ];
-const DASH_LABELS_MAX = 24; // порог авто-скрытия меток (видимых точек суммарно)
+const DASH_LABELS_MAX_BUCKETS = 14; // макс. число бакетов (точек по оси X), при котором метки видны
 
 function _dashEsc(s) {
   return String(s).replace(/[&<>"']/g, c => ({ '&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;' }[c]));
@@ -981,9 +985,10 @@ function renderDashboardChart(series) {
     };
   });
 
-  const totalPoints = datasets.reduce((n, ds) => n + ds.data.filter(v => v !== null).length, 0);
   const wantLabels = document.getElementById('dash-labels-toggle')?.checked ?? true;
-  const showLabels = wantLabels && totalPoints <= DASH_LABELS_MAX;
+  // Читаемость определяется плотностью по оси X (число бакетов), не суммой точек:
+  // Неделя(7)/Последние-3-дня(3)/короткий custom → метки видны; Сегодня/Вчера(часы, 24)/Месяц(~30) → скрыты, опора на тултип.
+  const showLabels = wantLabels && series.buckets.length <= DASH_LABELS_MAX_BUCKETS;
 
   if (_dashChart) _dashChart.destroy();
   _dashChart = new Chart(canvas.getContext('2d'), {
@@ -1022,10 +1027,10 @@ function renderDashboardChart(series) {
 - [ ] **Step 4: Smoke — график живой**
 
 Открыть дашборд (через изолированный dev-сервер или после деплоя в Task 12):
-- «Неделя» → линия из 7 точек по дням, 4 линии (Все/IG/TT/YT), метки `%` видны, ось Y `0–100%`.
-- «Сегодня»/«Вчера» → бакеты по часам.
+- «Неделя» → линия из 7 точек по дням, 4 линии (Все/IG/TT/YT), метки `%` видны (7 ≤ 14), ось Y `0–100%`.
+- «Сегодня»/«Вчера» → бакеты по часам (24 точки > 14 → метки авто-скрыты, опора на тултип).
 - Наведение → тултип со всеми линиями `XX% (done из denom)`.
-- Клик по легенде прячет линию. Месяц (много точек) → метки авто-скрылись; тумблер «Значения на графике» включает/выключает.
+- Клик по легенде прячет линию. Месяц (~30 точек > 14) → метки авто-скрыты; тумблер «Значения на графике» форсит вкл./выкл.
 - Смена фильтра проект/платформа/аккаунт/пак → и плитки, и график пересчитываются; «Сбросить» очищает.
 
 - [ ] **Step 5: Commit**
