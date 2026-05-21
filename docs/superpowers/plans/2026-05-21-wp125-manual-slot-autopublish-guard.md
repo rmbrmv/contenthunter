@@ -114,7 +114,7 @@ test('slotIsEffectivelyManual: null slotId → false', async () => {
 
 - [ ] **Step 2: Запустить тест — убедиться, что падает**
 
-Run: `node --test test_dispatch_manual_guard.test.js`
+Run: `node --test --test-force-exit test_dispatch_manual_guard.test.js`
 Expected: FAIL — `slotIsEffectivelyManual is not a function` (helper ещё не существует).
 
 - [ ] **Step 3: Реализовать helper в `client_manual_filter.js`**
@@ -145,7 +145,7 @@ module.exports = { clientManualEnabled, effectiveManualSql, slotIsEffectivelyMan
 
 - [ ] **Step 4: Запустить тест — убедиться, что проходит**
 
-Run: `node --test test_dispatch_manual_guard.test.js`
+Run: `node --test --test-force-exit test_dispatch_manual_guard.test.js`
 Expected: PASS (5 helper-тестов зелёные).
 
 - [ ] **Step 5: Commit**
@@ -248,7 +248,7 @@ after(async () => {
 
 - [ ] **Step 2: Запустить — убедиться, что новый тест падает**
 
-Run: `node --test test_dispatch_manual_guard.test.js`
+Run: `node --test --test-force-exit test_dispatch_manual_guard.test.js`
 Expected: тест `cancels pending row for a manual slot` FAIL — guard пока не знает про manual, строка получит `running` (claim), `skip_reason !== 'manual_publish'`.
 
 - [ ] **Step 3: Импортировать helper в `server.js`**
@@ -291,7 +291,7 @@ const { effectiveManualSql, slotIsEffectivelyManual } = require('./client_manual
 
 - [ ] **Step 5: Запустить — убедиться, что все тесты проходят**
 
-Run: `node --test test_dispatch_manual_guard.test.js`
+Run: `node --test --test-force-exit test_dispatch_manual_guard.test.js`
 Expected: PASS (7 тестов: 5 helper + 2 guard).
 
 - [ ] **Step 6: Анти-регрессия — прогнать соседние guard/queue тесты**
@@ -382,7 +382,7 @@ git commit -m "chore(wp125): one-time idempotent cleanup of pending manual publi
 
 - [ ] **Step 1: Прогнать весь релевантный тест-сюит**
 
-Run: `node --test test_dispatch_manual_guard.test.js test_client_manual_filter.test.js test_client_manual_publish.test.js`
+Run: `node --test --test-force-exit test_dispatch_manual_guard.test.js test_client_manual_filter.test.js test_client_manual_publish.test.js`
 Expected: все PASS.
 
 - [ ] **Step 2: Code review (superpowers:requesting-code-review) + codex review диффа**

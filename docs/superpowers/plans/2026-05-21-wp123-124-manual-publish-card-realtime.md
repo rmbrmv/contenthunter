@@ -15,7 +15,7 @@
 ## Контекст реализации (проверено в коде/БД на 2026-05-21)
 
 - Грейн строки: 1 на `(unic_result_id × account × platform)`; все платформенные строки одного пака делят общий `unic_result_id` (наполнитель `manual_queue_assign.js` вставляет per-account×platform в цикле по одному `unic_result`).
-- **Миграция НЕ нужна:** `validator_manual_publish_queue` уже имеет колонки `taken_by_id`, `taken_at`, `published_by_id`, `published_at`, `post_url`, `cancelled_at`. `takeItem` сейчас НЕ пишет `taken_by_id` — это и добавляем.
+- **Миграция нужна (FK-fix, не новая колонка):** `validator_manual_publish_queue` уже имеет `taken_by_id`, `taken_at`, `published_by_id`, `published_at`, `post_url`, `cancelled_at`. НО FK `taken_by_id`/`published_by_id` указывал на `validator_users` (наследие валидаторной WP#107), а оператор дашборда — `autowarm_users`. Без перенаправления FK `takeGroup` упадёт на FK-violation. Миграция `migrations/20260521_manual_queue_taken_by_fk_fix.sql` (+rollback) перевешивает FK на `autowarm_users`. Безопасна (0/119 строк с non-NULL значениями, idempotent). Обнаружено имплементером 2026-05-21.
 - `autowarm_users(id, username, role, …)` — для имени оператора join по `taken_by_id`.
 - `manual_publish_queue.js`: `JOINED_SELECT` (стр. 37-49) НЕ выбирает `q.unic_result_id` и `taken_by_id`; `rowToDict` (18-35) их не отдаёт. `takeItem`/`returnItem` (74-92) — per-id. `markPublished`/`reworkItem` (110-144) — per-id, уже годятся для частичной выкладки. `httpErr(status,msg)` (3-5).
 - Endpoints `server.js:5700-5733` (`/api/publishing/manual-queue*`), все под `requireAuth`. Сессия: `req.session.user = {id, username, role}` (server.js:78).
@@ -770,7 +770,7 @@ Run: `git diff main HEAD | ~/.local/bin/codex review -` — применить P
 ## Self-review (выполнено автором плана)
 
 - **Покрытие спека #123:** ключ карточки `unic_result_id` → Task 1 (read) + Task 3 (`mpqCards`); мини-таблица платформ с per-platform handle → `mpqPlatformRowHtml`; копируемая ссылка на уник → `copy('unic_link', …)`; карточка на весь экран → Task 3 Step 2; имя аккаунта → мини-таблица. **#124:** групповой атомарный take + `taken_by_id` → Task 2; 409 «взято оператором XXX» → `takeGroup` + endpoint + `mpqGroupAction`; частичная выкладка → per-platform `publish`/`rework` + `mpqAgg` (`partial`); реалтайм → Task 4 поллинг; не затирать ввод → `mpqCardHasUnsavedInput`.
-- **Миграция:** не нужна — `taken_by_id`/`published_by_id` уже в таблице (проверено в БД). Зафиксировано в «Контексте».
+- **Миграция:** FK-fix `migrations/20260521_manual_queue_taken_by_fk_fix.sql` (перевешивает FK `taken_by_id`/`published_by_id` с `validator_users` на `autowarm_users`). Колонки уже были, но FK был неверный. Безопасна/idempotent; применена к общей БД при разработке. Зафиксировано в «Контексте» и в спеке.
 - **Плейсхолдеры:** нет — весь код приведён (фронт-блок заменяется целиком).
 - **Согласованность:** `takeGroup(pool, unicResultId, userId)` / `returnGroup(pool, unicResultId, userId)` — единые сигнатуры в `manual_publish_queue.js`, endpoint'ах и тестах; ключи `agg_status`/`platforms_label`/`taken_by`/`unic_result_id` согласованы между `mpqCards`, `MPQ_COLS`, рендером и фильтрами; статус `partial` добавлен в `MPQ_STATUS`.
 - **YAGNI:** GET group-endpoint не вводим — карточка собирается из уже загруженных `mpqRows`; per-id `take`/`return` остаются для обратной совместимости, но новый UI их не использует.

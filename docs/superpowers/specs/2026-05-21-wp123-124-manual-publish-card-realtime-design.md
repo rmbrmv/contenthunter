@@ -86,9 +86,9 @@
 ## Схема / миграция
 
 `validator_manual_publish_queue`:
-- **+ `taken_by_user_id INT`** (опц. FK → `autowarm_users(id)`; при удалении пользователя — `ON DELETE SET NULL`).
-- Частичная выкладка ложится на текущий per-`(unic_result×account×platform)` грейн без новых колонок (статус/`post_url`/`published_at` уже per-row).
-- Миграция в `<repo>/migrations/` (правило: код на таблицу = миграция в репе).
+- **Колонки `taken_by_id`/`published_by_id` УЖЕ существуют** (от WP#107) — новых колонок не добавляем. `takeItem` их не писал; начинаем писать `taken_by_id`.
+- **НО нужна миграция-FK-fix:** исходная WP#107-схема указывала FK обеих колонок на `validator_users` (клиентская таблица), а оператор delivery-дашборда — это `autowarm_users`. Без перенаправления FK `takeGroup` упадёт на FK-violation при записи `autowarm_users.id`. Миграция `migrations/20260521_manual_queue_taken_by_fk_fix.sql` (+rollback): `DROP CONSTRAINT … ; ADD … REFERENCES autowarm_users(id)`. Безопасна: на момент правки 0/119 строк имели non-NULL `taken_by_id`/`published_by_id`, текущий prod-код их не пишет → нулевой риск, идемпотентна (`IF EXISTS`).
+- Частичная выкладка ложится на текущий per-`(unic_result×account×platform)` грейн (статус/`post_url`/`published_at` уже per-row).
 
 ## API (изменения `/api/publishing/manual-queue*`)
 
@@ -123,7 +123,8 @@
 
 ## Деплой
 
-- Миграция (`taken_by_user_id`) → autowarm `git pull` + `pm2 restart` (или per-task spawn — уточнить в плане).
+- **Миграция-FK-fix** `migrations/20260521_manual_queue_taken_by_fk_fix.sql` (перенаправляет FK `taken_by_id`/`published_by_id` на `autowarm_users`). ⚠️ Уже применена к общей `openclaw` БД во время разработки (тесты её требуют; idempotent, 0 строк затронуто). На prod-чекпоинте — убедиться, что применена (re-run безопасен).
+- autowarm `git pull` + `pm2 restart` (или per-task spawn).
 - Прод-чекпоинт с одобрения Данила; live-smoke на дашборде (взять/частично выложить/предупреждение/поллинг). Финальная визуальная приёмка — Данил.
 
 ## Что вне скоупа
