@@ -105,7 +105,7 @@ ORDER BY bkt;
 
 - `$unit` ∈ `{'hour','day'}` — валидируется на сервере перед биндом (whitelist).
 - `'unknown'`/прочие платформы в `platform_key` отбрасываются при сборке (как в плитках); входят только в `all` через grand-total строки `is_all=1`.
-- Ось бакетов: отдельный `generate_series(date_trunc($unit, from_msk), date_trunc($unit, to_msk - eps), ('1 '||$unit)::interval)`. Сервер раскладывает done/errors по `(bkt, platform_key)` и считает `computeSuccessRate` для каждого бакета каждой линии; отсутствующий бакет/линия → `null`.
+- Ось бакетов: отдельный `generate_series(date_trunc($unit, from_msk), date_trunc($unit, to_msk - eps), ('1 '||$unit)::interval)`. Сервер раскладывает done/errors по `(bkt, platform_key)`, считает `computeSuccessRate` для каждого бакета каждой линии и кладёт в точку **тройку** `{ rate, done, denom }`, где `denom = done + errors` (знаменатель метрики, НЕ `total`); отсутствующий бакет/линия или `denom==0` → `null`.
 
 ### 3.6 Форма ответа
 
@@ -118,15 +118,16 @@ ORDER BY bkt;
   "series": {
     "unit": "day",                                  // "hour" | "day"
     "buckets": ["2026-05-19", "2026-05-20", "2026-05-21"],   // hour → "2026-05-21 14:00"
-    "all":       [0.91, 0.85, null],
-    "instagram": [0.88, 0.80, null],
-    "tiktok":    [0.95, 0.90, null],
-    "youtube":   [0.80, 0.75, null]
+    // Каждая точка: { rate: доля [0,1], done, denom (=done+errors) } либо null (нет данных).
+    "all":       [{ "rate": 0.91, "done": 100, "denom": 110 }, { "rate": 0.85, "done": 85, "denom": 100 }, null],
+    "instagram": [{ "rate": 0.88, "done": 32,  "denom": 36  }, { "rate": 0.80, "done": 24, "denom": 30  }, null],
+    "tiktok":    [{ "rate": 0.95, "done": 38,  "denom": 40  }, { "rate": 0.90, "done": 36, "denom": 40  }, null],
+    "youtube":   [{ "rate": 0.80, "done": 24,  "denom": 30  }, { "rate": 0.75, "done": 21, "denom": 28  }, null]
   }
 }
 ```
 
-- `buckets[i]` ↔ `all[i]`/`instagram[i]`/… по индексу. `null` = нет данных (`done+errors==0`) → разрыв линии.
+- `buckets[i]` ↔ `all[i]`/`instagram[i]`/… по индексу. Точка = `{rate,done,denom}` либо `null` (`denom==0` или нет данных) → разрыв линии. В датасет Chart.js подаётся `point ? point.rate*100 : null`; тултип берёт `done/denom` из той же точки.
 - `overall`/`by_platform` остаются обратносовместимыми (старый фронт не сломается).
 - Формат метки бакета: `day` → `YYYY-MM-DD`; `hour` → `YYYY-MM-DD HH:00` (MSK). Фронт сам форматирует для оси.
 
@@ -164,7 +165,7 @@ ORDER BY bkt;
 - Ось Y: success rate в **процентах** 0–100 (`min:0, max:100`, тики с `%`). Данные приходят как доли [0,1] → умножаем на 100 при подаче в датасет (или форматтер). `spanGaps:false` — `null` рвёт линию.
 - Ось X: `buckets` (категориальная). Подписи: day → `DD.MM`; hour → `HH:00`.
 - Легенда: сверху, клик прячет/показывает линию (нативно Chart.js) — это и есть «фильтр платформ глазами».
-- **Тултип:** `mode:'index', intersect:false` — при наведении на бакет показывает ВСЕ линии разом + для каждой `XX% (done/total)` (знаменатель тащим в `series` или отдельным массивом, чтобы «100% из 1/1» был очевиден). Это и есть «при наведении легенду по каждой платформе» из WP.
+- **Тултип:** `mode:'index', intersect:false` — при наведении на бакет показывает ВСЕ линии разом + для каждой `XX% (done из denom)`, где `denom = done+errors` берётся из точки серии (§3.6) — тот же знаменатель, что у метрики, чтобы «100% из 1/1» был очевиден и не противоречил построенному `%`. Это и есть «при наведении легенду по каждой платформе» из WP.
 - Один Chart-инстанс хранится в переменной; на перезагрузке — `chart.data=…; chart.update()` (не пересоздавать).
 - Пустая серия (нет бакетов с данными) → плашка «Нет данных за период» поверх области графика.
 
@@ -194,7 +195,7 @@ ORDER BY bkt;
 - `calcDashboardRange('yesterday'|'last3')` — точные MSK-границы (вкл. границу месяца/года для `last3`).
 - Выбор `unit`: `today`/`yesterday`→`hour`, остальные→`day`; граница ровно 1 день.
 - `buildDashboardFilters` — корректные SQL-фрагменты и params для project/platform/account/pack; пустой query → пустой фильтр.
-- Сборка серии: выравнивание по полной оси бакетов; пропуски → `null`; `success_rate` по бакету = `computeSuccessRate`; `all` = grand-total.
+- Сборка серии: выравнивание по полной оси бакетов; пропуски/`denom==0` → `null`; точка = `{rate,done,denom}` с `denom=done+errors` (НЕ `total`); `rate` == `computeSuccessRate(done,errors)`; `all` = grand-total.
 - Whitelist `unit` (инъекция исключена).
 - Обратная совместимость: ответ всё ещё содержит `overall`/`by_platform`.
 - Custom `from>to` / `>60д` → 400.
