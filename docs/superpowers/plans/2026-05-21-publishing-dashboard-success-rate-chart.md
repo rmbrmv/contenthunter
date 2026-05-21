@@ -960,18 +960,9 @@ function renderDashboardChart(series) {
   const empty  = document.getElementById('dash-chart-empty');
   if (!canvas) return;
 
-  if (!series || !Array.isArray(series.buckets) || series.buckets.length === 0) {
-    if (_dashChart) { _dashChart.destroy(); _dashChart = null; }
-    if (empty) empty.classList.remove('hidden');
-    canvas.classList.add('hidden');
-    return;
-  }
-  if (empty) empty.classList.add('hidden');
-  canvas.classList.remove('hidden');
-
-  const labels = series.buckets.map(b => _fmtBucketAxisLabel(b, series.unit));
+  const buckets = (series && Array.isArray(series.buckets)) ? series.buckets : [];
   const datasets = DASH_SERIES_META.map(([key, label, color]) => {
-    const points = series[key] || [];
+    const points = (series && series[key]) || [];
     return {
       label,
       borderColor: color,
@@ -984,11 +975,25 @@ function renderDashboardChart(series) {
       data: points.map(p => (p ? Math.round(p.rate * 100) : null)),
     };
   });
+  const hasData = datasets.some(ds => ds.data.some(v => v !== null));
+
+  // Пустое состояние: нет оси бакетов ЛИБО все точки null (фильтр без совпадений / период без
+  // done+errors). Сервер всегда отдаёт полную ось buckets, поэтому одной buckets.length мало — проверяем hasData.
+  if (buckets.length === 0 || !hasData) {
+    if (_dashChart) { _dashChart.destroy(); _dashChart = null; }
+    if (empty) empty.classList.remove('hidden');
+    canvas.classList.add('hidden');
+    return;
+  }
+  if (empty) empty.classList.add('hidden');
+  canvas.classList.remove('hidden');
+
+  const labels = buckets.map(b => _fmtBucketAxisLabel(b, series.unit));
 
   const wantLabels = document.getElementById('dash-labels-toggle')?.checked ?? true;
   // Читаемость определяется плотностью по оси X (число бакетов), не суммой точек:
   // Неделя(7)/Последние-3-дня(3)/короткий custom → метки видны; Сегодня/Вчера(часы, 24)/Месяц(~30) → скрыты, опора на тултип.
-  const showLabels = wantLabels && series.buckets.length <= DASH_LABELS_MAX_BUCKETS;
+  const showLabels = wantLabels && buckets.length <= DASH_LABELS_MAX_BUCKETS;
 
   if (_dashChart) _dashChart.destroy();
   _dashChart = new Chart(canvas.getContext('2d'), {
