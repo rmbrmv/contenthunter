@@ -1,5 +1,19 @@
 # Backlog tickets
 
+## 2026-05-21 — Планировщик в деливери (WP #109)
+
+### ✅ SHIPPED+DEPLOYED 2026-05-21 — delivery-contenthunter main `a8c4f4b`
+
+Запрос Анастасии (мокап + описание): дать менеджеру видимый календарь-планировщик выкладок с переносами. Полный цикл superpowers: brainstorm→spec→plan (codex 0 P1; все P2 закрыты)→subagent-driven (11 задач: имплементеры + spec/quality-ревью + финальное opus-ревью + контроллерская верификация на живой БД).
+
+**Что:** read-only визуализация поверх движка ретраев #108. (1) новый под-таб `up:planner` в «Выкладка» — недельная сетка, карточки «проект×ролик×день» (published/approved/pending/partial/echo/final), N/N, прогресс-бар, пометки переносов (↗/↩/закрыло), 🤖/👋, hover-подсветка цепочки, клик→очередь; (2) две колонки очереди «перенесено»+«попытка».
+
+**Архитектура (Подход 1):** переносы ВЫВОДЯТСЯ из таймлайна `publish_tasks` по МСК-дням, ничего нового не хранится. Модуль `publish_planner.js` (чистые `buildPlannerCards`/`deriveTransferColumns` — 11 юнит-тестов + `getPlannerCards` SQL), роут `GET /api/publish/planner`. Тонкий контракт к #108 (`client_publish_id`/`manual_handoff_at`/`error_class` — уже в БД → full-режим). Kill-switches `PLANNER_ENABLED`/`QUEUE_TRANSFER_COLUMNS_ENABLED`. Деплой ff-merge клон→прод-main + ручной push (ff не триггерит auto-push hook). OpenProject → Тестирование.
+
+**Остаток / follow-up:**
+- ⚠️ **Дубль-карточка при `meta_slot_id_missing`** (найдено финальным ревью; в проде наблюдается, напр. result_id 16214): если `publish_queue`-строка не привязана к слоту (нет `slot_id` в `unic_task.meta`), дедуп плановой карточки не срабатывает → один слот показывает ОБЕ карточки (плановую approved/pending + выкладочную). Косметика, не краш. Фикс при необходимости: расширить `NOT EXISTS` дедуп в `getPlannerCards` на `(project_id, scheduled_date)`.
+- Браузерная приёмка Данила (после — перевести WP #109 в «Готово»).
+
 ## 2026-05-21 — Валидатор: убрать разделы «Менеджер» и «Продюсер» (WP #71)
 
 ### ✅ SHIPPED+DEPLOYED 2026-05-21 — validator-contenthunter#21 (merge `c14bbeb`)
