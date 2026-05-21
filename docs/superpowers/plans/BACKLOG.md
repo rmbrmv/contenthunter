@@ -1,5 +1,25 @@
 # Backlog tickets
 
+## 2026-05-21 — Клиентский признак ручной выкладки (WP #115)
+
+### ✅ SHIPPED+DEPLOYED 2026-05-21 — validator-contenthunter#20 (`dc96171`) + delivery-contenthunter#94 (`19f7294`) + docs#4
+
+Продолжение WP #85 (послотовый флаг) и WP #107 (очередь). В справочнике Клиентов (`/clients`) — глобальный признак типа выкладки на уровне клиента (=`validator_projects`). Полный цикл superpowers: brainstorm→spec→plan (codex 0 P1 на обоих)→subagent-driven (8 задач, per-task spec+quality ревью + финальное холистическое).
+
+**Решения (с Данилом):** клиент «Ручная» = весь контент в ручную (двухзначно, без per-slot авто-исключений); переключение **ретроактивно** (отзывает уже-запланированный, но не опубликованный авто-контент); менять может **только админ**.
+
+**Архитектура (Вариант A — вычислять на лету, НЕ каскадить на слоты):** единый источник правды `validator_projects.manual_publish`; «эффективная ручная» = `slot.manual_publish OR project.manual_publish`.
+- **validator#20:** миграция 007 (3 колонки на validator_projects, аддитивно) + сервис `apply_client_publish_mode` (флаг+аудит+ретроактивный каскад: Авто→Ручная отзывает pending авто-путь с guard `pq.publish_task_id IS NULL`; Ручная→Авто гасит queued-строки ручной очереди только для слотов с `manual_publish=false`) + эндпоинт `PATCH /api/projects/{id}/publish-mode` (admin-only) + `manual_publish` в GET + фронт `ProjectPublishModeCell.vue` + колонка «Тип выкладки» на `/clients` (тумблер admin-only + модалка-подтверждение).
+- **delivery#94 (autowarm):** модуль `client_manual_filter.js` (`effectiveManualSql` предикат + kill-switch `CLIENT_MANUAL_PUBLISH_ENABLED`) вплетён в 3 SQL-точки (auto-guard `assignUnicResultsToQueue`, наполнитель `manual_queue_assign.js`, матчер `slot_matcher_cron.js`) через `LEFT JOIN validator_projects`.
+
+**Деплой:** БД уже на 007 (миграции шли против общей localhost-БД на разработке → alembic no-op на проде). validator backend `/root/.../validator` `git pull`→`pm2 restart validator` (id=24); фронт собран из `/home/claude-user/validator-contenthunter` (`npm run build`→postbuild→/var/www); autowarm `/root/.../autowarm` ff `git pull`→`pm2 restart autowarm` (id=34, cwd прод). Верифицировано: `[assign-queue]` тик с новым SQL без ошибок, validator отдаёт 200, прод 80 проектов / 0 ручных.
+
+**⚠️ Урок (нашло финальное холистическое ревью):** два kill-switch'а в РАЗНЫХ процессах. Выключая `CLIENT_MANUAL_PUBLISH_ENABLED` в autowarm, обязательно ставь `MANUAL_PUBLISH_TOGGLE_ENABLED=false` на валидаторе И верни ручных клиентов в «Авто» — иначе валидатор отменит авто-контент, а autowarm не подхватит его в ручную (застрянет). Зафиксировано в спеке §10. Прочие уроки: asyncpg-гоча с meta JSONB в фикстуре (инлайн-литерал, как в test_pipeline_reversal); `effectiveManualSql` как единый источник предиката переживает kill-switch без рассинхрона 3 точек.
+
+**Follow-ups (минор, не блокеры):** frontend `applyPublishMode` без error-toast (как соседние модалки); `_slot_to_dict` effective-поле отложено (вне MVP).
+
+Spec/plan: `docs/superpowers/specs|plans/2026-05-21-wp115-client-manual-publish*`. Evidence: `docs/evidence/wp115_smoke_2026-05-21.md`. Память: `project_wp115_client_manual_publish`. OpenProject WP #115 → Тестирование (ждёт live-проверки на реальном клиенте).
+
 ## 2026-05-21 — Ручная выкладка: ПЕРЕНОС в delivery-дашборд (WP #107)
 
 ### ✅ SHIPPED+DEPLOYED 2026-05-21 — delivery-contenthunter#91/#92/#93 + validator revert #19
