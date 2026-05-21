@@ -114,11 +114,38 @@
 Эффект: (а) часть кейсов восстановится (меньше фейлов), (б) остаток получит честный
 error_code → корректный триаж и отсутствие ложного «аккаунт не привязан к устройству».
 
-## Заведённая задача
+## Заведённая задача → SHIPPED+DEPLOYED
 
-**WP #119** (тип «Ошибка», статус «Бэклог», assignee Данил) — project content-hunter:
+**WP #119** (тип «Ошибка», assignee Данил) — project content-hunter:
 «IG: ig_target_not_in_picker — на шаге выбора аккаунта foreground уходит в чужое
 приложение (YouTube/TikTok/лаунчер), парсер читает чужой экран (18 fails/7д)».
 
-На investigation-WP #102 оставлен комментарий с выводом (это код, foreground-hijack)
-и ссылкой на #119.
+Investigation-WP #102 закрыт (→ «Готово»): вопрос «split ops vs code» решён — код.
+
+### Реализация (2026-05-21)
+
+PR **#90** (`GenGo2/delivery-contenthunter`, ветка `feat/wp119-ig-picker-fg-guard`),
+влит squash-коммитом `700e50c`, задеплоен на прод
+`/root/.openclaw/workspace-genri/autowarm` (fast-forward; публишер спавнится
+по-задачно `publisher.py <task_id>` → новый код без pm2 restart). WP #119 →
+«Тестирование».
+
+Что сделано в `account_switcher.py`:
+- kill-switch `_ig_picker_fg_guard_enabled()` (env `IG_PICKER_FG_GUARD_ENABLED`,
+  default ON);
+- helper `_ig_guard_picker_foreground(cfg, header_y_max)` перед `ig_4_pick_account`:
+  `_detect_foreground_pkg()` читает тот же uiautomator-дамп, что и парсер; IG (или
+  не удалось определить) → no-op; чужой пакет → `_ensure_app_foregrounded('Instagram')`
+  + re-navigate в список; при неудаче → False;
+- в `_switch_instagram` на False guard'а — fail с честным
+  `ig_account_switcher_wrong_foreground` вместо вводящего в заблуждение
+  `ig_target_not_in_picker`.
+
+Тесты: 8 новых (`tests/test_account_switcher_ig_picker_fg_guard.py`) + правка
+`_make_ig_pick_switcher_stub` (foreground=IG → guard no-op). Полный набор
+переключателя — **143 passed**. Codex review — 0 регрессий.
+
+**Verification pending:** утренняя IG-пачка 2026-05-22 — ожидаем: часть кейсов
+восстанавливается, остаток → честный `ig_account_switcher_wrong_foreground`.
+Откат: `IG_PICKER_FG_GUARD_ENABLED=0`. Подслучай «IG на переднем плане, но не тот
+экран» не покрыт (по данным редкий).
