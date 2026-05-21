@@ -1,5 +1,26 @@
 # Backlog tickets
 
+## 2026-05-21 — Ручная выкладка: группировка по видео + реалтайм + guard автопубликации (WP #123/#124/#125)
+
+### ✅ SHIPPED+DEPLOYED 2026-05-21 — delivery-contenthunter#95 (#125, merge `f421811`) + #96 (#123/#124, merge `861f63f`)
+
+Пачка из трёх взаимосвязанных задач поверх ручной выкладки (WP #85/#107/#115). Полный цикл superpowers: brainstorm→2 спека→2 плана (codex 0 P1: #125 — 2 раунда, #123/#124 — 7 раундов)→subagent-driven (имплементер + spec-ревью + quality-ревью на каждую часть; конкурентность проверена эмпирически — 40 параллельных claim, 0 split-ownership).
+
+**#125 — manual-слот автовыложился (хотфикс).** Корень (по данным slot 21246 Feminista): строки `publish_queue` создаются ДО пометки слота «вручную», флаг ставят позже, и (1) включение флага не отменяло pending-строки, (2) `dispatchPublishQueue` не перепроверял флаг. Фикс — перепроверка на единственном чокпоинте `checkDispatchQueueSlotLineage` (под advisory-lock, до lineage) через helper `slotIsEffectivelyManual` (переиспользует `effectiveManualSql` → ловит и client-level WP#115); manual → строка `cancelled`/`skip_reason='manual_publish'`. Kill-switch `DISPATCH_MANUAL_RECHECK_ENABLED`. Разовая зачистка `scripts/wp125_cleanup_manual_pending.sql` (CTE numeric-фильтр slot_id). 14/14 тестов (импортирует `./server` → `--test-force-exit`).
+
+**#123 — группировка по исходному видео.** Карточка = группа по `unic_result_id` (одно уник-видео × один пак); на весь экран; мини-таблица по площадкам (per-platform handle — юзернеймы по площадкам могут различаться); копируемая ссылка на уник-видео; «Взять в работу» на весь пак.
+
+**#124 — реалтайм + защита «уже в работе».** `takeGroup`/`returnGroup` по `unic_result_id` (в `withTx`), pack-level ownership guard (блок только по `in_progress`, NULL-владелец тоже блокирует, re-entrant для своего, `published` не лочит); 409 «Задача взята оператором XXX»; частичная выкладка per-platform; поллинг ~5 c (ENV `MPQ_POLL_MS`), не затирает наполовину введённую ссылку. 9/9 backend-тестов.
+
+**⚠️ FK-fix миграция (нашёл имплементер):** колонки `taken_by_id`/`published_by_id` существовали с WP#107, но FK вёл на `validator_users` (оператор дашборда — `autowarm_users`). `migrations/20260521_manual_queue_taken_by_fk_fix.sql` перевешивает FK на `autowarm_users`. Применена к общей БД при разработке (idempotent `IF EXISTS`, 0/119 строк non-NULL → нулевой риск). **Cross-repo follow-up:** проверить, не переустановит ли валидаторная WP#107-миграция старый FK (`validator_users`) при redeploy.
+
+**Деплой:** оба ff `git pull` в прод-checkout `/root/.openclaw/workspace-genri/autowarm` (без нового коммита → auto-push hook не триггерится) + `sudo pm2 restart 34`. #125: cleanup `UPDATE 0`. #123/#124: group-эндпоинты отвечают 401 (живые). online, 0 unstable restarts. ⚠️ открытым вкладкам «Выкладки» нужен hard-reload (кэш index.html).
+
+**Follow-ups (минор, не блокеры):** слой-2 (валидаторная немедленная отмена pending при включении флага) — опционально, слой-1 закрывает баг; косметика — кнопка «Вернуть пак» показывается на возвращённом частично-выложенном паке (no-op); `published_by_id` пишется не везде; per-id `take`/`return` эндпоинты оставлены (backcompat, новый UI не использует); заголовок секции «Ручная выкладка».
+
+**Урок:** worktree ПЕРВЫМ действием — рецидив shared-checkout branch-swap (соседняя сессия перебила HEAD общего `contenthunter`-checkout, мой коммит планов уехал на чужую ветку; recovery cherry-pick + `reset --mixed`). Зафиксировано в `feedback_parallel_claude_sessions`.
+
+Spec/plan: `docs/superpowers/specs|plans/2026-05-21-wp125-*` и `*-wp123-124-*`. Память: `project_wp123_124_125_manual_publish_iteration`. OpenProject #123/#124/#125 → Тестирование (комменты 402/403/404; ждёт браузерной приёмки фронта #123/#124 + суток наблюдения #125).
 ## 2026-05-21 — Дашборд выкладки: график Success rate в динамике + фильтры (WP #90)
 
 ### ✅ SHIPPED+DEPLOYED 2026-05-21 — delivery-contenthunter `60a7a07` (фича) + `bdffb72` (hotfix меток)
