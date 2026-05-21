@@ -1,5 +1,24 @@
 # Backlog tickets
 
+## 2026-05-21 — TT: модал «Подтвердите видимость публикации» + AI-промпт кнопки публикации (WP #118)
+
+### ✅ SHIPPED+DEPLOYED 2026-05-21 — delivery-contenthunter#89 (прод `7414891`)
+
+Триаж TT-фейлов за 2026-05-21 (после исключения сетевой adb-проблемы): топ-1 = `tt_upload_confirmation_timeout` **7/14 (50%)**. По screencast'ам (task 8765/8799) + 15 дампам — два суб-режима под одним кодом.
+
+**Суб-режим B (зафикшен):** после tap «Опубликовать» TikTok показывает блокирующий модал «Подтвердите видимость публикации: Все» с кнопкой «Подтвердить» — бот её не нажимал, публикация висела до таймаута (task 8799). За 7д ~49% (20/41) таймаутов доходили до этого post-publish состояния.
+
+**Что сделано:**
+- `_detect_tt_visibility_confirm_dialog` + `_handle_tt_visibility_confirm_dialog`: тап «Подтвердить» через `_strict_tap_clickable` (EXACT — «Изменить» не трогаем). Ветка в `wait_upload` loop **после** UPLOAD_OK-check; kill-switch `TT_VISIBILITY_CONFIRM_HANDLER_ENABLED` (default ON); per-task cap=5 → distinct `error_code` `tt_visibility_confirm_stuck` (через `prior_error_event`, `publisher_base.py:1912`).
+- Исправлен AI-промпт кнопки публикации: была «blue or white button in top-right corner», стала «красная, внизу» (противоречила комментарию кода :1788; AI давал null в 39/41 таймаутов за 7д).
+- 12 новых тестов (`tests/test_publisher_tt_visibility_confirm.py`); весь TT-набор (185) зелёный; codex review без замечаний.
+
+**Деплой:** path-scoped `publisher_tiktok.py` в `/root/.openclaw/workspace-genri/autowarm/`, fast-forward `git pull` (дерево чистое). **PM2 restart не нужен** — публикатор спавнится per-task. Тесты из прод-копии 12/12. OpenProject WP #118 → Тестирование. Верификация — утренняя TT-пачка 22.05.
+
+**Суб-режим A (бэклог, WP #122):** оверлей «Добавить в историю» (Samsung Add-to-Story / TT in-app Stories) перекрывает экран во время share-loop → кнопка публикации не находится, fallback мажет (≈4/7 падений 20.05). Существующие overlay-хендлеры работают только в `wait_upload`, не в share-loop. Не вошло в PR #89 — выше риск (основной путь публикации), нужен kill-switch + тесты.
+
+Триаж: `docs/evidence/2026-05-21-tt-publish-fails-triage.md`. Память: `project_tt_upload_confirmation_timeout_recur_wp118`.
+
 ## 2026-05-20 — Ручная выкладка: операторская очередь готовых уникализаций (WP #107)
 
 ### ✅ Code-complete + MERGED 2026-05-20 — validator-contenthunter#18 + delivery-contenthunter#86 (pending deploy by Данил)
