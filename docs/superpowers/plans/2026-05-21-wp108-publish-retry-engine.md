@@ -953,7 +953,11 @@ echo "2026-05-21 WP#108: unic_settings.timezone=Europe/Moscow, publish_start=05:
 Порядок (с одобрения Данила; прод-чекаут `/root/.openclaw/workspace-genri/autowarm`; **без force-push**):
 
 1. **Cross-repo grep** (общая БД `openclaw`): `client_publish_id`, `error_class`, `manual_handoff_at` — по валидатору и delivery; убедиться, что нет коллизий имён/схемы (см. практику schema-changes — аудитить каждый hit).
-2. **Миграции:** `20260521_wp108_retry_engine.sql` → `20260521_wp108_error_class_seed.sql`.
+2. **Миграции — применять forward-файлы СТРОГО в этом порядке (НЕ glob-apply!):**
+   1. `migrations/20260521_wp108_retry_engine.sql` (схема — создаёт колонки)
+   2. `migrations/20260521_wp108_error_class_seed.sql` (сид + backfill — зависит от колонок выше; без них падает)
+
+   ⚠️ Обе миграции с датой `20260521`, и `error_class_seed` сортируется алфавитно **перед** `retry_engine` — поэтому наивный `for f in migrations/20260521_wp108*.sql` применит сид первым и упадёт (и вдобавок зацепит `*__rollback.sql`). Применять только два forward-файла, поимённо, в порядке выше. `*__rollback.sql` в forward-деплое НЕ применять. Найдено финальным холистическим ревью.
 3. **Настройки:** `UPDATE unic_settings ... Europe/Moscow / 05:00:00` (Task 9 Step 2) — после подтверждения, что `slot_date` это `DATE` и tzOffsets знает Москву.
 4. **Код:** `git pull` в прод-чекаут → проверить `pm2 describe autowarm | grep "exec cwd"` (drift!) → `pm2 restart autowarm`. Publisher запускается per-task (spawn) — подхватит обновлённый Python без отдельного рестарта; подтвердить.
 5. **Env-флаги:** по умолчанию всё включено (`RETRY_ENGINE_ENABLED`, `RETRY_MANUAL_HANDOFF_ENABLED`, `IDEMPOTENCY_CHECK_ENABLED` — не задавать = true). При проблеме — `RETRY_ENGINE_ENABLED=false` + restart.
