@@ -1,5 +1,20 @@
 # Backlog tickets
 
+## 2026-05-21 — Ручная выкладка: ПЕРЕНОС в delivery-дашборд (WP #107)
+
+### ✅ SHIPPED+DEPLOYED 2026-05-21 — delivery-contenthunter#91/#92/#93 + validator revert #19
+
+Задача #107 требовала подраздел «Ручная выкладка» в разделе «Выкладка» **delivery-дашборда**, но вчерашняя реализация (validator#18) ошибочно собрала UI в админке валидатора (`client.contenthunter.ru`). Пользователь указал дважды. Переделано по полному циклу: brainstorm→spec→plan (codex 4 раунда)→subagent-driven (имплементер + spec-ревью + quality-ревью на каждую из 7 задач).
+
+**delivery (autowarm):** модуль `manual_publish_queue.js` (сериализатор + переходы; атомарные условные UPDATE, multi-table publish/rework в одной client-транзакции; 16 mock-тестов) + 6 эндпоинтов `/api/publishing/manual-queue*` (под `requireAuth`) + подключён МЁРТВЫЙ наполнитель `assignManualPublishQueue` (PR#86 добавил модуль, но забыл завести в шедулер) + vanilla-JS секция в `public/index.html` (таблица: sticky заголовки+строка фильтров, CTRL-мультисорт, дропдаун-фильтры, **календарик** для план-даты, сброс ⟲, группировка по телефону; карточка: copy-on-click из JS-map, `<video>`, publish-режим с МСК-датой). Полный autowarm-сюит 237/237.
+**validator (revert #19):** удалён ошибочный UI (page/card/composable/api/route/sidebar) + backend-роутер; СОХРАНЁН `cancel_queued_for_slot` (WP#85 toggle-OFF, вызывается из `schedule.py`).
+
+**Деплой:** delivery PR#91 (merge `edc232f`) + UI-фиксы по приёмке #92 (план-дата `to_char`→YYYY-MM-DD; sticky строка фильтров `!top-9`) + #93 (date-picker в фильтре); validator revert #19 (merge `18a5af1`). Прод autowarm `pm2 restart` → наполнитель ожил, очередь 19 строк; validator backend `/api/manual-publish/queue`→404, фронт пересобран без пункта. OpenProject #107 комментарии.
+
+**Уроки:** codex видит только дифф (round-4 false-positive «нет `unic_result_id`» — колонка существует); двухстадийное ревью поймало интеграционный nav()-баг (`hidden` !important перебивал `.section.active`); validator `npm run build` авто-деплоит в `/var/www/validator` (postbuild) — собирать `npx vue-tsc --noEmit` для проверки без деплоя; глобальный `.table-wrap thead th{position:sticky;top:0}` клал обе sticky-строки на 0; node-pg `DATE`→ISO-timestamp в JSON (фикс через SQL `to_char`).
+
+Spec/plan: `docs/superpowers/specs|plans/2026-05-21-wp107-manual-publish-delivery*`. Память: `project_wp107_manual_publish_queue`. OpenProject WP #107 → Тестирование (UI-замечания Данила исправлены; ждёт финальной визуальной приёмки в delivery). Прежняя (ошибочно-валидаторная) запись 2026-05-20 ниже — историческая.
+
 ## 2026-05-21 — IG: foreground-hijack на шаге выбора аккаунта (`ig_target_not_in_picker`) (WP #119)
 
 ### ✅ SHIPPED+DEPLOYED 2026-05-21 — delivery-contenthunter#90 (squash `700e50c`, прод ff)
