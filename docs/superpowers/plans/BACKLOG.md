@@ -16,7 +16,7 @@
 
 **Уроки:** (1) валидатор-фронт `npm run test` имеет ПРЕД-СУЩЕСТВУЮЩИЙ красный сюйт `slotStatus.test.ts` (импортирует `node:test`, несовместим с бандлером vitest; есть и на main) — это baseline-шум, НЕ регрессия. (2) codex-ревью на удалениях склонен к diff-blindness false-positive про «осиротевшие» зависимости — сверять с vue-tsc + grep по всему `src`, не принимать вслепую.
 
-Spec/plan: `docs/superpowers/specs|plans/2026-05-21-wp71-remove-manager-producer-sections*`. Память: `project_wp71_remove_manager_producer`. OpenProject WP #71 → **Тестирование** (ждёт браузер-приёмки Данила → Готово).
+Spec/plan: `docs/superpowers/specs|plans/2026-05-21-wp71-remove-manager-producer-sections*`. Память: `project_wp71_remove_manager_producer`. OpenProject WP #71 → **Готово** (проверено в браузере Данилом 2026-05-21).
 
 ## 2026-05-21 — Ручная выкладка: группировка по видео + реалтайм + guard автопубликации (WP #123/#124/#125)
 
