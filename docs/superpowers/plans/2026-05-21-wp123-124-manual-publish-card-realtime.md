@@ -192,6 +192,21 @@ test('takeGroup does NOT claim queued rows if another operator holds part of the
     'queued rows must stay unclaimed — no split ownership');
 });
 
+test('takeGroup blocked by an UNATTRIBUTED in_progress row (legacy per-id take, taken_by_id NULL)', async () => {
+  await setup();
+  // Legacy per-id take left a row in_progress WITHOUT taken_by_id
+  await pool.query(`UPDATE validator_manual_publish_queue
+    SET operator_status='in_progress', taken_by_id=NULL, taken_at=now() WHERE id=$1`, [Q_IG]);
+  await assert.rejects(
+    () => mpq.takeGroup(pool, RESULT, USER_B),
+    (e) => { assert.equal(e.httpStatus, 409); return true; }   // taken_by may be null — still 409
+  );
+  const { rows } = await pool.query(
+    `SELECT operator_status, taken_by_id FROM validator_manual_publish_queue WHERE id = ANY($1)`, [[Q_TT, Q_YT]]);
+  assert.ok(rows.every(r => r.operator_status === 'queued' && r.taken_by_id === null),
+    'queued rows must stay unclaimed even when blocker is unattributed');
+});
+
 test('returnGroup reverts only in_progress rows, keeps published', async () => {
   await setup();
   await mpq.takeGroup(pool, RESULT, USER_A);
@@ -230,6 +245,11 @@ async function listGroup(pool, unicResultId) {
 // with the holder's name. Re-entrant: the SAME operator may claim leftover queued
 // rows (e.g. a freshly populated platform) without error.
 async function takeGroup(pool, unicResultId, userId) {
+  // Block claim if ANY row of the pack is already in_progress/published by someone
+  // other than this operator. codex P2: the legacy per-id take path can leave an
+  // in_progress row with taken_by_id=NULL — treat unattributed (NULL) held rows as
+  // "held by someone else" too, otherwise a second operator could grab the leftover
+  // queued rows (split ownership). Re-entrant: rows held by THIS operator don't block.
   const { rows } = await pool.query(`
     UPDATE validator_manual_publish_queue
     SET operator_status='in_progress', taken_by_id=$2, taken_at=now(), updated_at=now()
@@ -237,25 +257,25 @@ async function takeGroup(pool, unicResultId, userId) {
       AND NOT EXISTS (
         SELECT 1 FROM validator_manual_publish_queue h
         WHERE h.unic_result_id=$1 AND h.cancelled_at IS NULL
-          AND h.taken_by_id IS NOT NULL AND h.taken_by_id <> $2
+          AND h.operator_status IN ('in_progress','published')
+          AND (h.taken_by_id IS NULL OR h.taken_by_id <> $2)
       )
     RETURNING id`, [unicResultId, userId]);
   if (!rows.length) {
-    const { rows: cur } = await pool.query(`
-      SELECT q.taken_by_id, au.username AS taken_by
+    const { rows: blocker } = await pool.query(`
+      SELECT au.username AS taken_by
       FROM validator_manual_publish_queue q
       LEFT JOIN autowarm_users au ON au.id = q.taken_by_id
-      WHERE q.unic_result_id=$1 AND q.cancelled_at IS NULL AND q.taken_by_id IS NOT NULL
+      WHERE q.unic_result_id=$1 AND q.cancelled_at IS NULL
+        AND q.operator_status IN ('in_progress','published')
+        AND (q.taken_by_id IS NULL OR q.taken_by_id <> $2)
       LIMIT 1`, [unicResultId]);
-    if (cur.length && cur[0].taken_by_id !== userId) {
+    if (blocker.length) {
       const e = httpErr(409, 'Задача уже у кого-то в работе');
-      e.taken_by = cur[0].taken_by;
+      e.taken_by = blocker[0].taken_by;   // may be null for legacy unattributed rows
       throw e;
     }
-    if (cur.length && cur[0].taken_by_id === userId) {
-      return listGroup(pool, unicResultId); // re-entrant: already ours, nothing left queued
-    }
-    throw httpErr(404, 'Нет строк для взятия в работу');
+    return listGroup(pool, unicResultId); // nothing queued & not blocked → already ours/done (idempotent)
   }
   return listGroup(pool, unicResultId);
 }
@@ -466,7 +486,7 @@ async function mpqGroupAction(unicResultId, action) {
   const r = await fetch(`/api/publishing/manual-queue/group/${unicResultId}/${action}`, { method: 'POST', credentials: 'same-origin' });
   if (!r.ok) {
     const e = await r.json().catch(() => ({}));
-    if (r.status === 409 && e.taken_by) alert(`Задача взята оператором ${e.taken_by} в работу`);
+    if (r.status === 409) alert(e.taken_by ? `Задача взята оператором ${e.taken_by} в работу` : 'Задача уже у кого-то в работе');
     else alert('Ошибка: ' + (e.error || r.status));
     await mpqLoad();   // подгрузить актуальный статус записи
     return;

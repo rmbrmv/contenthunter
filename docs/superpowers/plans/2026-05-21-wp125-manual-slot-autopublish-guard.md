@@ -328,13 +328,21 @@ Create `scripts/wp125_cleanup_manual_pending.sql`:
 -- slot is effectively manual (own flag OR client-level). Idempotent — safe to re-run.
 -- Layer-1 dispatch guard would skip these on the next tick anyway; this clears them
 -- immediately so they don't sit visibly "pending".
+-- codex P2: filter to NUMERIC meta.slot_id in a CTE BEFORE casting, so a single
+-- legacy unic_tasks.meta with a missing/non-numeric slot_id can't abort the run with
+-- "invalid input syntax for type integer" (mirrors the dispatch guard's legacy skip).
+WITH manual_tasks AS (
+  SELECT ut.id AS unic_task_id, (ut.meta->>'slot_id')::int AS slot_id
+  FROM unic_tasks ut
+  WHERE ut.meta->>'slot_id' ~ '^[0-9]+$'
+)
 UPDATE publish_queue pq
 SET status = 'cancelled', skip_reason = 'manual_publish', updated_at = now()
-FROM unic_tasks ut
-JOIN validator_schedule_slots vss ON vss.id = (ut.meta->>'slot_id')::int
+FROM manual_tasks mt
+JOIN validator_schedule_slots vss ON vss.id = mt.slot_id
 LEFT JOIN validator_projects p ON p.id = vss.project_id
 WHERE pq.status = 'pending'
-  AND ut.id = pq.unic_task_id
+  AND pq.unic_task_id = mt.unic_task_id
   AND (vss.manual_publish = true OR p.manual_publish = true);
 ```
 
@@ -345,7 +353,7 @@ Run:
 PGPASSWORD=openclaw123 psql -h localhost -U openclaw -d openclaw -c "
 SELECT pq.id, pq.account_username, pq.platform, pq.status, vss.id AS slot_id
 FROM publish_queue pq
-JOIN unic_tasks ut ON ut.id = pq.unic_task_id
+JOIN unic_tasks ut ON ut.id = pq.unic_task_id AND ut.meta->>'slot_id' ~ '^[0-9]+$'
 JOIN validator_schedule_slots vss ON vss.id = (ut.meta->>'slot_id')::int
 LEFT JOIN validator_projects p ON p.id = vss.project_id
 WHERE pq.status='pending' AND (vss.manual_publish=true OR p.manual_publish=true);"
