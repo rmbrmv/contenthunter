@@ -224,7 +224,7 @@ test('returnGroup reverts only in_progress rows, keeps published', async () => {
   await mpq.takeGroup(pool, RESULT, USER_A);
   // publish one platform (partial)
   await mpq.markPublished(pool, Q_IG, { publishedAt: new Date().toISOString(), postUrl: 'https://instagram.com/p/x' });
-  const res = await mpq.returnGroup(pool, RESULT);
+  const res = await mpq.returnGroup(pool, RESULT, USER_A);
   const byId = Object.fromEntries(res.map(r => [r.id, r.operator_status]));
   assert.equal(byId[Q_IG], 'published', 'published platform untouched');
   assert.equal(byId[Q_TT], 'queued', 'in_progress reverted to queued');
@@ -239,6 +239,16 @@ test('returnGroup by a NON-holder is a no-op (cannot return someone else\'s work
     `SELECT operator_status, taken_by_id FROM validator_manual_publish_queue WHERE unic_result_id=$1`, [RESULT]);
   assert.ok(rows.every(r => r.operator_status === 'in_progress' && r.taken_by_id === USER_A),
     "A's active work stays in_progress and owned by A");
+});
+
+test('returnGroup clears a legacy unattributed (taken_by_id NULL) in_progress lock for any operator', async () => {
+  await setup();
+  await pool.query(`UPDATE validator_manual_publish_queue
+    SET operator_status='in_progress', taken_by_id=NULL, taken_at=now() WHERE id=$1`, [Q_IG]);
+  await mpq.returnGroup(pool, RESULT, USER_B);  // unowned lock → any operator may clear it
+  const { rows } = await pool.query(
+    `SELECT operator_status FROM validator_manual_publish_queue WHERE id=$1`, [Q_IG]);
+  assert.equal(rows[0].operator_status, 'queued', 'unattributed lock cleared → pack claimable again');
 });
 ```
 
@@ -305,15 +315,18 @@ async function takeGroup(pool, unicResultId, userId) {
   return listGroup(pool, unicResultId);
 }
 
-// WP #124: return a pack to the queue — only THIS operator's own in_progress rows
-// (codex P2 round 4: a non-holder must not be able to return someone else's active
-// work — that would undermine the "already in work" guard). Published rows untouched.
+// WP #124: return a pack to the queue — this operator's own in_progress rows, PLUS any
+// legacy UNATTRIBUTED (taken_by_id NULL) in_progress rows. codex P2 round 4: a non-holder
+// must not return someone else's active work (taken_by_id = другой → не трогаем).
+// codex P2 round 5: NULL-owner rows block takeGroup but are owned by nobody — let any
+// operator clear them, иначе legacy per-id-take лок навсегда застрянет в новом UI.
+// Published rows untouched.
 async function returnGroup(pool, unicResultId, userId) {
   await pool.query(`
     UPDATE validator_manual_publish_queue
     SET operator_status='queued', taken_by_id=NULL, taken_at=NULL, updated_at=now()
     WHERE unic_result_id=$1 AND operator_status='in_progress' AND cancelled_at IS NULL
-      AND taken_by_id = $2`,
+      AND (taken_by_id = $2 OR taken_by_id IS NULL)`,
     [unicResultId, userId]);
   return listGroup(pool, unicResultId);
 }
