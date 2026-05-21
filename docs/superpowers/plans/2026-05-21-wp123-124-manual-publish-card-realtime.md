@@ -207,6 +207,18 @@ test('takeGroup blocked by an UNATTRIBUTED in_progress row (legacy per-id take, 
     'queued rows must stay unclaimed even when blocker is unattributed');
 });
 
+test('a returned partially-published pack is claimable by another operator (published does not lock)', async () => {
+  await setup();
+  await mpq.takeGroup(pool, RESULT, USER_A);
+  await mpq.markPublished(pool, Q_IG, { publishedAt: new Date().toISOString(), postUrl: 'https://instagram.com/p/x' });
+  await mpq.returnGroup(pool, RESULT);                  // TT/YT → queued; IG stays published (taken_by_id=A)
+  const res = await mpq.takeGroup(pool, RESULT, USER_B); // USER_B must be able to claim the leftovers
+  const byId = Object.fromEntries(res.map(r => [r.id, { st: r.operator_status, by: r.taken_by }]));
+  assert.equal(byId[Q_IG].st, 'published', 'published platform stays published');
+  assert.equal(byId[Q_TT].st, 'in_progress'); assert.equal(byId[Q_TT].by, 'anna');
+  assert.equal(byId[Q_YT].st, 'in_progress'); assert.equal(byId[Q_YT].by, 'anna');
+});
+
 test('returnGroup reverts only in_progress rows, keeps published', async () => {
   await setup();
   await mpq.takeGroup(pool, RESULT, USER_A);
@@ -245,11 +257,14 @@ async function listGroup(pool, unicResultId) {
 // with the holder's name. Re-entrant: the SAME operator may claim leftover queued
 // rows (e.g. a freshly populated platform) without error.
 async function takeGroup(pool, unicResultId, userId) {
-  // Block claim if ANY row of the pack is already in_progress/published by someone
-  // other than this operator. codex P2: the legacy per-id take path can leave an
-  // in_progress row with taken_by_id=NULL — treat unattributed (NULL) held rows as
-  // "held by someone else" too, otherwise a second operator could grab the leftover
-  // queued rows (split ownership). Re-entrant: rows held by THIS operator don't block.
+  // Block claim only if ANY row of the pack is currently in_progress by someone other
+  // than this operator. Ownership = active in_progress work; published platforms are
+  // DONE and must NOT lock the pack (codex P2 round 3: returning a partially-published
+  // pack leaves published rows with the original taken_by_id — if those blocked, the
+  // queued leftovers would be unclaimable by anyone else). codex P2 round 2: the legacy
+  // per-id take path can leave an in_progress row with taken_by_id=NULL — treat such
+  // unattributed in_progress rows as "held by someone else" too (avoid split ownership).
+  // Re-entrant: in_progress rows held by THIS operator don't block.
   const { rows } = await pool.query(`
     UPDATE validator_manual_publish_queue
     SET operator_status='in_progress', taken_by_id=$2, taken_at=now(), updated_at=now()
@@ -257,7 +272,7 @@ async function takeGroup(pool, unicResultId, userId) {
       AND NOT EXISTS (
         SELECT 1 FROM validator_manual_publish_queue h
         WHERE h.unic_result_id=$1 AND h.cancelled_at IS NULL
-          AND h.operator_status IN ('in_progress','published')
+          AND h.operator_status = 'in_progress'
           AND (h.taken_by_id IS NULL OR h.taken_by_id <> $2)
       )
     RETURNING id`, [unicResultId, userId]);
@@ -267,7 +282,7 @@ async function takeGroup(pool, unicResultId, userId) {
       FROM validator_manual_publish_queue q
       LEFT JOIN autowarm_users au ON au.id = q.taken_by_id
       WHERE q.unic_result_id=$1 AND q.cancelled_at IS NULL
-        AND q.operator_status IN ('in_progress','published')
+        AND q.operator_status = 'in_progress'
         AND (q.taken_by_id IS NULL OR q.taken_by_id <> $2)
       LIMIT 1`, [unicResultId]);
     if (blocker.length) {
