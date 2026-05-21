@@ -211,7 +211,7 @@ test('a returned partially-published pack is claimable by another operator (publ
   await setup();
   await mpq.takeGroup(pool, RESULT, USER_A);
   await mpq.markPublished(pool, Q_IG, { publishedAt: new Date().toISOString(), postUrl: 'https://instagram.com/p/x' });
-  await mpq.returnGroup(pool, RESULT);                  // TT/YT → queued; IG stays published (taken_by_id=A)
+  await mpq.returnGroup(pool, RESULT, USER_A);                  // TT/YT → queued; IG stays published (taken_by_id=A)
   const res = await mpq.takeGroup(pool, RESULT, USER_B); // USER_B must be able to claim the leftovers
   const byId = Object.fromEntries(res.map(r => [r.id, { st: r.operator_status, by: r.taken_by }]));
   assert.equal(byId[Q_IG].st, 'published', 'published platform stays published');
@@ -229,6 +229,16 @@ test('returnGroup reverts only in_progress rows, keeps published', async () => {
   assert.equal(byId[Q_IG], 'published', 'published platform untouched');
   assert.equal(byId[Q_TT], 'queued', 'in_progress reverted to queued');
   assert.equal(byId[Q_YT], 'queued');
+});
+
+test('returnGroup by a NON-holder is a no-op (cannot return someone else\'s work)', async () => {
+  await setup();
+  await mpq.takeGroup(pool, RESULT, USER_A);
+  await mpq.returnGroup(pool, RESULT, USER_B);  // USER_B is not the holder → must be a no-op
+  const { rows } = await pool.query(
+    `SELECT operator_status, taken_by_id FROM validator_manual_publish_queue WHERE unic_result_id=$1`, [RESULT]);
+  assert.ok(rows.every(r => r.operator_status === 'in_progress' && r.taken_by_id === USER_A),
+    "A's active work stays in_progress and owned by A");
 });
 ```
 
@@ -295,13 +305,16 @@ async function takeGroup(pool, unicResultId, userId) {
   return listGroup(pool, unicResultId);
 }
 
-// WP #124: return a pack to the queue — only in_progress rows; published untouched.
-async function returnGroup(pool, unicResultId) {
+// WP #124: return a pack to the queue — only THIS operator's own in_progress rows
+// (codex P2 round 4: a non-holder must not be able to return someone else's active
+// work — that would undermine the "already in work" guard). Published rows untouched.
+async function returnGroup(pool, unicResultId, userId) {
   await pool.query(`
     UPDATE validator_manual_publish_queue
     SET operator_status='queued', taken_by_id=NULL, taken_at=NULL, updated_at=now()
-    WHERE unic_result_id=$1 AND operator_status='in_progress' AND cancelled_at IS NULL`,
-    [unicResultId]);
+    WHERE unic_result_id=$1 AND operator_status='in_progress' AND cancelled_at IS NULL
+      AND taken_by_id = $2`,
+    [unicResultId, userId]);
   return listGroup(pool, unicResultId);
 }
 ```
@@ -334,7 +347,8 @@ app.post('/api/publishing/manual-queue/group/:unicResultId/take', requireAuth, a
 
 app.post('/api/publishing/manual-queue/group/:unicResultId/return', requireAuth, async (req, res) => {
   try {
-    res.json({ items: await mpq.returnGroup(pool, parseInt(req.params.unicResultId, 10)) });
+    const uid = req.session.user && req.session.user.id;
+    res.json({ items: await mpq.returnGroup(pool, parseInt(req.params.unicResultId, 10), uid) });
   } catch (e) { res.status(e.httpStatus || 500).json({ error: e.message }); }
 });
 ```
@@ -441,7 +455,12 @@ function mpqFilterCell(c) {
 }
 
 function mpqCardActions(card) {
-  if (card.agg_status === 'queued')
+  // Claimable = есть queued-строки и НЕТ in_progress (никто сейчас не держит пак).
+  // Покрывает и полностью queued, и частично выложенный возвращённый пак (codex P1):
+  // published-платформы не мешают взять оставшиеся queued.
+  const hasQueued = card.rows.some(r => r.operator_status === 'queued');
+  const hasInProgress = card.rows.some(r => r.operator_status === 'in_progress');
+  if (hasQueued && !hasInProgress)
     return `<button onclick="mpqGroupAction(${card.unic_result_id},'take')" class="px-2 py-1 rounded bg-indigo-600 text-white text-xs">Взять в работу</button>`;
   return `<button onclick="mpqOpenCard(${card.unic_result_id})" class="px-2 py-1 rounded bg-gray-200 text-xs">Открыть</button>`;
 }
