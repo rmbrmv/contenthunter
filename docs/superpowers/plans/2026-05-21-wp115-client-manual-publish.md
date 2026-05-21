@@ -1171,6 +1171,7 @@ git commit -m "docs(evidence): WP #115 e2e smoke — client manual-publish rerou
 2. **Validator frontend:** `npm run build` (postbuild автодеплой во `/var/www/validator/`). Юзерам — hard reload (stale-bundle).
 3. **autowarm:** `git pull` → `pm2 restart autowarm`.
 4. Env по умолчанию всё включено. Kill-switches: `CLIENT_MANUAL_PUBLISH_ENABLED=false` (autowarm) — откат на послотовое поведение; `MANUAL_PUBLISH_TOGGLE_ENABLED=false` (validator) — блок новых переключений.
+   - ⚠️ **Согласованность:** эти два флага в разных процессах. Выключая `CLIENT_MANUAL_PUBLISH_ENABLED` в autowarm, ОБЯЗАТЕЛЬНО ставь `MANUAL_PUBLISH_TOGGLE_ENABLED=false` на валидаторе и предварительно верни ручных клиентов в «Авто» — иначе валидатор отменит авто-контент, а autowarm не подхватит его в ручную (контент застрянет). Деталь — спека §10.
 5. **ПРОВЕРИТЬ перед раскаткой:** в прод-`server.js` подключён ли `assignManualPublishQueue` в шедулер (деплой-зависимость WP #107) — иначе ручной контент клиента не дойдёт до очереди.
 
 ---
