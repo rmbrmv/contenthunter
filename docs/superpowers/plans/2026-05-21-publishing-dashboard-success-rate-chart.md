@@ -15,11 +15,12 @@
 ## Окружение и деплой (прочитать перед началом)
 
 - **Код живёт в репозитории `delivery-contenthunter`**, прод-чекаут: `/root/.openclaw/workspace-genri/autowarm/` (writable без sudo). Файлы: `server.js`, `public/index.html`, `tests/`. План/спека живут отдельно — в репо `contenthunter` (этот worktree).
-- **Изоляция разработки:** работать в отдельном worktree прод-репо, НЕ править прод-чекаут напрямую до деплоя:
+- **Изоляция разработки:** работать в отдельном **изолированном КЛОНЕ** прод-репо (НЕ worktree — у прод-репо post-commit auto-push hook + `git remote set-url` в общий `.git/config`; worktree разделил бы их и мог запушить/перенастроить origin прода). Клон имеет свой `.git` без хуков:
   ```bash
-  git -C /root/.openclaw/workspace-genri/autowarm worktree add /home/claude-user/wt-wp90-impl -b wp90-success-rate-impl HEAD
+  git clone /root/.openclaw/workspace-genri/autowarm /home/claude-user/wt-wp90-impl
+  cd /home/claude-user/wt-wp90-impl && git checkout -b wp90-success-rate-impl
   ln -s /root/.openclaw/workspace-genri/autowarm/node_modules /home/claude-user/wt-wp90-impl/node_modules   # для node --test
-  cd /home/claude-user/wt-wp90-impl && npm test   # baseline — должно быть зелёным
+  npm test   # baseline — должно быть зелёным
   ```
 - **Тесты:** `npm test` (= `node --test --test-force-exit tests/*.test.js`). Запускать перед каждым коммитом.
 - **Деплой (после зелёных тестов и ревью):** скопировать `server.js` + `public/index.html` (+ изменённый тест) в прод-чекаут, добавить env при необходимости, `pm2 restart`. ⚠️ ГОТЧИ (memory `project_daily_publish_report`, `pm2_dump_path_drift`): (1) прод-чекаут может содержать чужую незакоммиченную WIP — копировать файлы хирургически, не `git pull`/`reset`; (2) перед рестартом `pm2 describe <app> | grep "exec cwd"` — убедиться, что PM2 читает прод-путь, а не testbench; (3) `index.html` — auto-push hook отправит коммит в GitHub, без force-push.
@@ -1097,7 +1098,7 @@ git -C /root/.openclaw/workspace-genri/autowarm commit -m "feat(dashboard): succ
 
 - [ ] **Step 6: Обновить OpenProject WP #90**
 
-Комментарий (house-style, plain language) + статус → «Тестирование» (id 9) после прод-проверки. Удалить dev-worktree: `git -C /root/.openclaw/workspace-genri/autowarm worktree remove /home/claude-user/wt-wp90-impl`.
+Комментарий (house-style, plain language) + статус → «Тестирование» (id 9) после прод-проверки. Удалить dev-клон: `rm -rf /home/claude-user/wt-wp90-impl`.
 
 ---
 
