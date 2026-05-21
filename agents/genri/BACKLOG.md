@@ -1,5 +1,23 @@
 # BACKLOG — Генри
 
+## 🟢 IG `ig_target_not_in_picker` — foreground-hijack на шаге выбора аккаунта — SHIPPED+DEPLOYED 2026-05-21 (OpenProject #119)
+**Приоритет:** высокий
+**Статус:** merged squash `700e50c` (PR #90) в `GenGo2/delivery-contenthunter` main, прод-дерево обновлено `git pull --ff-only`; OpenProject #119 → Тестирование, investigation #102 → Готово.
+
+Топ-2 IG-фейл за 7д (18, размазано по аккаунтам/устройствам = код, не конфиг). `ig_target_not_in_picker` («аккаунт не привязан к устройству») — **вводящий в заблуждение** код. Реально на шаге `ig_4_pick_account` на переднем плане оказывается ЧУЖОЕ приложение, и `parse_account_list` скребёт его экран → мусор → ложный «не найден». Доказано пакетом UI-дампа: task 8696 → YouTube (`com.google.android.youtube`), 8657 → TikTok (`com.zhiliaoapp.musically`), 8623 → лаунчер Samsung (`com.sec.android.app.launcher`); 8696 подтверждён скринкастом (bottom-sheet аккаунтов YouTube).
+
+Фикс: guard `_ig_guard_picker_foreground(cfg, header_y_max)` перед `_find_and_tap_account` — `_detect_foreground_pkg()` читает тот же uiautomator-дамп, что и парсер; IG (или не определилось) → no-op; чужой пакет → `_ensure_app_foregrounded('Instagram')` + re-navigate в список; при неудаче fail с честным `ig_account_switcher_wrong_foreground` вместо `ig_target_not_in_picker`. Kill-switch `IG_PICKER_FG_GUARD_ENABLED` (default ON). 8 новых тестов (`tests/test_account_switcher_ig_picker_fg_guard.py`), весь набор переключателя 143 passed, codex 0 находок.
+
+**Деплой:** path-scoped `account_switcher.py` в `/root/.openclaw/workspace-genri/autowarm/`, fast-forward (дерево чистое). PM2 restart не нужен — публишер спавнится per-task (`publisher.py <task_id>`).
+
+**Verify (утренняя IG-пачка 22.05):** часть кейсов восстанавливается (IG возвращается на передний план, аккаунт находится); остаток → честный `ig_account_switcher_wrong_foreground` вместо `ig_target_not_in_picker`. Откат: `IG_PICKER_FG_GUARD_ENABLED=0`.
+
+**Не покрыто (отдельно при появлении):** подслучай «IG на переднем плане, но не тот экран» (по данным редкий).
+
+Evidence: `docs/evidence/2026-05-21-ig-publish-fails-triage.md`. Память: `project_ig_target_not_in_picker_foreground_hijack`.
+
+---
+
 ## 🟢 YT `yt_editor_upload_timeout` — ловушка экрана «Добавьте описание» — SHIPPED+DEPLOYED 2026-05-21 (OpenProject #117)
 **Приоритет:** высокий
 **Статус:** merged `97f4b5d` (fix `9857cee`) в `GenGo2/delivery-contenthunter` main, прод-дерево обновлено; OpenProject #117 → Тестирование.
@@ -51,7 +69,7 @@ Evidence: `docs/evidence/2026-05-14-ig-publish-failures-triage.md`.
 Из того же 7-дневного IG-триажа (229 prod-падений) — категории, не входящие в #61/#68:
 - `ig_gallery_no_video_candidate` остаточный не-баннерный мод «экран редактора/playback» (~11/нед) — отдельный nav-баг, ещё не заведён. (Доминирующий мод «пустой экран Черновики Reels» — закрыт: #68 выше, SHIPPED.)
 - `ig_app_launch_failed` (~14–15/нед) — похоже на состояние устройств (IG не выходит на передний план), не код; нужна device-side разведка.
-- `ig_target_not_in_picker` (~13–14/нед) — аккаунт не привязан к устройству + парсер списка аккаунтов ловит мусор («устройстве.» как имя аккаунта).
+- `ig_target_not_in_picker` (~13–14/нед) — **ЗАКРЫТО WP #119 (SHIPPED+DEPLOYED 2026-05-21):** не «аккаунт не привязан», а foreground-hijack (на шаге выбора аккаунта на переднем плане чужое приложение, парсер скребёт чужой экран → мусор типа «устройстве.»). См. верхнюю секцию.
 - `ig_share_tap_no_progress` — закрыт: false-negative, фикс `52f9285` (pre-Tier-1 probe), проверен 0 рецидивов 05-14. Не WP.
 - Cleanup (не блокер): `_ig_handle_edits_promo_at_picker` зовёт `_current_foreground_package()` (один dumpsys) на каждой итерации даже без баннера — можно загейтить за `_is_ig_edits_promo`.
 

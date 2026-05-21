@@ -1,5 +1,21 @@
 # Backlog tickets
 
+## 2026-05-21 — IG: foreground-hijack на шаге выбора аккаунта (`ig_target_not_in_picker`) (WP #119)
+
+### ✅ SHIPPED+DEPLOYED 2026-05-21 — delivery-contenthunter#90 (squash `700e50c`, прод ff)
+
+Триаж IG-фейлов за 2026-05-21 (после исключения сетевой adb-проблемы и PM2-шума): топ-2 = `ig_target_not_in_picker` **18/7д**, размазано по разным аккаунтам/устройствам (= код, не конфиг). Топ-1 `ig_share_tap_no_progress` (26) уже имеет фикс WP #73; `ig_target_not_in_picker` — крупнейший баг без активной задачи на фикс.
+
+**Корень (доказан):** `ig_target_not_in_picker` («аккаунт не привязан к устройству») — вводящий в заблуждение код. На шаге `ig_4_pick_account` на переднем плане оказывается ЧУЖОЕ приложение, `parse_account_list` скребёт его экран → мусор → ложный «не найден». Подтверждено пакетом UI-дампа: task 8696 → YouTube account-switcher, 8657 → TikTok промо, 8623 → домашний экран Samsung; 8696 + скринкастом. Все 18 — с срабатыванием foreground-recovery.
+
+**Что сделано (`account_switcher.py`):** guard `_ig_guard_picker_foreground(cfg, header_y_max)` перед `_find_and_tap_account` — `_detect_foreground_pkg()` (тот же uiautomator-дамп, что и парсер); IG (или не определилось) → no-op; чужой пакет → `_ensure_app_foregrounded('Instagram')` + re-navigate; при неудаче → честный `ig_account_switcher_wrong_foreground` вместо `ig_target_not_in_picker`. Резолвер `error_code` (`publisher_base._set_error_code_from_events`) подхватывает категорию без whitelist. Kill-switch `IG_PICKER_FG_GUARD_ENABLED` (default ON). 8 новых тестов (`tests/test_account_switcher_ig_picker_fg_guard.py`) + правка `_make_ig_pick_switcher_stub`; весь набор переключателя 143 passed; codex review 0 находок.
+
+**Деплой:** path-scoped `account_switcher.py` в `/root/.openclaw/workspace-genri/autowarm/`, fast-forward `git pull` (дерево чистое). PM2 restart не нужен — публишер спавнится per-task. OpenProject WP #119 → Тестирование; investigation WP #102 → Готово. Верификация — утренняя IG-пачка 22.05.
+
+**Не покрыто (отдельно при появлении):** подслучай «IG на переднем плане, но не тот экран» (по данным редкий).
+
+Триаж: `docs/evidence/2026-05-21-ig-publish-fails-triage.md`. Память: `project_ig_target_not_in_picker_foreground_hijack`.
+
 ## 2026-05-21 — TT: модал «Подтвердите видимость публикации» + AI-промпт кнопки публикации (WP #118)
 
 ### ✅ SHIPPED+DEPLOYED 2026-05-21 — delivery-contenthunter#89 (прод `7414891`)
