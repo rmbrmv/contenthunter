@@ -816,13 +816,13 @@ const { effectiveManualSql } = require('./client_manual_filter');
 
 - [ ] **Step 5: Пропатчить auto-guard в `server.js`**
 
-Добавить require рядом с `require('./manual_queue_assign')` (строка 14):
+Добавить require рядом с `require('./manual_queue_assign')` (строка 15 на origin/main):
 
 ```javascript
 const { effectiveManualSql } = require('./client_manual_filter');
 ```
 
-Заменить guard-подзапрос (строки 5992-5996). Было:
+Заменить guard-подзапрос (строки 6027-6031 на origin/main; блок совпадает байт-в-байт). Было:
 
 ```javascript
         AND NOT EXISTS (
