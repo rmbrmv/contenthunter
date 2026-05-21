@@ -434,7 +434,9 @@ function mpqCards() {
       const mark = r.operator_status === 'published' ? ' ✓' : (r.operator_status === 'in_progress' ? ' ⏳' : '');
       return p + mark;
     }).join(' · ');
-    const taker = card.rows.find(r => r.taken_by);
+    // codex P2 round 6: holder = ТОЛЬКО активная in_progress-строка. published-строки
+    // хранят историч. taken_by_id — не показывать «в работе у X» на возвращённом паке.
+    const taker = card.rows.find(r => r.operator_status === 'in_progress' && r.taken_by);
     card.taken_by = taker ? taker.taken_by : null;
   }
   return [...map.values()];
@@ -574,7 +576,7 @@ function mpqRenderCard() {
   if (!rows.length) { mpqCloseCard(); return; }
   const head = rows[0];
   const agg = mpqAgg(rows);
-  const taker = rows.find(r => r.taken_by);
+  const taker = rows.find(r => r.operator_status === 'in_progress' && r.taken_by);  // active holder only (codex P2 r6)
   const unicU = safeUrl(head.unic_video_url), srcU = safeUrl(head.source_video_url);
   mpqCopyVals = {};
   const copy = (key, label, val) => {
