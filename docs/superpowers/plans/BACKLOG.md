@@ -1,5 +1,23 @@
 # Backlog tickets
 
+## 2026-05-21 — Дашборд выкладки: график Success rate в динамике + фильтры (WP #90)
+
+### ✅ SHIPPED+DEPLOYED 2026-05-21 — delivery-contenthunter `60a7a07` (фича) + `bdffb72` (hotfix меток)
+
+Запрос Анастасии: на дашборд выкладки (`#farming/publishing-dashboard`) добавить график Success rate в динамике по платформам; «все текущие фильтры применяются и к графику»; метки данных видны сразу, при перегрузе — на наведении. Полный цикл superpowers: brainstorm→spec→plan (codex: спека 2 раунда, план 3 раунда, 0 P1)→subagent-driven (11 задач, имплементер + spec-ревью + quality-ревью на каждую + финальное холистическое = READY TO MERGE).
+
+**Решения (с Данилом):** 4 линии Все/IG/TT/YT; бакеты час (диапазон ≤1 дня) / день (иначе); фильтры project/platform/account/pack — серверные, и к плиткам, и к графику; +пресеты «Вчера» и «Последние 3 дня» (3 кал. дня вкл. сегодня).
+
+**Архитектура (один эндпоинт):** расширен `GET /api/publish-queue/dashboard` — принимает фильтры (переиспользует SQL-фрагменты `buildPublishQueueFilters` через `buildDashboardFilters` + `PUBLISH_QUEUE_FROM`) и в одном ответе отдаёт плитки + `series` (точка `{rate,done,denom}`|null). 6 pure-helpers с юнит-тестами (`calcDashboardRange`+yesterday/last3, `pickBucketUnit`, `buildDashboardFilters`, `buildBucketAxis`, `assembleSeries`, `isDashboardTimeseriesEnabled`). Фронт — Chart.js (4 линии, тултип `XX% (done из denom)`); datalabels-плагин гасится глобально (`Chart.defaults`) и включается локально на графике (иначе метки полезли бы на фарминг/SLA/токены). TZ: `scheduled_at` UTC-naive → `+ interval '3 hours'` перед `date_trunc`; JS-ось бакетов форматирует метки идентично SQL `to_char`. Метрика = `computeSuccessRate` done/(done+errors), как у дневного отчёта (WP #114). Kill-switch `DASHBOARD_TIMESERIES_ENABLED`.
+
+**Реконсиляция при деплое:** прод-main autowarm уехал вперёд за сессию (WP#107/#119/#115 тронули index.html+server.js) — мержил origin/main в ветку (union-конфликт index.html: dashboard-функции vs `mpq*` перед общим `}`). Деплой = хирургический cp 3 файлов в прод (НЕ затирая чужое), 260/260 тестов в проде. PM2 id 34 `autowarm` :3848 (НЕ testbench id 33/26).
+
+**Hotfix меток (`bdffb72`):** баг-репорт — чекбокс «Значения на графике» не срабатывал на «Месяц»(31)/«Сегодня»(24). Root cause (по логам `[pub-dash]`): порог читаемости (≤14 точек) был ЖЁСТКИМ ГЕЙТОМ и перебивал чекбокс. Фикс: чекбокс = источник истины (`showLabels = checkbox.checked`), число бакетов задаёт лишь дефолт состояния чекбокса при загрузке. Проверено Данилом.
+
+**Follow-ups / out-of-scope (минор, не блокеры):** URL-persist фильтров; auto-refresh/live polling; сравнение с предыдущим периодом; блок «Прочие платформы» (vk/pinterest/likee); drill-down по точке графика → таблица с фильтром; экспорт CSV/PNG; карточка графика остаётся видимой при `DASHBOARD_TIMESERIES_ENABLED=0` (показывает «нет данных»); ILIKE-метасимволы в account/pack не экранируются (консистентно с `buildPublishQueueFilters`).
+
+Spec/plan: `docs/superpowers/specs|plans/2026-05-21-publishing-dashboard-success-rate-chart*`. Память: `project_wp90_success_rate_chart`. OpenProject WP #90 → **Готово** (проверено на проде Данилом).
+
 ## 2026-05-21 — Клиентский признак ручной выкладки (WP #115)
 
 ### ✅ SHIPPED+DEPLOYED 2026-05-21 — validator-contenthunter#20 (`dc96171`) + delivery-contenthunter#94 (`19f7294`) + docs#4
