@@ -1,5 +1,21 @@
 # BACKLOG — Генри
 
+## 🟢 YT `yt_editor_upload_timeout` — ловушка экрана «Добавьте описание» — SHIPPED+DEPLOYED 2026-05-21 (OpenProject #117)
+**Приоритет:** высокий
+**Статус:** merged `97f4b5d` (fix `9857cee`) в `GenGo2/delivery-contenthunter` main, прод-дерево обновлено; OpenProject #117 → Тестирование.
+
+Топ-1 кодовый YT-фейл за 21.05 (2 из 3 падений: #8814 `elcosmetics`, #8821 `elcosmo_beauty`). После заполнения заголовка бот проваливался на полноэкранный редактор «Добавьте описание» (в ui-dump только `content-desc` «Назад»/«Хештеги» + пустой `EditText`, кнопки «Загрузить» нет) и зависал 20+ итераций → `yt_editor_upload_timeout`. Корень: stuck-counter строит ключ из `re.findall(r'text="..."')`, а тут все подписи в `content-desc` + `EditText` пустой → ключ `[]` → `if _yt_cur and ...` falsy → счётчик сбрасывается, авто-BACK не срабатывал. Новая сигнатура (16.05=9, 18.05=15, 19–20.05=0 после WP #80/#113, 21.05=3 — все desc-trap; вероятно всплыло после WP #113).
+
+Фикс: `_yt_on_bare_description_screen(ui)` (детект: есть «Хештеги»/«Hashtags», нет «Добавьте информацию», нет «Загрузить») + guard в editor-loop → `KEYCODE_BACK` на metadata. Kill-switch `YT_DESC_TRAP_GUARD_ENABLED` (default on). 8 unit-тестов (`tests/test_yt_desc_trap_detection.py`), проверено на реальном ui-dump #8814. Codex 0 находок.
+
+**Verify (утренняя YT-пачка 22.05):** `yt_editor_upload_timeout` (desc-trap) → 0 + появляются события `yt_desc_trap_escape` → #117 в «Готово». Откат: env `YT_DESC_TRAP_GUARD_ENABLED=0`. SQL — в evidence-доке.
+
+**Не код (отдельно):** третье падение 21.05 #8809 `axilor.brand@gmail.com` — `yt_app_not_foregrounded` из-за блокировки аккаунта Google («Нет доступа к продукту»). Account-health, кандидат на `account_blocks`.
+
+Evidence: `docs/evidence/2026-05-21-yt-publish-fails-triage.md`.
+
+---
+
 ## 🟢 IG Edits-баннер dismissal — SHIPPED 2026-05-14 (OpenProject #61)
 **Приоритет:** высокий
 **Статус:** merged в `GenGo2/delivery-contenthunter` main `5372d18`, deployed на prod tree; OpenProject #61 → Тестирование
