@@ -47,7 +47,8 @@
 ALTER TABLE publish_queue
   ADD COLUMN IF NOT EXISTS client_publish_id uuid,
   ADD COLUMN IF NOT EXISTS manual_handoff_at timestamptz NULL;
--- backfill: client_publish_id = gen_random_uuid() для существующих строк (по одной на строку)
+-- DEFAULT gen_random_uuid() → любой путь вставки получает ID (нельзя «опт-аут» из ретраев);
+-- затем backfill существующих строк и SET NOT NULL (контракт «у каждой строки есть ID»).
 -- index: CREATE INDEX ON publish_queue (client_publish_id);
 
 -- 2) publish_tasks: копия ID намерения + класс ошибки (леджер попыток)
@@ -67,6 +68,7 @@ ALTER TABLE publish_error_codes
 - **`client_publish_id`** = «намерение выложить контент X в аккаунт Y на платформу Z». Присваивается при создании строки `publish_queue`, **стабилен через ре-queue** (строка переиспользуется, как у watchdog). Копируется в `publish_task` при диспатче.
 - **`error_class` на `publish_tasks`** проставляется при завершении задачи (рядом с `error_code`).
 - **`error_class`/`fixed_at` на `publish_error_codes`** — таксономия и реестр фиксов на уровне кода.
+- **Deploy-time backfill (обязателен):** существующим `publish_tasks` проставить `client_publish_id` (из их строки `publish_queue.publish_task_id`) и `error_class` (из справочника по `error_code`) — иначе уже-упавшие на момент деплоя выкладки не подхватятся движком (контроллер джойнит по `client_publish_id` и пропускает строки без класса). Выполняется после сида `error_class`.
 
 ## 5. Таксономия error_class и связь с retry_strategy
 
@@ -105,20 +107,24 @@ ALTER TABLE publish_error_codes
 Упавшая строка publish_queue (status='failed', manual_handoff_at IS NULL)
    │  resolve error_class (последняя publish_task намерения), last_failed_at
    ▼
-fixed_at(code) > last_failed_at ?
-   ├─ ДА ─▶ РЕАНИМАЦИЯ: ре-queue (баг починен — пробуем снова, даже если ui_changed)
+error_class ∈ {banned, ui_changed}  И НЕ (fixed_at > last_failed_at) ?
+   ├─ ДА ─▶ ПЕРЕДАТЬ В РУЧНУЮ (структурная — сразу, в любое время)
    └─ НЕТ
         ▼
-   error_class ∈ {banned, ui_changed} ?
-      ├─ ДА ─▶ ПЕРЕДАТЬ В РУЧНУЮ
-      └─ НЕТ  (network / rate_limited / unknown)
-           ▼
-      попыток сегодня по этому классу < RETRY_MAX_PER_CLASS_PER_DAY (3)
-         И в окне RETRY_WINDOW_DAYS (2 календ. дня от first_attempt)
-         И время < RETRY_CUTOFF (23:00 МСК) ?
-            ├─ ДА ─▶ РЕ-QUEUE (status='pending', publish_task_id=NULL)
-            └─ НЕТ ─▶ ПЕРЕДАТЬ В РУЧНУЮ
+время ≥ RETRY_CUTOFF (23:00 МСК) ?  (проверяем ДО действий)
+   ├─ ДА ─▶ WAIT (контроллер ничего не делает вне окна дня)
+   └─ НЕТ
+        ▼
+   fixed_at > last_failed_at ? ── ДА ─▶ РЕАНИМАЦИЯ: ре-queue (баг починен, даже ui_changed)
+        │ НЕТ
+   окно RETRY_WINDOW_DAYS (2 календ. дня от first_attempt) исчерпано ? ── ДА ─▶ ПЕРЕДАТЬ В РУЧНУЮ (give-up)
+        │ НЕТ
+   попыток сегодня по этому классу ≥ RETRY_MAX_PER_CLASS_PER_DAY (3) ? ── ДА ─▶ WAIT (завтра счётчик сбросится)
+        │ НЕТ
+   ─▶ РЕ-QUEUE (status='pending', publish_task_id=NULL)
 ```
+
+> **Важно:** исчерпание **дневного** лимита (3/класс) ≠ передача в ручную. Это «на сегодня хватит» → ждём до завтра, счётчик сбросится, окно 2 дней ещё активно. В ручную уводит только **исчерпание окна 2 дней** (или структурная ошибка banned/ui_changed). Отсечка 23:00 проверяется до ветвей с действиями: после неё контроллер бездействует (WAIT) по всем ветвям, кроме немедленного структурного handoff — он проверяется ещё до отсечки.
 
 - **Счётчик «3/сутки/класс»:** `SELECT count(*) FROM publish_tasks WHERE client_publish_id=$1 AND error_class=$2 AND (created_at AT TIME ZONE 'Europe/Moscow')::date = (now() AT TIME ZONE 'Europe/Moscow')::date AND status IN ('failed','preflight_failed') AND error_code <> 'process_interrupted'`. Сбрасывается естественно сменой календарной даты (партия стартует 05:00 МСК).
   - ⚠️ **Все вычисления «календарного дня» — в `Europe/Moscow`**, а не в TZ сессии БД (которая может остаться UTC/Asia/Dubai). Иначе у границы суток попытки засчитаются не в тот день. Везде применяем `(<ts> AT TIME ZONE 'Europe/Moscow')::date` (либо `SET LOCAL timezone='Europe/Moscow'` в транзакции контроллера).
