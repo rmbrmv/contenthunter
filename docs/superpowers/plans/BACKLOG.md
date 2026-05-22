@@ -574,7 +574,7 @@ OpenProject WP #82, memory: [[project_tt_upload_confirmation_false_negative_ship
 
 ## 2026-05-15 — TT commercial-music modal handler (WP #75)
 
-### `tt_upload_confirmation_timeout` (новая сигнатура «Коммерческие треки → TikBiz playlist») — ✅ SHIPPED 2026-05-15 PR #66
+### `tt_upload_confirmation_timeout` (новая сигнатура «Коммерческие треки → TikBiz playlist») — ✅ SHIPPED 2026-05-15 PR #66 → ✅ VERIFIED + «Готово» 2026-05-22
 
 Триаж TT-фейлов за день: 175 fails, 166 = сетевая `adb_devices_unreachable` (исключена, network уже починен), top non-network = 3 явных `tt_upload_confirmation_timeout` (tasks 6495/6510/6512) + 1 orphan (5202) с той же сигнатурой = 4/9 ≈ 44% non-network падений из одной корневой. На всех 3 screencast'ах TT застрял на одной и той же странице **«Коммерческие треки → TikBiz playlist»** (треки PONCHET, Yang Salah, Beat Automotivo, Happy/Vide..., Countless...) — публикатор не закрывает модал, AI vision возвращает `{x:null,y:null}` для кнопки «Опубликовать», 3-мин `wait_upload` timeout. Разные аккаунты (axilor_prive/brand, clickpay_under), разные устройства (RF8Y80ZTVFZ/RF8YA09S90H/RFGYC31P94Z), разные raspberry (#1/#9) — баг воспроизводим, не device-state. Это **НЕ** music-rights confirmation (диалог *согласия*, закрыт PR #28/#32), а новый **selector с принудительным выбором** коммерческого трека.
 
@@ -587,6 +587,8 @@ PR GenGo2/delivery-contenthunter#66 (squash `2dd53ff`): **3-level detector** (st
 4. Если `tt_commercial_music_unhandled_suspect` (evidence-only) сработает — включить `TT_COMMERCIAL_MUSIC_FALLBACK_ENABLED=true` и собрать XML dumps в `/tmp/autowarm_ui_dumps/`.
 
 Memory: [[project_tt_commercial_music_modal_wip]]. Spec/plan/evidence: `docs/superpowers/specs/2026-05-15-tt-commercial-music-modal-handler-design.md` + `docs/superpowers/plans/2026-05-15-tt-commercial-music-modal-handler.md` + `docs/evidence/2026-05-15-tt-publish-fails-triage.md`.
+
+**Верификация + закрытие 2026-05-22** (`docs/evidence/2026-05-22-wp75-commercial-music-verify-close.md`): за 7д окно возникало 27 раз → `tt_commercial_music_cancelled`=27 / `_dismissed`=27, `_stuck`=0, `_track_selected`=0 — handler гасит окно при каждом появлении (acceptance 2 и 3 ✅, switch policy на select-первым НЕ понадобился). Сигнатура `ai_find_tap_no_coords` именно на модале не рецидивирует (acceptance 1 ✅). Нюанс: из 27 погашенных задач 16→done, 11→failed позже по флоу, но это НЕ модал — отдельный класс (`tt_upload_confirmation_timeout`: кнопка Publish / `wait_upload` false-negative), все 11 ДО фиксов WP #82 (PR #69, 18.05) и WP #118 (PR #89, 21.05); 22.05 после них — 0. Остаток ведут **WP #118** (shipped) / **WP #122** (backlog). Новый commercial-music handler не открывать. OpenProject WP #75 → «Готово».
 
 ### Открытые runner-up'ы из триажа 2026-05-15 (не затикечены, малый объём)
 
