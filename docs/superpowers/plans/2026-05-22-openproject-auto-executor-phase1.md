@@ -119,6 +119,7 @@ cat > /home/claude-user/contenthunter_autoexec/.claude/settings.json <<'EOF'
       "Task",
       "Grep",
       "Glob",
+      "Read(**/.git/**)",
       "Read(/home/claude-user/secrets/**)",
       "Read(//home/claude-user/secrets/**)",
       "Read(/home/claude-user/.claude/.credentials.json)",
@@ -216,14 +217,16 @@ PAUSE_FLAG = os.path.join(BASE_DIR, "PAUSED")
 WORKER_READ_DIRS = [
     "/home/claude-user/contenthunter",
     "/home/claude-user/contenthunter_knowledge",
-    BRIEFS_DIR,
     "/home/claude-user/.claude/projects/-home-claude-user-contenthunter/memory",
 ]
+# NOTE: BRIEFS_DIR is intentionally NOT here — the worker is given only its own per-task
+# input dir via --add-dir, so it can't read other tasks' briefs.
 
 def secret_values() -> list[str]:
     """Secret strings the orchestrator holds — used to redact any that leak into
     untrusted-worker output before it's posted to OpenProject/Telegram."""
     keys = ("OPENPROJECT_API_TOKEN", "AUTOEXEC_TG_BOT_TOKEN",
+            "AUTOEXEC_TG_CHAT_ID", "AUTOEXEC_TG_TOPIC_ID",
             "ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN")
     return [v for k in keys if (v := os.environ.get(k))]
 
@@ -809,6 +812,7 @@ def build_triage_cmd(task_id: int, input_path: str) -> list[str]:
     ]
     for d in config.WORKER_READ_DIRS:
         cmd += ["--add-dir", d]
+    cmd += ["--add-dir", os.path.dirname(input_path)]   # only THIS task's input dir
     return cmd
 
 def run_triage(task_id: int, input_path: str, cwd: str,
@@ -1286,8 +1290,11 @@ def dispatch_triage(task_id: int, store: Store, client, cwd: str):
     store.set_state(task_id, sub_state="working")
     try:
         # Trusted orchestrator fetches the WP and hands it to the worker as DATA.
+        # Per-task dir so the worker's --add-dir exposes ONLY this task's input.
         bundle = client.get_wp_bundle(task_id)
-        input_path = os.path.join(config.BRIEFS_DIR, f"{task_id}.input.json")
+        task_dir = os.path.join(config.BRIEFS_DIR, str(task_id))
+        os.makedirs(task_dir, exist_ok=True)
+        input_path = os.path.join(task_dir, "input.json")
         with open(input_path, "w", encoding="utf-8") as f:
             json.dump(bundle, f, ensure_ascii=False)
         proc = worker.run_triage(task_id, input_path, cwd=cwd)
@@ -1300,7 +1307,7 @@ def dispatch_triage(task_id: int, store: Store, client, cwd: str):
             category = "B"   # safe default: anything ambiguous → ask Данил
         brief_md = redact(verdict.get("brief_markdown", ""))   # untrusted output → redact secrets
         question = redact(verdict.get("question", ""))
-        brief_path = os.path.join(config.BRIEFS_DIR, f"{task_id}.md")
+        brief_path = os.path.join(task_dir, "brief.md")
         with open(brief_path, "w", encoding="utf-8") as f:
             f.write(brief_md)
 
@@ -1428,7 +1435,7 @@ Expected: prints `picked [<id>]`, and the WP moves to «В процессе» in
 ```bash
 python3 -c "import os; from autoexec import main, config; from autoexec.store import Store; from autoexec.openproject import OpenProjectClient; os.makedirs(config.BRIEFS_DIR, exist_ok=True); s=Store(config.STATE_DB); c=OpenProjectClient(config.openproject_token()); [main.dispatch_triage(r['task_id'], s, c, config.BASE_DIR) for r in s.queued()]"
 ```
-Expected: a brief appears in `~/contenthunter_autoexec/briefs/<id>.md`, a comment on the WP, and a Telegram message in «Задачи».
+Expected: a brief appears in `~/contenthunter_autoexec/briefs/<id>/brief.md`, a comment on the WP, and a Telegram message in «Задачи».
 
 - [ ] **Step 5: Create the smoke script (bundles steps 2–4)**
 
