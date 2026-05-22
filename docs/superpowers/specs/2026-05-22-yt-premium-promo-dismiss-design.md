@@ -145,19 +145,30 @@ def _yt_dismiss_premium_promo_and_retap(self, cfg: dict, final_step: str) -> boo
     # Перед ре-тапом убедиться, что foreground всё ещё YouTube — иначе фолбэк-coords
     # «+» ударит по чужому экрану (непреднамеренный тап). Если drift — попытка
     # вернуть YouTube через существующий Layer C recovery; не вышло → fail-fast без тапа.
+    # Условие `fg != package` (а НЕ `fg and fg != package`): None/'' от
+    # _detect_foreground_pkg (transient ADB) — НЕ доказательство YouTube,
+    # поэтому неизвестный foreground тоже идёт в recovery, не в ре-тап.
     fg = self._detect_foreground_pkg()
-    if fg and fg != cfg['package']:
+    if fg != cfg['package']:
         if not self._yt_ensure_foreground(
                 cfg, f'{final_step}_premium_post_back_fg_recovery'):
             self.p.log_event('warning', 'yt_premium_promo_dismiss_failed',
                 meta={'category': 'yt_premium_promo_dismiss_failed', 'step': final_step,
-                      'reason': 'foreground_drift_after_back', 'foreground_pkg': fg})
+                      'reason': 'foreground_drift_after_back',
+                      'foreground_pkg': fg or '(unknown)'})
             return False
 
-    # 2) Промо ушло и YouTube в foreground → безопасно ре-тапнуть «+».
+    # 2) Готовимся к ре-тапу «+». ФИНАЛЬНАЯ проверка перед любым тапом: dump
+    # валиден И не-промо. _yt_ensure_foreground мог вернуть YouTube с ещё висящим
+    # промо; пустой dump тоже не доказывает безопасность → fail без тапа.
     plus = cfg['plus_button']
     ui = self.p.dump_ui(retries=1)
-    tapped = self.p.tap_element(ui, plus['desc'], clickable_only=True) if ui else False
+    if not ui or _yt_is_premium_promo(ui):
+        self.p.log_event('warning', 'yt_premium_promo_dismiss_failed',
+            meta={'category': 'yt_premium_promo_dismiss_failed', 'step': final_step,
+                  'reason': 'promo_or_empty_before_retap'})
+        return False
+    tapped = self.p.tap_element(ui, plus['desc'], clickable_only=True)
     if not tapped:
         self.p.adb_tap(*plus['coords'])
     time.sleep(POST_TAP_WAIT_S + 1.0)
@@ -202,10 +213,11 @@ if strict_verify and not hits:
 ## 4. Безопасность
 
 - **Закрытие только Back** — ни одного `adb_tap` по содержимому промо → невозможно случайно оформить платную подписку.
-- **Ре-тап только при подтверждённо безопасном состоянии.** Перед любым тапом «+» выполняются ТРИ гарда (никаких тапов, если хоть один не пройден):
-  1. *(codex P1)* промо реально ушло — подтверждено **валидным** dump'ом; промо ещё на экране после бюджета Back → `return False` без тапа;
-  2. *(codex P1)* пустой/неудачный dump НЕ считается доказательством снятия (transient ADB / FLAG_SECURE) → трактуется как «промо может быть на экране» → без тапа;
-  3. *(codex P2)* foreground всё ещё YouTube — Back мог увести в launcher; при drift'е попытка `_yt_ensure_foreground`, не вышло → `return False` без тапа.
+- **Ре-тап только при подтверждённо безопасном состоянии.** Перед любым тапом «+» выполняются ЧЕТЫРЕ гарда (никаких тапов, если хоть один не пройден):
+  1. *(codex P1)* промо реально ушло — подтверждено **валидным** dump'ом в back-цикле; промо ещё на экране после бюджета Back → `return False` без тапа;
+  2. *(codex P1)* пустой/неудачный dump в back-цикле НЕ считается доказательством снятия (transient ADB / FLAG_SECURE) → трактуется как «промо может быть на экране» → без тапа;
+  3. *(codex P2)* ре-тап только при **положительном** подтверждении `foreground == YouTube`. Back мог увести в launcher, либо `_detect_foreground_pkg` вернуть None/'' (transient ADB) — оба случая = «не доказано YouTube» → попытка `_yt_ensure_foreground`, не вышло → `return False` без тапа;
+  4. *(codex P1)* **финальная проверка непосредственно перед ре-тапом**: dump, по которому будем тапать, должен быть валиден И не-промо. `_yt_ensure_foreground` гарантирует только foreground YouTube, но промо могло остаться поверх; пустой dump тоже не доказывает безопасность → `return False` без тапа.
 - **Бюджет**: ≤2 Back + 1 ре-тап «+» + 1 ре-проверка. Нет бесконечного цикла, если YouTube жёстко гейтит «+».
 - **Детектор требует 2 независимых маркера** (бренд + апселл) → низкий риск ложного срабатывания на легитимном контенте.
 - Recovery живёт **только** в ветке `strict_verify and not hits` → нулевое влияние на happy-path и на IG/TT (там `strict_verify=False`).
@@ -227,7 +239,9 @@ if strict_verify and not hits:
 - сценарий recovery: dump#1 промо → после Back dump#2 не промо → ре-тап → dump#3 с триггерами → возвращает True, зафиксирован ровно 1 ре-тап «+», событие `yt_premium_promo_dismissed`;
 - сценарий «промо не уходит» (жёсткий гейт): все dump'ы промо → возвращает False, событие `yt_premium_promo_dismiss_failed` с `reason='promo_still_visible_after_back_budget'`, и **строго 0 вызовов `adb_tap`/`tap_element`** (гард codex P1 — никаких тапов по видимому промо).
 - сценарий «пустой dump после Back» (transient ADB / FLAG_SECURE): `dump_ui` возвращает None/'' на всех попытках → `promo_gone` остаётся False → возвращает False, **0 вызовов `adb_tap`/`tap_element`** (пустой dump не считается доказательством снятия — гард codex P1).
-- сценарий «foreground-drift после Back» (стаб `_detect_foreground_pkg` → launcher/другой app, `_yt_ensure_foreground` → False): промо ушло, но foreground не YouTube → возвращает False, событие с `reason='foreground_drift_after_back'`, **0 вызовов `adb_tap`/`tap_element`** (гард codex P2 — не тапаем по чужому экрану).
+- сценарий «foreground-drift после Back» (стаб `_detect_foreground_pkg` → launcher/другой app или None, `_yt_ensure_foreground` → False): foreground не подтверждён как YouTube → возвращает False, событие с `reason='foreground_drift_after_back'`, **0 вызовов `adb_tap`/`tap_element`** (гард codex P2);
+- сценарий «промо вернулось после fg-recovery» (`_yt_ensure_foreground` → True, но pre-retap dump = промо): финальная проверка ловит → возвращает False, `reason='promo_or_empty_before_retap'`, **0 тапов** (гард codex P1, шаг 4);
+- сценарий «пустой dump перед ре-тапом» (back-dump валиден, fg=YouTube, но pre-retap dump None): возвращает False, **0 тапов**.
 
 **Интеграция — `_tap_plus_and_verify`:**
 - промо + recovery успешен → `_ok`;

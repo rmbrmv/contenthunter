@@ -4,7 +4,7 @@
 
 **Goal:** На шаге `yt_6` (create-меню) при отсутствии триггеров и распознанном интерстишле YouTube Premium — безопасно снять промо (Back), переоткрыть «+» и довести публикацию; если не снялось — упасть с отдельным кодом.
 
-**Architecture:** Чистый детектор-функция `_yt_is_premium_promo` + instance-метод recovery `_yt_dismiss_premium_promo_and_retap` (Back ×2 → 3 safety-гарда → ре-тап → re-verify), врезанные в ветку промаха `_tap_plus_and_verify`. Всё под kill-switch `YT_PREMIUM_DISMISS_ENABLED`. Один файл — `account_switcher.py`.
+**Architecture:** Чистый детектор-функция `_yt_is_premium_promo` + instance-метод recovery `_yt_dismiss_premium_promo_and_retap` (Back ×2 → 4 safety-гарда → ре-тап → re-verify), врезанные в ветку промаха `_tap_plus_and_verify`. Всё под kill-switch `YT_PREMIUM_DISMISS_ENABLED`. Один файл — `account_switcher.py`.
 
 **Tech Stack:** Python 3, pytest, `unittest.mock.MagicMock`, uiautomator XML dumps. Репо `delivery-contenthunter` (autowarm). Spec: `docs/superpowers/specs/2026-05-22-yt-premium-promo-dismiss-design.md`.
 
@@ -450,6 +450,45 @@ def test_recovery_fails_on_foreground_drift(monkeypatch):
     sw.p.adb_tap.assert_not_called()
     reasons = [c.kwargs["meta"].get("reason") for c in sw.p.log_event.call_args_list]
     assert "foreground_drift_after_back" in reasons
+
+
+def test_recovery_fails_on_unknown_foreground(monkeypatch):
+    # [codex P2] _detect_foreground_pkg вернул None (transient ADB) — НЕ
+    # доказательство YouTube → ре-тап запрещён, ensure_foreground не помог.
+    home_xml = (FIX / "home_feed_no_create.xml").read_text()
+    sw = _recovery_switcher([home_xml], fg_pkg=None, fg_recovered=False,
+                            monkeypatch=monkeypatch)
+    ok = sw._yt_dismiss_premium_promo_and_retap(CFG, "yt_6_create_menu")
+    assert ok is False
+    sw.p.tap_element.assert_not_called()
+    sw.p.adb_tap.assert_not_called()
+
+
+def test_recovery_fails_when_promo_persists_after_fg_recovery(monkeypatch):
+    # [codex P1] _yt_ensure_foreground вернул YouTube, но промо ещё висит →
+    # финальная проверка dump'а перед ре-тапом ловит → fail без тапа.
+    home_xml = (FIX / "home_feed_no_create.xml").read_text()
+    promo = (FIX / "premium_promo_family.xml").read_text()
+    # back-loop dump: home (промо ушло); fg=launcher, ensure=True; pre-retap: promo
+    sw = _recovery_switcher([home_xml, promo], fg_pkg="com.sec.android.app.launcher",
+                            fg_recovered=True, monkeypatch=monkeypatch)
+    ok = sw._yt_dismiss_premium_promo_and_retap(CFG, "yt_6_create_menu")
+    assert ok is False
+    sw.p.tap_element.assert_not_called()
+    sw.p.adb_tap.assert_not_called()
+    reasons = [c.kwargs["meta"].get("reason") for c in sw.p.log_event.call_args_list]
+    assert "promo_or_empty_before_retap" in reasons
+
+
+def test_recovery_fails_on_empty_dump_before_retap(monkeypatch):
+    # [codex P1] promo_gone по валидному back-dump'у, fg=YouTube, но pre-retap
+    # dump пустой → fail без тапа (пустота не доказывает безопасность).
+    home_xml = (FIX / "home_feed_no_create.xml").read_text()
+    sw = _recovery_switcher([home_xml, None], monkeypatch=monkeypatch)
+    ok = sw._yt_dismiss_premium_promo_and_retap(CFG, "yt_6_create_menu")
+    assert ok is False
+    sw.p.tap_element.assert_not_called()
+    sw.p.adb_tap.assert_not_called()
 ```
 
 - [ ] **Step 2: Запустить — убедиться, что падает**
@@ -495,25 +534,37 @@ Expected: FAIL — `AttributeError: ... '_yt_dismiss_premium_promo_and_retap'`.
                       'reason': 'promo_still_visible_after_back_budget'})
             return False
 
-        # [codex P2] Back мог увести foreground в launcher/другой app. Перед
-        # ре-тапом убедиться, что foreground всё ещё YouTube — иначе фолбэк-coords
-        # ударит по чужому экрану. При drift'е — попытка вернуть YouTube; не вышло
-        # → fail-fast без тапа.
+        # [codex P2] Ре-тап ТОЛЬКО при положительном подтверждении, что YouTube
+        # в foreground. Back мог увести в launcher/другой app; а ещё
+        # _detect_foreground_pkg может вернуть None/'' при transient ADB —
+        # это НЕ доказательство YouTube. Поэтому условие `fg != package`
+        # (а не `fg and fg != package`): любой неизвестный/чужой foreground →
+        # попытка вернуть YouTube; не вышло → fail-fast без тапа.
         fg = self._detect_foreground_pkg()
-        if fg and fg != cfg['package']:
+        if fg != cfg['package']:
             if not self._yt_ensure_foreground(
                     cfg, f'{final_step}_premium_post_back_fg_recovery'):
                 self.p.log_event('warning', 'yt_premium_promo_dismiss_failed',
                     meta={'category': 'yt_premium_promo_dismiss_failed',
                           'step': final_step,
                           'reason': 'foreground_drift_after_back',
-                          'foreground_pkg': fg})
+                          'foreground_pkg': fg or '(unknown)'})
                 return False
 
-        # 2) Промо ушло и YouTube в foreground → безопасно ре-тапнуть «+».
+        # 2) Промо ушло и YouTube в foreground → готовимся к ре-тапу.
         plus = cfg['plus_button']
         ui = self.p.dump_ui(retries=1)
-        tapped = self.p.tap_element(ui, plus['desc'], clickable_only=True) if ui else False
+        # [codex P1] ФИНАЛЬНАЯ проверка ПЕРЕД любым тапом: dump должен быть
+        # валидным И не-промо. _yt_ensure_foreground гарантирует лишь, что YouTube
+        # в foreground — но он мог вернуться с ВСЁ ЕЩЁ висящим промо; пустой dump
+        # тоже не доказывает безопасность. В обоих случаях фолбэк-coords «+»
+        # (540,2137) ударил бы по CTA подписки → fail без тапа.
+        if not ui or _yt_is_premium_promo(ui):
+            self.p.log_event('warning', 'yt_premium_promo_dismiss_failed',
+                meta={'category': 'yt_premium_promo_dismiss_failed', 'step': final_step,
+                      'reason': 'promo_or_empty_before_retap'})
+            return False
+        tapped = self.p.tap_element(ui, plus['desc'], clickable_only=True)
         if not tapped:
             self.p.adb_tap(*plus['coords'])
         time.sleep(POST_TAP_WAIT_S + 1.0)
@@ -538,7 +589,7 @@ Run:
 ```bash
 cd /home/claude-user/autowarm-wp132-dev && python3 -m pytest tests/test_yt_premium_promo_dismiss.py -k recovery -q
 ```
-Expected: 4 passed.
+Expected: 7 passed.
 
 - [ ] **Step 5: Commit**
 
@@ -721,7 +772,7 @@ Run:
 ```bash
 cd /home/claude-user/autowarm-wp132-dev && python3 -m pytest tests/test_yt_premium_promo_dismiss.py tests/test_yt_create_menu_strict_verify.py tests/test_yt_create_menu_fg_guard.py -q
 ```
-Expected: all passed (включая 17 новых). Если есть упавшие из прочих switcher-тестов — прогнать `python3 -m pytest tests/ -q -k "switch or yt_ or create_menu"` и убедиться, что новых падений нет относительно baseline (Task 0 Step 4).
+Expected: all passed (включая 19 новых). Если есть упавшие из прочих switcher-тестов — прогнать `python3 -m pytest tests/ -q -k "switch or yt_ or create_menu"` и убедиться, что новых падений нет относительно baseline (Task 0 Step 4).
 
 - [ ] **Step 2: Codex review дельты кода**
 
@@ -768,6 +819,6 @@ ORDER BY id DESC LIMIT 20;
 
 ## Self-review заметка
 
-- **Покрытие спеки:** детектор (Task 1), exact-match рефактор §3.6 (Task 2), recovery + 3 гарда §3.4/§4 (Task 3), врезка + отдельный код §3.5/§5 (Task 4), kill-switch (Task 1+4), тесты §6 (Tasks 1/3/4), деплой §7 (Task 5). Подсигнатура B §8 — не трогаем.
+- **Покрытие спеки:** детектор (Task 1), exact-match рефактор §3.6 (Task 2), recovery + 4 гарда §3.4/§4 (Task 3), врезка + отдельный код §3.5/§5 (Task 4), kill-switch (Task 1+4), тесты §6 (Tasks 1/3/4), деплой §7 (Task 5). Подсигнатура B §8 — не трогаем.
 - **Типы/имена:** `_yt_is_premium_promo`, `_premium_dismiss_enabled`, `_exact_match_triggers`, `_yt_dismiss_premium_promo_and_retap`, `UI_CONSTANTS["YouTube"]`, `CFG["editor_triggers"]`, `CFG["plus_button"]`, `cfg['package']`, событие-категории и код `yt_create_menu_premium_blocking` — единообразны во всех тасках.
 - **Плейсхолдеров нет.**
