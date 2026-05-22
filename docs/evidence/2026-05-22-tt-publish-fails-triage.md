@@ -46,7 +46,11 @@
 
 ## Решение
 
-Заведена **WP #130** (Ошибка, Бэклог): TikTok теряет передний план при переключении — топ-1 объём падений TT за 22.05. Предложение: детект `foreground != com.zhiliaoapp.musically` ДО probe панели аккаунтов → recovery (relaunch + закрытие чужого приложения) → при неудаче честный `tt_fg_drift_unrecoverable` вместо `tt_account_sheet_closed_before_parse`; усилить восстановление для петли перезапуска.
+**WP #130 — SHIPPED+DEPLOYED 2026-05-22** (delivery-contenthunter PR #97, прод-коммит `486fec2`; статус «Тестирование»). Foreground-guard на шаге `tt_3_open_list` (зеркало IG WP #119): перед открытием панели аккаунтов проверяем `foreground == com.zhiliaoapp.musically`; если нет → relaunch + re-navigate + verify own-profile, иначе честный `tt_fg_drift_unrecoverable` вместо `tt_account_sheet_closed_before_parse`. Placement A (перед `_open_tt_account_switcher`) + placement B (re-check при drift во время probe). Kill-switch `TT_SWITCH_FG_GUARD_ENABLED` (default ON). 10 тестов, 217 switcher-тестов зелёные, codex 2 раунда P2 чисто. pm2 restart не нужен (publisher per-task spawn). Verify утром 23.05.
+
+**WP #131 — заведена в бэклог** (`tt_profile_tab_broken`, 9117/9156): после перехода в профиль-таб бот не распознаёт собственный профиль (`tt_2_not_own_profile`) — отдельный баг навигации, требует разбора UI-dump.
+
+**Остаток (вне scope #130):** усиление recovery для петли перезапуска TikTok (9210/9229) — она уже корректно классифицируется как `tt_fg_drift_unrecoverable`, но восстановление не справляется.
 
 ## SQL для воспроизведения
 
