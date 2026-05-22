@@ -18,6 +18,96 @@
 
 Spec/plan/runbook: `docs/superpowers/specs/2026-05-21-wp108-publish-retry-engine-design.md`, `docs/superpowers/plans/2026-05-21-wp108-publish-retry-engine.md`, `docs/superpowers/plans/2026-05-21-wp108-deploy-options.md`, `docs/superpowers/plans/2026-05-22-wp108-deploy-c1-runbook.md`. Память: `project_wp108_retry_engine_shipped`. OpenProject WP #108 → **Тестирование** (ждёт live-наблюдения handoff-ветки).
 
+## 2026-05-22 — TT: foreground-hijack на шаге переключения аккаунта (WP #130) + tt_profile_tab_broken (WP #131)
+
+### ✅ SHIPPED+DEPLOYED 2026-05-22 — delivery-contenthunter#97 (merge `486fec2`)
+
+Триаж TT-фейлов за 2026-05-22 (13 задач, сетевой `adb_devices_unreachable` исключён). Группировка по последнему `events[].meta.category`. Топ по эмитнутому коду — `tt_account_sheet_closed_before_parse` (4), но это **смешанный бакет**.
+
+**Корень (доказан скринкастами + UI-dump labels):** на шаге `tt_3_open_list` TikTok теряет передний план — task 9116 → Instagram (профиль `jasleen`), 9239 → домашний экран Samsung, 9210/9229 → петля перезапуска/сплэш TikTok. `_open_tt_account_switcher` тапал шапку профиля и парсил ЧУЖОЙ экран → bottomsheet «не открылся» → ложный `tt_account_sheet_closed_before_parse` (2 из 4 фейлов мис-классифицированы так). Fg-guard стоял только на старте свитча (`tt_1_feed`), а drift случался позже. По первопричине foreground-drift = **4/13 (топ-1)**.
+
+**Что сделано (`account_switcher.py`, зеркало IG WP #119):** kill-switch `_tt_switch_fg_guard_enabled()` (`TT_SWITCH_FG_GUARD_ENABLED`, default ON); `_tt_guard_switcher_foreground(cfg)` — `_detect_foreground_pkg()`, TT/неопределён → no-op, чужой → `_ensure_app_foregrounded('TikTok')` + re-navigate + verify own-profile (`_tt_is_own_profile(dump_ui(retries=3))`), tri-state `ok`/`recovered`/`unrecoverable`. **Placement A** (в `_switch_tiktok` перед `_open_tt_account_switcher`): recover или честный fail `tt_fg_drift_unrecoverable`, панель на чужом экране не открываем; после recovery перечитываем `elements`. **Placement B** (внутри `_open_tt_account_switcher`): probe не открыл панель И foreground уже не TikTok → `tt_fg_drift_unrecoverable` вместо account_sheet (drift во время probe-тапа). Классификация через `final_step=tt_fg_drift_unrecoverable` (`_SWITCHER_STEP_TO_CATEGORY`). Настоящий sheet-not-open (foreground=TikTok, 9179/9183) по-прежнему → `tt_account_sheet_closed_before_parse` (территория WP #96).
+
+**Тесты/ревью:** 10 новых тестов (`tests/test_account_switcher_tt_switch_fg_guard.py`); 217 switcher-тестов зелёные; codex review 2 раунда P2 (verify own-profile после re-nav; консистентность с retap-loop) → финал чистый.
+
+**Деплой:** PR #97 squash-merge в `main`, прод `git pull --ff-only` (`bd8c6a5..486fec2`, чисто), фикс в прод-файле, синтаксис OK. pm2 restart НЕ нужен — публикатор спавнится per-task, `exec cwd` = прод-путь. Kill-switch ON. **Verify утром 23.05:** меньше `tt_account_sheet_closed_before_parse`, честный `tt_fg_drift_unrecoverable` при реальном drift.
+
+**WP #131 (Бэклог):** `tt_profile_tab_broken` (9117/9156, шаг `tt_2_not_own_profile`, 2/13) — после перехода в профиль-таб бот не распознаёт собственный профиль; нужен разбор UI-dump (неверная навигация vs сломанное распознавание own-profile). **Остаток вне #130:** усиление recovery петли перезапуска TikTok (9210/9229).
+
+Триаж: `docs/evidence/2026-05-22-tt-publish-fails-triage.md`. Память: `project_tt_triage_2026_05_22`. OpenProject WP #130 → **Тестирование** (комменты 424/425), WP #131 → Бэклог.
+
+## 2026-05-22 — IG: ig_app_launch_failed рецидив (WP #105 Round 2)
+
+### ✅ SHIPPED+DEPLOYED 2026-05-22 — delivery-contenthunter#98 (squash `862ce81`)
+
+Рецидив после частичного фикса PR #76: `ig_app_launch_failed` 22.05 = **пик 6–7/день** (топ-1 кодовый IG-фейл), raspberries 1/2/3/5, разные устройства/аккаунты → код-баг. Полный цикл superpowers: brainstorm→spec→plan (codex)→subagent-driven (имплементер + spec-ревью + quality-ревью + контроллерская верификация + codex на диффе).
+
+**Что было не так:** trace task 9227 — `_ensure_app_foregrounded` дважды независимо подтверждает IG через dumpsys, затем 5× `foreground_pkg_disagree` (dumpsys=instagram / uiautomator=launcher) за ~4.5 мин, settle-wait 0 раз → fail на `ig_1_feed`. Confirming-poll из PR #76 (Codex P2 round 2) ждёт, пока uiautomator догонит dumpsys; в проде uiautomator залипает на launcher-окне минутами → ложный провал. Уточнённый root cause: **сломан именно uiautomator XML-дамп**; dumpsys И скриншот корректны.
+
+**Что сделано:** одна правка в `_foreground_pkg` (внутри `_open_app`) — после неудачного catch-up uiautomator проверяем стабильность dumpsys (`stable_reads_required=3` чтения подряд == target, 0.5с) → доверяем dumpsys, эмитим `switcher_foreground_trusted_dumpsys`. Под kill-switch `SWITCHER_TRUST_DUMPSYS_ON_STALE_UI` (default on). Защита от реальных overlay (permissioncontroller и т.п.) сохранена — новый путь только при `pkg_ui ∈ {launcher, пусто}`. `_ensure_app_foregrounded` не трогали (корректен). Решение «доверять dumpsys + стабилизация» выбрано Данилом из 3 опций (vs скриншот-арбитр / мульти-recovery).
+
+**Деплой:** прод на main чистый → `git pull --ff-only` (486fec2..862ce81). PM2 restart НЕ нужен — публикатор спавнится свежим на задачу (scheduler.js `__dirname`=прод-дир). Откат мгновенный через kill-switch.
+
+**Тесты/ревью:** 66 зелёных (старый `..._does_not_shortcut` инвертирован в `..._trusts_dumpsys`; +flapping +killswitch локи). Spec- и code-quality-ревью пройдены (1 minor: `stable_reads` single-source-of-truth — применён). **codex: 0 P1**; один **P2** («доверие dumpsys без независимого visibility-сигнала») — принятый trade-off (премиса противоположна фактам — свежий именно dumpsys; downstream UI-шаги ловят реальный not-up).
+
+**Остаток:** verify динамики `ig_app_launch_failed` за 24ч (утро 2026-05-23) → к нулю → OpenProject «Готово».
+
+Spec/plan: `docs/superpowers/specs|plans/2026-05-22-wp105-dumpsys-trust-on-stale-ui*`. Память: [[project_wp105_ig_app_launch_stale_uiautomator_shipped]]. OpenProject WP #105 → **Тестирование** (comment id 426).
+
+## 2026-05-21 — Планировщик в деливери (WP #109)
+
+### ✅ SHIPPED+DEPLOYED 2026-05-21 — delivery-contenthunter main `a8c4f4b`
+
+Запрос Анастасии (мокап + описание): дать менеджеру видимый календарь-планировщик выкладок с переносами. Полный цикл superpowers: brainstorm→spec→plan (codex 0 P1; все P2 закрыты)→subagent-driven (11 задач: имплементеры + spec/quality-ревью + финальное opus-ревью + контроллерская верификация на живой БД).
+
+**Что:** read-only визуализация поверх движка ретраев #108. (1) новый под-таб `up:planner` в «Выкладка» — недельная сетка, карточки «проект×ролик×день» (published/approved/pending/partial/echo/final), N/N, прогресс-бар, пометки переносов (↗/↩/закрыло), 🤖/👋, hover-подсветка цепочки, клик→очередь; (2) две колонки очереди «перенесено»+«попытка».
+
+**Архитектура (Подход 1):** переносы ВЫВОДЯТСЯ из таймлайна `publish_tasks` по МСК-дням, ничего нового не хранится. Модуль `publish_planner.js` (чистые `buildPlannerCards`/`deriveTransferColumns` — 11 юнит-тестов + `getPlannerCards` SQL), роут `GET /api/publish/planner`. Тонкий контракт к #108 (`client_publish_id`/`manual_handoff_at`/`error_class` — уже в БД → full-режим). Kill-switches `PLANNER_ENABLED`/`QUEUE_TRANSFER_COLUMNS_ENABLED`. Деплой ff-merge клон→прод-main + ручной push (ff не триггерит auto-push hook). OpenProject → Тестирование.
+
+**Остаток / follow-up:**
+- ⚠️ **Дубль-карточка при `meta_slot_id_missing`** (найдено финальным ревью; в проде наблюдается, напр. result_id 16214): если `publish_queue`-строка не привязана к слоту (нет `slot_id` в `unic_task.meta`), дедуп плановой карточки не срабатывает → один слот показывает ОБЕ карточки (плановую approved/pending + выкладочную). Косметика, не краш. Фикс при необходимости: расширить `NOT EXISTS` дедуп в `getPlannerCards` на `(project_id, scheduled_date)`.
+- Браузерная приёмка Данила (после — перевести WP #109 в «Готово»).
+
+## 2026-05-21 — Валидатор: убрать разделы «Менеджер» и «Продюсер» (WP #71)
+
+### ✅ SHIPPED+DEPLOYED 2026-05-21 — validator-contenthunter#21 (merge `c14bbeb`)
+
+Запрос Анастасии (описание пустое, scope уточнён с Данилом): полностью убрать из фронтенда валидатора разделы «Менеджер» и «Продюсер» со всеми подразделами — у всех ролей, **включая админа**. Клиент не трогать. Полный цикл superpowers: brainstorm→spec→plan (codex 0 P1 на обоих)→subagent-driven (Tasks 1-7: имплементеры по группам + spec-ревью + codex на полном диффе + контроллерская верификация).
+
+**Решения (с Данилом):** глубина = «интерфейс целиком» (меню + маршруты + страницы + эксклюзивные компоненты); бэкенд и данные НЕ трогаем; доступ = убрать у всех включая админа, роли `manager`/`producer` в авторизации/БД **СОХРАНИТЬ** (можно вернуть).
+
+**Архитектура (только фронтенд, `validator-contenthunter/frontend`):** удалены 11 маршрутов manager/producer из `router/index.ts` + добавлен catch-all `/:pathMatch(.*)* → /dashboard` (catch-all не было; старые/закладочные ссылки давали бы пустую страницу); убраны секции меню в `AppSidebar.vue` (десктоп + мобайл); post-login редиректы ролей manager/producer → `/dashboard` (`LoginPage.vue` ×2 + `TgCallbackPage.vue`; раньше вели на удалённые `/manager`,`/producer` = 404); подчищены title-мэппинги в `AppHeader.vue`; удалены 11 страниц (`pages/manager/*`, `pages/producer/*`) + 3 эксклюзивных компонента (`ClientGrid`, `FuelGauge`, `WeeklyGrid`). Сохранены `isManager`/`isProducer` в `stores/auth.ts`, общие компоненты (`PlatformIcon`/`DropZone`/`UploadProgress`), весь бэкенд. Guard-тест `router/__tests__/routes.spec.ts` (нет manager/producer-маршрутов + есть catch-all). Админ инспектирует клиента через переключатель проектов на Планировщике (`/dashboard` имеет roles client/manager/producer/admin) — функция удалённого `ClientView` дублируется.
+
+**Деплой:** `npm run build` → postbuild авто-копирует в `/var/www/validator` (= прод-деплой; для проверки без деплоя — `npx vue-tsc --noEmit`). PR #21 смержен в main, локальный main синхронизирован. В новом бандле нет чанков/ссылок manager/producer; старые хеш-чанки в `/var/www/validator/assets` оставлены намеренно (cp без удаления → защищает юзеров со stale index до hard-reload).
+
+**Тесты/ревью:** vue-tsc чист; vitest 18/18. Codex на полном диффе дал 2×P1 — **оба ложные** (codex видит только дифф): «WeeklyGrid нужен планировщику» (клиентский dashboard его НЕ импортирует, vue-tsc чист) и «manager/producer не авторизованы на /dashboard» (route имеет эти роли, строка вне диффа). Опровергнуты grep'ом + чтением строки 12 роутера.
+
+**Уроки:** (1) валидатор-фронт `npm run test` имеет ПРЕД-СУЩЕСТВУЮЩИЙ красный сюйт `slotStatus.test.ts` (импортирует `node:test`, несовместим с бандлером vitest; есть и на main) — это baseline-шум, НЕ регрессия. (2) codex-ревью на удалениях склонен к diff-blindness false-positive про «осиротевшие» зависимости — сверять с vue-tsc + grep по всему `src`, не принимать вслепую.
+
+Spec/plan: `docs/superpowers/specs|plans/2026-05-21-wp71-remove-manager-producer-sections*`. Память: `project_wp71_remove_manager_producer`. OpenProject WP #71 → **Готово** (проверено в браузере Данилом 2026-05-21).
+
+## 2026-05-21 — Ручная выкладка: группировка по видео + реалтайм + guard автопубликации (WP #123/#124/#125)
+
+### ✅ SHIPPED+DEPLOYED 2026-05-21 — delivery-contenthunter#95 (#125, merge `f421811`) + #96 (#123/#124, merge `861f63f`)
+
+Пачка из трёх взаимосвязанных задач поверх ручной выкладки (WP #85/#107/#115). Полный цикл superpowers: brainstorm→2 спека→2 плана (codex 0 P1: #125 — 2 раунда, #123/#124 — 7 раундов)→subagent-driven (имплементер + spec-ревью + quality-ревью на каждую часть; конкурентность проверена эмпирически — 40 параллельных claim, 0 split-ownership).
+
+**#125 — manual-слот автовыложился (хотфикс).** Корень (по данным slot 21246 Feminista): строки `publish_queue` создаются ДО пометки слота «вручную», флаг ставят позже, и (1) включение флага не отменяло pending-строки, (2) `dispatchPublishQueue` не перепроверял флаг. Фикс — перепроверка на единственном чокпоинте `checkDispatchQueueSlotLineage` (под advisory-lock, до lineage) через helper `slotIsEffectivelyManual` (переиспользует `effectiveManualSql` → ловит и client-level WP#115); manual → строка `cancelled`/`skip_reason='manual_publish'`. Kill-switch `DISPATCH_MANUAL_RECHECK_ENABLED`. Разовая зачистка `scripts/wp125_cleanup_manual_pending.sql` (CTE numeric-фильтр slot_id). 14/14 тестов (импортирует `./server` → `--test-force-exit`).
+
+**#123 — группировка по исходному видео.** Карточка = группа по `unic_result_id` (одно уник-видео × один пак); на весь экран; мини-таблица по площадкам (per-platform handle — юзернеймы по площадкам могут различаться); копируемая ссылка на уник-видео; «Взять в работу» на весь пак.
+
+**#124 — реалтайм + защита «уже в работе».** `takeGroup`/`returnGroup` по `unic_result_id` (в `withTx`), pack-level ownership guard (блок только по `in_progress`, NULL-владелец тоже блокирует, re-entrant для своего, `published` не лочит); 409 «Задача взята оператором XXX»; частичная выкладка per-platform; поллинг ~5 c (ENV `MPQ_POLL_MS`), не затирает наполовину введённую ссылку. 9/9 backend-тестов.
+
+**⚠️ FK-fix миграция (нашёл имплементер):** колонки `taken_by_id`/`published_by_id` существовали с WP#107, но FK вёл на `validator_users` (оператор дашборда — `autowarm_users`). `migrations/20260521_manual_queue_taken_by_fk_fix.sql` перевешивает FK на `autowarm_users`. Применена к общей БД при разработке (idempotent `IF EXISTS`, 0/119 строк non-NULL → нулевой риск). **Cross-repo follow-up:** проверить, не переустановит ли валидаторная WP#107-миграция старый FK (`validator_users`) при redeploy.
+
+**Деплой:** оба ff `git pull` в прод-checkout `/root/.openclaw/workspace-genri/autowarm` (без нового коммита → auto-push hook не триггерится) + `sudo pm2 restart 34`. #125: cleanup `UPDATE 0`. #123/#124: group-эндпоинты отвечают 401 (живые). online, 0 unstable restarts. ⚠️ открытым вкладкам «Выкладки» нужен hard-reload (кэш index.html).
+
+**Follow-ups (минор, не блокеры):** слой-2 (валидаторная немедленная отмена pending при включении флага) — опционально, слой-1 закрывает баг; косметика — кнопка «Вернуть пак» показывается на возвращённом частично-выложенном паке (no-op); `published_by_id` пишется не везде; per-id `take`/`return` эндпоинты оставлены (backcompat, новый UI не использует); заголовок секции «Ручная выкладка».
+
+**Урок:** worktree ПЕРВЫМ действием — рецидив shared-checkout branch-swap (соседняя сессия перебила HEAD общего `contenthunter`-checkout, мой коммит планов уехал на чужую ветку; recovery cherry-pick + `reset --mixed`). Зафиксировано в `feedback_parallel_claude_sessions`.
+
+Spec/plan: `docs/superpowers/specs|plans/2026-05-21-wp125-*` и `*-wp123-124-*`. Память: `project_wp123_124_125_manual_publish_iteration`. OpenProject #123/#124/#125 → Тестирование (комменты 402/403/404; ждёт браузерной приёмки фронта #123/#124 + суток наблюдения #125).
+
 ## 2026-05-21 — Дашборд выкладки: график Success rate в динамике + фильтры (WP #90)
 
 ### ✅ SHIPPED+DEPLOYED 2026-05-21 — delivery-contenthunter `60a7a07` (фича) + `bdffb72` (hotfix меток)
@@ -539,7 +629,7 @@ OpenProject WP #82, memory: [[project_tt_upload_confirmation_false_negative_ship
 
 ## 2026-05-15 — TT commercial-music modal handler (WP #75)
 
-### `tt_upload_confirmation_timeout` (новая сигнатура «Коммерческие треки → TikBiz playlist») — ✅ SHIPPED 2026-05-15 PR #66
+### `tt_upload_confirmation_timeout` (новая сигнатура «Коммерческие треки → TikBiz playlist») — ✅ SHIPPED 2026-05-15 PR #66 → ✅ VERIFIED + «Готово» 2026-05-22
 
 Триаж TT-фейлов за день: 175 fails, 166 = сетевая `adb_devices_unreachable` (исключена, network уже починен), top non-network = 3 явных `tt_upload_confirmation_timeout` (tasks 6495/6510/6512) + 1 orphan (5202) с той же сигнатурой = 4/9 ≈ 44% non-network падений из одной корневой. На всех 3 screencast'ах TT застрял на одной и той же странице **«Коммерческие треки → TikBiz playlist»** (треки PONCHET, Yang Salah, Beat Automotivo, Happy/Vide..., Countless...) — публикатор не закрывает модал, AI vision возвращает `{x:null,y:null}` для кнопки «Опубликовать», 3-мин `wait_upload` timeout. Разные аккаунты (axilor_prive/brand, clickpay_under), разные устройства (RF8Y80ZTVFZ/RF8YA09S90H/RFGYC31P94Z), разные raspberry (#1/#9) — баг воспроизводим, не device-state. Это **НЕ** music-rights confirmation (диалог *согласия*, закрыт PR #28/#32), а новый **selector с принудительным выбором** коммерческого трека.
 
@@ -552,6 +642,8 @@ PR GenGo2/delivery-contenthunter#66 (squash `2dd53ff`): **3-level detector** (st
 4. Если `tt_commercial_music_unhandled_suspect` (evidence-only) сработает — включить `TT_COMMERCIAL_MUSIC_FALLBACK_ENABLED=true` и собрать XML dumps в `/tmp/autowarm_ui_dumps/`.
 
 Memory: [[project_tt_commercial_music_modal_wip]]. Spec/plan/evidence: `docs/superpowers/specs/2026-05-15-tt-commercial-music-modal-handler-design.md` + `docs/superpowers/plans/2026-05-15-tt-commercial-music-modal-handler.md` + `docs/evidence/2026-05-15-tt-publish-fails-triage.md`.
+
+**Верификация + закрытие 2026-05-22** (`docs/evidence/2026-05-22-wp75-commercial-music-verify-close.md`): за 7д окно возникало 27 раз → `tt_commercial_music_cancelled`=27 / `_dismissed`=27, `_stuck`=0, `_track_selected`=0 — handler гасит окно при каждом появлении (acceptance 2 и 3 ✅, switch policy на select-первым НЕ понадобился). Сигнатура `ai_find_tap_no_coords` именно на модале не рецидивирует (acceptance 1 ✅). Нюанс: из 27 погашенных задач 16→done, 11→failed позже по флоу, но это НЕ модал — отдельный класс (`tt_upload_confirmation_timeout`: кнопка Publish / `wait_upload` false-negative), все 11 ДО фиксов WP #82 (PR #69, 18.05) и WP #118 (PR #89, 21.05); 22.05 после них — 0. Остаток ведут **WP #118** (shipped) / **WP #122** (backlog). Новый commercial-music handler не открывать. OpenProject WP #75 → «Готово».
 
 ### Открытые runner-up'ы из триажа 2026-05-15 (не затикечены, малый объём)
 
