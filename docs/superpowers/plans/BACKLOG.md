@@ -1,5 +1,23 @@
 # Backlog tickets
 
+## 2026-05-22 — Движок ретраев публикаций (WP #108)
+
+### ✅ SHIPPED+DEPLOYED+VERIFIED 2026-05-22 — delivery-contenthunter main `bd8c6a5` (вариант C1 «чистый лист»)
+
+Дизайн/план/код движка сделаны предыдущей сессией (ветка кода `wp108-publish-retries`, 19 тестов, ревью READY-WITH-NOTES). Эта сессия = деплой по согласованному на созвоне варианту **C1 «Старт с чистого листа»** + включить сразу + МСК-старт 05:00.
+
+**Что включено:** классификатор `error_class` (network/ui_changed/banned/rate_limited/unknown) + чистая `decideRetry` (retry_decision.js) + крон `retryFailedPublishes` (retry_controller.js, тик 5 мин, окно до 23:00 МСК) + хук идемпотентности перед Share (publish_idempotency.py). Лимиты: 3 ретрая/сутки/класс, окно 2 дня → дальше в ручную (переиспользует сагу #85/#107/#115/#125); banned/ui_changed → сразу в ручную; реестр `fixed_at` реанимирует. 7 env-рубильников (дефолт вкл). Контроллер линкует задачу↔намерение по `client_publish_id` (`WHERE status='failed' AND manual_handoff_at IS NULL`, LIMIT 200).
+
+**Деплой C1:** бэклог 2156 упавших помечен `manual_handoff_at=now(), skip_reason=COALESCE(skip_reason,'retry_clean_slate_20260522')` (откат — по timestamp пачки `2026-05-22 09:48:28.533923+00`; COALESCE сохранил 1 чужой skip_reason — фикс codex P2). `unic_settings → Europe/Moscow / 05:00:00` (slot_date=DATE, сдвига нет). Cross-repo grep выявил взаимодействие с планировщиком WP #109 (читает `manual_handoff_at` → колонка «перенесено» в очереди) — косметика, принято.
+
+**⚠️ Снаг при деплое (главный урок):** после merge у новых publish_tasks НЕ проставлялся `client_publish_id` → контроллер их молча пропускал. Двойной корень: (1) **3 зомби-процесса** `test_dispatch_manual_guard.test.js` (WP #125, ~20ч, из удалённого worktree) импортировали server.js → крутили теневой autowarm старым кодом, диспатча боевую очередь; (2) **`pm2 restart` грузил stale-код** — помог только `pm2 delete` + `start` из `ecosystem.production.config.js` + `pm2 save`. После фикса cpid 5/5. Опознание: postgres в контейнере (172.17.0.3:5432), клиенты — host-процессы (172.17.0.1); `sudo ss -tnpH|grep 5432→pid→/proc/$pid/{cmdline,cwd}`. Память: [[feedback-stale-node-test]], [[feedback-pm2-dump-path-drift]].
+
+**Верификация вживую:** 11:21 `[retry-controller] requeue pq#5005 (unknown, transient_within_limits)` — реальное падение подхвачено, классифицировано и возвращено в очередь. autowarm = pm2 id=35, стабилен.
+
+**Follow-ups / out-of-scope:** ① путь «передача в ручную при исчерпании окна/лимита» — проявится за 1-2 дня по мере накопления (наблюдать через WP #114 дневной отчёт + логи `[retry-controller] handoff`); ② задачи, созданные между деплоем и фиксом (~pt 9298-9365) — без cpid, движок их не подхватит (как и C1-бэклог), безобидный транзиент, не чинить; ③ пункт 10 задачи (возврат ручная→авто на след. день) — отдельно, вне #108; ④ параллелизм малинок (3→до 8) — тюнинг с мониторингом fail-rate; ⑤ зомби-процессы node server.js с марта на VPS → **WP #133** (бэклог).
+
+Spec/plan/runbook: `docs/superpowers/specs/2026-05-21-wp108-publish-retry-engine-design.md`, `docs/superpowers/plans/2026-05-21-wp108-publish-retry-engine.md`, `docs/superpowers/plans/2026-05-21-wp108-deploy-options.md`, `docs/superpowers/plans/2026-05-22-wp108-deploy-c1-runbook.md`. Память: `project_wp108_retry_engine_shipped`. OpenProject WP #108 → **Тестирование** (ждёт live-наблюдения handoff-ветки).
+
 ## 2026-05-22 — TT: foreground-hijack на шаге переключения аккаунта (WP #130) + tt_profile_tab_broken (WP #131)
 
 ### ✅ SHIPPED+DEPLOYED 2026-05-22 — delivery-contenthunter#97 (merge `486fec2`)
@@ -89,6 +107,7 @@ Spec/plan: `docs/superpowers/specs|plans/2026-05-21-wp71-remove-manager-producer
 **Урок:** worktree ПЕРВЫМ действием — рецидив shared-checkout branch-swap (соседняя сессия перебила HEAD общего `contenthunter`-checkout, мой коммит планов уехал на чужую ветку; recovery cherry-pick + `reset --mixed`). Зафиксировано в `feedback_parallel_claude_sessions`.
 
 Spec/plan: `docs/superpowers/specs|plans/2026-05-21-wp125-*` и `*-wp123-124-*`. Память: `project_wp123_124_125_manual_publish_iteration`. OpenProject #123/#124/#125 → Тестирование (комменты 402/403/404; ждёт браузерной приёмки фронта #123/#124 + суток наблюдения #125).
+
 ## 2026-05-21 — Дашборд выкладки: график Success rate в динамике + фильтры (WP #90)
 
 ### ✅ SHIPPED+DEPLOYED 2026-05-21 — delivery-contenthunter `60a7a07` (фича) + `bdffb72` (hotfix меток)
