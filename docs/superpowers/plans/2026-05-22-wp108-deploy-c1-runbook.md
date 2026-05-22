@@ -56,11 +56,13 @@
    UPDATE unic_settings SET timezone='Europe/Moscow', publish_start='05:00:00' WHERE id=1
    RETURNING timezone, publish_start;
    ```
-5. **C1 «чистый лист»** (ДО рестарта, пока крон ещё не в рантайме; зафиксировать count для отката):
+5. **C1 «чистый лист»** (ДО рестарта, пока крон ещё не в рантайме). `now()` в одном `UPDATE` одинаков для всех строк — **зафиксировать это значение `manual_handoff_at` (и count) для отката**. `COALESCE` сохраняет уже осмысленный `skip_reason` (на 2026-05-22 такой 1 — «orphaned pt 4548…»), не затирая его:
    ```sql
    UPDATE publish_queue
-      SET manual_handoff_at = now(), skip_reason = 'retry_clean_slate_20260522'
-    WHERE status='failed' AND manual_handoff_at IS NULL;   -- ~2152
+      SET manual_handoff_at = now(),
+          skip_reason = COALESCE(skip_reason, 'retry_clean_slate_20260522')
+    WHERE status='failed' AND manual_handoff_at IS NULL
+   RETURNING id, manual_handoff_at, skip_reason;   -- ~2155
    ```
 6. **Рестарт:** `pm2 restart autowarm` — регистрируется крон. Флаги по дефолту вкл (`RETRY_ENGINE_ENABLED`, `RETRY_MANUAL_HANDOFF_ENABLED`, `IDEMPOTENCY_CHECK_ENABLED`). Publisher запускается per-task (spawn) — подхватит Python без отдельного рестарта.
 7. **Smoke (первый день):**
@@ -85,7 +87,13 @@
 ## 8. Откат
 
 - **Движок:** `RETRY_ENGINE_ENABLED=false` + restart (мгновенно, без передеплоя).
-- **C1-пометка:** `UPDATE publish_queue SET manual_handoff_at=NULL, skip_reason=NULL WHERE skip_reason='retry_clean_slate_20260522';`
+- **C1-пометка:** откат по зафиксированному timestamp пачки (`<TS>` = `manual_handoff_at` из RETURNING), чтобы не задеть будущие реальные handoff'ы и сохранить чужие `skip_reason`:
+  ```sql
+  UPDATE publish_queue
+     SET manual_handoff_at = NULL,
+         skip_reason = CASE WHEN skip_reason='retry_clean_slate_20260522' THEN NULL ELSE skip_reason END
+   WHERE manual_handoff_at = '<TS>';
+  ```
 - **МСК:** вернуть `unic_settings` на `Asia/Dubai`/`09:00:00`.
 - **Код:** прод-чекаут на предыдущий коммит + restart. Схема аддитивна — откат не требуется.
 
