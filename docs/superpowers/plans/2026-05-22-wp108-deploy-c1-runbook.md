@@ -101,3 +101,17 @@
 
 - Поднимать ли параллелизм малинок (3→до 8) — отдельный тюнинг с мониторингом fail-rate, не блокер.
 - Разовая «зачистка» старого бэклога (вариант C2/C3) — позже, отдельным осознанным заходом; сейчас бэклог остаётся за операторами.
+
+## 10. Фактический исход деплоя (2026-05-22)
+
+Выполнено по runbook: код → прод-main delivery `bd8c6a5` (ff-merge + push, без force); МСК `Europe/Moscow/05:00`; C1-пометка 2156 строк (timestamp пачки `2026-05-22 09:48:28.533923+00`, COALESCE сохранил 1 чужой skip_reason); рестарт.
+
+**Снаг (учтён в [[feedback-stale-node-test]] / [[feedback-pm2-dump-path-drift]]):** после деплоя новые publish_tasks не получали `client_publish_id` → контроллер их молча пропускал. Корень двойной:
+1. **Зомби-процессы WP #125** (`test_dispatch_manual_guard.test.js`, ~20ч, удалённый worktree) импортировали `server.js` → теневой autowarm диспатчил боевую очередь старым кодом. Лечение: `pkill -f test_dispatch_manual_guard` (⚠️ зацепит свой shell — проверять по PID через `kill -0`).
+2. **`pm2 restart` грузил stale-код** (хотя `script path`/`exec cwd` верны). Лечение: `pm2 delete autowarm` + `pm2 start ecosystem.production.config.js` + `pm2 save`. autowarm стал id=35.
+
+После фикса: cpid у новых задач 5/5. **Верификация вживую:** `11:21 [retry-controller] requeue pq#5005 (unknown, transient_within_limits)`.
+
+**Диагностический приём (опознать реального диспатчера):** postgres в контейнере (`172.17.0.3:5432`), клиенты-host видны как `172.17.0.1`; `sudo ss -tnpH | grep 5432 → pid → /proc/$pid/{cmdline,cwd}` (нужен root-терминал, не `!`-сессия и не sudo-NOPASSWD-scope claude-user). Контролируемый тест «кто диспатчит»: остановить pm2-autowarm на один интервал, смотреть, появляются ли новые задачи, привязанные к очереди.
+
+**Остаток:** наблюдать handoff-ветку (передача в ручную при исчерпании окна/лимита) 1-2 дня. Зомби node server.js с марта → WP #133.
