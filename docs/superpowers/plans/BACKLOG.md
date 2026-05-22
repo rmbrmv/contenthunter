@@ -18,6 +18,24 @@
 
 Триаж: `docs/evidence/2026-05-22-tt-publish-fails-triage.md`. Память: `project_tt_triage_2026_05_22`. OpenProject WP #130 → **Тестирование** (комменты 424/425), WP #131 → Бэклог.
 
+## 2026-05-22 — IG: ig_app_launch_failed рецидив (WP #105 Round 2)
+
+### ✅ SHIPPED+DEPLOYED 2026-05-22 — delivery-contenthunter#98 (squash `862ce81`)
+
+Рецидив после частичного фикса PR #76: `ig_app_launch_failed` 22.05 = **пик 6–7/день** (топ-1 кодовый IG-фейл), raspberries 1/2/3/5, разные устройства/аккаунты → код-баг. Полный цикл superpowers: brainstorm→spec→plan (codex)→subagent-driven (имплементер + spec-ревью + quality-ревью + контроллерская верификация + codex на диффе).
+
+**Что было не так:** trace task 9227 — `_ensure_app_foregrounded` дважды независимо подтверждает IG через dumpsys, затем 5× `foreground_pkg_disagree` (dumpsys=instagram / uiautomator=launcher) за ~4.5 мин, settle-wait 0 раз → fail на `ig_1_feed`. Confirming-poll из PR #76 (Codex P2 round 2) ждёт, пока uiautomator догонит dumpsys; в проде uiautomator залипает на launcher-окне минутами → ложный провал. Уточнённый root cause: **сломан именно uiautomator XML-дамп**; dumpsys И скриншот корректны.
+
+**Что сделано:** одна правка в `_foreground_pkg` (внутри `_open_app`) — после неудачного catch-up uiautomator проверяем стабильность dumpsys (`stable_reads_required=3` чтения подряд == target, 0.5с) → доверяем dumpsys, эмитим `switcher_foreground_trusted_dumpsys`. Под kill-switch `SWITCHER_TRUST_DUMPSYS_ON_STALE_UI` (default on). Защита от реальных overlay (permissioncontroller и т.п.) сохранена — новый путь только при `pkg_ui ∈ {launcher, пусто}`. `_ensure_app_foregrounded` не трогали (корректен). Решение «доверять dumpsys + стабилизация» выбрано Данилом из 3 опций (vs скриншот-арбитр / мульти-recovery).
+
+**Деплой:** прод на main чистый → `git pull --ff-only` (486fec2..862ce81). PM2 restart НЕ нужен — публикатор спавнится свежим на задачу (scheduler.js `__dirname`=прод-дир). Откат мгновенный через kill-switch.
+
+**Тесты/ревью:** 66 зелёных (старый `..._does_not_shortcut` инвертирован в `..._trusts_dumpsys`; +flapping +killswitch локи). Spec- и code-quality-ревью пройдены (1 minor: `stable_reads` single-source-of-truth — применён). **codex: 0 P1**; один **P2** («доверие dumpsys без независимого visibility-сигнала») — принятый trade-off (премиса противоположна фактам — свежий именно dumpsys; downstream UI-шаги ловят реальный not-up).
+
+**Остаток:** verify динамики `ig_app_launch_failed` за 24ч (утро 2026-05-23) → к нулю → OpenProject «Готово».
+
+Spec/plan: `docs/superpowers/specs|plans/2026-05-22-wp105-dumpsys-trust-on-stale-ui*`. Память: [[project_wp105_ig_app_launch_stale_uiautomator_shipped]]. OpenProject WP #105 → **Тестирование** (comment id 426).
+
 ## 2026-05-21 — Планировщик в деливери (WP #109)
 
 ### ✅ SHIPPED+DEPLOYED 2026-05-21 — delivery-contenthunter main `a8c4f4b`
