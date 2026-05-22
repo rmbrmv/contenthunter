@@ -1,5 +1,21 @@
 # Backlog tickets
 
+## 2026-05-22 — WP #108 пост-деплой: осиротевший бэклог + success-rate (handoff=fail) + fix stats vp-баг
+
+### ✅ SHIPPED+DEPLOYED 2026-05-22 — delivery-contenthunter main `9735330` + `c861597`
+
+Разбор обращения Данила («56 упавших висят, не уходят в ретрай»). Три результата за сессию:
+
+**① Осиротевший утренний бэклог (root cause + ремонт).** Контроллер ретраев линкует очередь↔падение **только по `client_publish_id`** (`retry_controller.js:39`) + guard `if (!r.error_class) continue`. Но проброс cpid в `publish_tasks` приехал в ТОМ ЖЕ деплое (`ce4429b`) → все ~57 до-деплойных падений с `cpid=NULL` молча пропускались (ни requeue, ни handoff), висели `failed`. Деплойный рестарт PM2 добил ~16 задач `process_interrupted` (движок их исключает). Ремонт (вариант А Данила): 16 PI → `pending` руками; 9 осиротевшим — backfill cpid из `publish_task_id`; контроллер на тике 14:31 отработал по дизайну (5 requeue + 4 handoff). **Урок:** consumer по новой колонке = backfill в составе деплоя, иначе до-деплойные строки сиротеют.
+
+**② Success rate: handoff = фейл (`9735330`).** Когда публикация падает и движок отдаёт её в ручную (`failed`→`cancelled`+`manual_handoff_at`), раньше `cancelled` целиком выпадал из метрики → success rate завышался. Теперь `cancelled AND manual_handoff_at IS NOT NULL` = `errors`; проактивный `manual_publish` + переносы слотов остаются исключёнными. Поправлены ОБЕ точки: pub-dash (плитки+timeseries, server.js) и daily-отчёт (buildReport+buildErrorBreakdown). Прод: errors 32→37, rate 86.2%→84.4%. Тесты 45/45+37/37+9/9.
+
+**③ Fix stats vp-баг (`c861597`, пред-существующий, ~43 ошибки/день).** `/api/publish/(queue|tasks)/stats` 500-или при `?project=` — stats-FROM не JOIN'ил `validator_projects`, а билдеры фильтров ссылаются на `vp`/`vp2`. Добавил vp+vp2 в `PUBLISH_QUEUE_FROM_STATS`; вынес inline-FROM tasks/stats в `PUBLISH_TASKS_FROM_STATS` (с vp). LEFT JOIN на PK → без фан-аута. Регресс-тест `tests/test_stats_from_filter_contract.test.js` исполняет реальный stats-SQL и ловит FROM↔filter рассинхрон.
+
+**Бэклог (заведено в OpenProject):** WP #140 — классификатор error-кодов (yt/switch коды без `error_class` дефолтятся в `unknown` → ретраятся вечно вместо handoff, как pq#5069); WP #141 — дашборд+графики: count и % задач в ручной выкладке (retry-handoff vs проактивный manual_publish раздельно).
+
+Evidence: `docs/evidence/2026-05-22-wp108-orphan-backlog-and-metric-fixes.md`. Память: `project_wp108_retry_engine_orphan_backlog`, `project_daily_publish_report`.
+
 ## 2026-05-22 — Движок ретраев публикаций (WP #108)
 
 ### ✅ SHIPPED+DEPLOYED+VERIFIED 2026-05-22 — delivery-contenthunter main `bd8c6a5` (вариант C1 «чистый лист»)
