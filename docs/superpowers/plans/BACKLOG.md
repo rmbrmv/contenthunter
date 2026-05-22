@@ -1,5 +1,23 @@
 # Backlog tickets
 
+## 2026-05-22 — TT: foreground-hijack на шаге переключения аккаунта (WP #130) + tt_profile_tab_broken (WP #131)
+
+### ✅ SHIPPED+DEPLOYED 2026-05-22 — delivery-contenthunter#97 (merge `486fec2`)
+
+Триаж TT-фейлов за 2026-05-22 (13 задач, сетевой `adb_devices_unreachable` исключён). Группировка по последнему `events[].meta.category`. Топ по эмитнутому коду — `tt_account_sheet_closed_before_parse` (4), но это **смешанный бакет**.
+
+**Корень (доказан скринкастами + UI-dump labels):** на шаге `tt_3_open_list` TikTok теряет передний план — task 9116 → Instagram (профиль `jasleen`), 9239 → домашний экран Samsung, 9210/9229 → петля перезапуска/сплэш TikTok. `_open_tt_account_switcher` тапал шапку профиля и парсил ЧУЖОЙ экран → bottomsheet «не открылся» → ложный `tt_account_sheet_closed_before_parse` (2 из 4 фейлов мис-классифицированы так). Fg-guard стоял только на старте свитча (`tt_1_feed`), а drift случался позже. По первопричине foreground-drift = **4/13 (топ-1)**.
+
+**Что сделано (`account_switcher.py`, зеркало IG WP #119):** kill-switch `_tt_switch_fg_guard_enabled()` (`TT_SWITCH_FG_GUARD_ENABLED`, default ON); `_tt_guard_switcher_foreground(cfg)` — `_detect_foreground_pkg()`, TT/неопределён → no-op, чужой → `_ensure_app_foregrounded('TikTok')` + re-navigate + verify own-profile (`_tt_is_own_profile(dump_ui(retries=3))`), tri-state `ok`/`recovered`/`unrecoverable`. **Placement A** (в `_switch_tiktok` перед `_open_tt_account_switcher`): recover или честный fail `tt_fg_drift_unrecoverable`, панель на чужом экране не открываем; после recovery перечитываем `elements`. **Placement B** (внутри `_open_tt_account_switcher`): probe не открыл панель И foreground уже не TikTok → `tt_fg_drift_unrecoverable` вместо account_sheet (drift во время probe-тапа). Классификация через `final_step=tt_fg_drift_unrecoverable` (`_SWITCHER_STEP_TO_CATEGORY`). Настоящий sheet-not-open (foreground=TikTok, 9179/9183) по-прежнему → `tt_account_sheet_closed_before_parse` (территория WP #96).
+
+**Тесты/ревью:** 10 новых тестов (`tests/test_account_switcher_tt_switch_fg_guard.py`); 217 switcher-тестов зелёные; codex review 2 раунда P2 (verify own-profile после re-nav; консистентность с retap-loop) → финал чистый.
+
+**Деплой:** PR #97 squash-merge в `main`, прод `git pull --ff-only` (`bd8c6a5..486fec2`, чисто), фикс в прод-файле, синтаксис OK. pm2 restart НЕ нужен — публикатор спавнится per-task, `exec cwd` = прод-путь. Kill-switch ON. **Verify утром 23.05:** меньше `tt_account_sheet_closed_before_parse`, честный `tt_fg_drift_unrecoverable` при реальном drift.
+
+**WP #131 (Бэклог):** `tt_profile_tab_broken` (9117/9156, шаг `tt_2_not_own_profile`, 2/13) — после перехода в профиль-таб бот не распознаёт собственный профиль; нужен разбор UI-dump (неверная навигация vs сломанное распознавание own-profile). **Остаток вне #130:** усиление recovery петли перезапуска TikTok (9210/9229).
+
+Триаж: `docs/evidence/2026-05-22-tt-publish-fails-triage.md`. Память: `project_tt_triage_2026_05_22`. OpenProject WP #130 → **Тестирование** (комменты 424/425), WP #131 → Бэклог.
+
 ## 2026-05-21 — Планировщик в деливери (WP #109)
 
 ### ✅ SHIPPED+DEPLOYED 2026-05-21 — delivery-contenthunter main `a8c4f4b`
