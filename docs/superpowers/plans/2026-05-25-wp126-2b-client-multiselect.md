@@ -51,14 +51,15 @@ describe('SearchableSelect', () => {
   })
 
   it('multiple: тоггл копит выбор, change эмитится при закрытии', async () => {
-    const w = mount(SearchableSelect, { props: { modelValue: [], options: opts, multiple: true } })
+    // mount не обновляет props от emit — симулируем v-model родителя через setProps.
+    const w = mount(SearchableSelect, { props: { modelValue: [] as number[], options: opts, multiple: true } })
     await w.find('button').trigger('click')              // open
-    const rows = w.findAll('.ss-opt')
-    await rows[0].trigger('click')                        // toggle Аквабрайт (value 1)
-    await rows[1].trigger('click')                        // toggle Бест (value 2)
+    await w.findAll('.ss-opt')[0].trigger('click')       // toggle Аквабрайт (value 1)
+    expect(w.emitted('update:modelValue')!.at(-1)).toEqual([[1]])
+    await w.setProps({ modelValue: [1] })                // родитель применил v-model
+    await w.findAll('.ss-opt')[1].trigger('click')       // toggle Бест (value 2)
+    expect(w.emitted('update:modelValue')!.at(-1)).toEqual([[1, 2]])
     expect(w.emitted('change')).toBeFalsy()              // ещё не закрыли
-    const last = w.emitted('update:modelValue')?.at(-1)
-    expect(last).toEqual([[1, 2]])
     document.dispatchEvent(new MouseEvent('mousedown'))   // click-outside → close
     await w.vm.$nextTick()
     expect(w.emitted('change')).toBeTruthy()             // change на close
