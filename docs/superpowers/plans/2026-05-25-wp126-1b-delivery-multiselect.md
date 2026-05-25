@@ -22,13 +22,14 @@
 |---|---|---|
 | `server.js` | Modify | `buildPublishQueueFilters` (project CSV→ANY), `buildDashboardFilters` (project CSV→ANY), `buildPublishTasksFilters` (project CSV→ANY), planner-эндпоинт (`project_id` CSV→int[]). |
 | `publish_planner.js` | Modify | `getPlannerCards`: `projectId`→`projectIds` (int[]\|null), 4 SQL-условия `=$3`→`=ANY($3)`. |
-| `public/index.html` | Modify | мапперы+сериализация (queue/tasks/dashboard/planner) array→CSV; `mpqMatch` массивы; флип 5 виджетов в `multi:true`. |
+| `public/index.html` | Modify | мапперы (отдают массив), фетчи dashboard/planner (append), stats-цикл; `mpqMatch` массивы; флип 5 виджетов в `multi:true`. |
+| `public/paginated-table.js` | Modify | `buildQueryParams` разворачивает массив-фильтр в повторяемые query-параметры (queue/tasks). |
 
 ---
 
 ## Task 1: Backend — queue/dashboard/tasks project → список (CSV→ANY)
 
-Зеркалим существующий паттерн status-фильтра (`split(',') → list.length===1 ? '=$?' : 'ANY($?::text[])'`). Обратно совместимо.
+Список приходит **повторяемыми query-параметрами** (`project=A&project=B`), а не CSV — имена проектов могут содержать запятую (codex P2). Express отдаёт массив при повторах и строку при одиночном; `[].concat(query.project)` нормализует обе формы без разбиения по запятой. Затем `list.length===1 ? '=$?' : 'ANY($?::text[])'`. Обратно совместимо.
 
 **Files:** Modify `server.js`
 
@@ -41,7 +42,7 @@ FIND:
 REPLACE:
 ```js
   if (query.project) {
-    const list = String(query.project).split(',').map(s => s.trim()).filter(Boolean);
+    const list = [].concat(query.project).map(s => String(s).trim()).filter(Boolean);
     if (list.length === 1) push('COALESCE(vp.project, vp2.project) = $?', list[0]);
     else if (list.length > 1) push('COALESCE(vp.project, vp2.project) = ANY($?::text[])', list);
   }
@@ -56,7 +57,7 @@ FIND:
 REPLACE:
 ```js
   if (query.project) {
-    const list = String(query.project).split(',').map(s => s.trim()).filter(Boolean);
+    const list = [].concat(query.project).map(s => String(s).trim()).filter(Boolean);
     if (list.length === 1) push('COALESCE(vp.project, vp2.project) = $?', list[0]);
     else if (list.length > 1) push('COALESCE(vp.project, vp2.project) = ANY($?::text[])', list);
   }
@@ -71,7 +72,7 @@ FIND:
 REPLACE:
 ```js
   if (query.project) {
-    const list = String(query.project).split(',').map(s => s.trim()).filter(Boolean);
+    const list = [].concat(query.project).map(s => String(s).trim()).filter(Boolean);
     if (list.length === 1) push("vp.project = $?", list[0]);
     else if (list.length > 1) push("vp.project = ANY($?::text[])", list);
   }
@@ -102,8 +103,8 @@ FIND:
 ```
 REPLACE:
 ```js
-    const projectIds = String(req.query.project_id || '')
-      .split(',').map(s => parseInt(s.trim(), 10)).filter(Number.isInteger);
+    const projectIds = [].concat(req.query.project_id || [])
+      .map(s => parseInt(String(s).trim(), 10)).filter(Number.isInteger);
     const cards = await planner.getPlannerCards(pool, { from, to, projectIds: projectIds.length ? projectIds : null, trustQueueStatus: PLANNER_TRUST_QUEUE_STATUS });
 ```
 
@@ -185,13 +186,13 @@ git commit -m "feat(wp126-1b): планировщик принимает спи�
 
 ---
 
-## Task 3: Frontend — сериализация массива→CSV в мапперах и фетчах
+## Task 3: Frontend — повторяемые query-параметры для мультивыбора (comma-safe)
 
-Все обработчики учатся принимать и строку (старое), и массив (новое мульти). Пустой массив → параметр не отправляется.
+Список проектов передаётся ПОВТОРЯЕМЫМИ параметрами (`project=A&project=B`), не CSV — имена проектов могут содержать запятую. Мапперы отдают значение как есть (массив или строку; пустой массив не отправляем), а сериализаторы (`buildQueryParams` фабрики таблиц, stats-цикл, фетчи дашборда/планировщика) разворачивают массив через `append`. Все ветки принимают и строку (старое одиночное), и массив (новое мульти).
 
-**Files:** Modify `public/index.html`
+**Files:** Modify `public/index.html`, `public/paginated-table.js`
 
-- [ ] **Step 1: `upqMapFiltersToServer` (≈line 11065)**
+- [ ] **Step 1: `upqMapFiltersToServer` (≈line 11065)** — отдать project как есть, пропустить пустой массив
 
 FIND:
 ```js
@@ -199,7 +200,7 @@ FIND:
 ```
 REPLACE:
 ```js
-  { const p = Array.isArray(filters.project) ? filters.project.join(',') : filters.project; if (p) out.project = p; }
+  { const pj = filters.project; if (Array.isArray(pj) ? pj.length : pj) out.project = pj; }
 ```
 
 - [ ] **Step 2: `uptMapFiltersToServer` (≈line 11082)**
@@ -210,10 +211,41 @@ FIND:
 ```
 REPLACE:
 ```js
-  { const p = Array.isArray(filters.project) ? filters.project.join(',') : filters.project; if (p) out.project = p; }
+  { const pj = filters.project; if (Array.isArray(pj) ? pj.length : pj) out.project = pj; }
 ```
 
-- [ ] **Step 3: `loadPublishingDashboard` project-параметр (≈line 11907)**
+- [ ] **Step 3: `public/paginated-table.js` `buildQueryParams` (≈line 129-131)** — разворачивать массив в повторяемые параметры (queue/tasks)
+
+FIND:
+```js
+      for (const [k, v] of Object.entries(sf)) {
+        if (v !== '' && v !== null && v !== undefined) p.set(k, v);
+      }
+```
+REPLACE:
+```js
+      for (const [k, v] of Object.entries(sf)) {
+        if (v === '' || v === null || v === undefined) continue;
+        if (Array.isArray(v)) { for (const it of v) if (it !== '' && it !== null && it !== undefined) p.append(k, it); }
+        else p.set(k, v);
+      }
+```
+
+- [ ] **Step 4: queue stats-цикл (≈line 11045)** — тот же разворот массива
+
+FIND:
+```js
+    for (const [k, v] of Object.entries(sf)) p.set(k, v);
+```
+REPLACE:
+```js
+    for (const [k, v] of Object.entries(sf)) {
+      if (Array.isArray(v)) { for (const it of v) p.append(k, it); }
+      else if (v !== '' && v !== null && v !== undefined) p.set(k, v);
+    }
+```
+
+- [ ] **Step 5: `loadPublishingDashboard` (≈line 11907)** — append на элемент
 
 FIND:
 ```js
@@ -221,10 +253,10 @@ FIND:
 ```
 REPLACE:
 ```js
-  { const p = Array.isArray(_dashFilters.project) ? _dashFilters.project.join(',') : _dashFilters.project; if (p) params.set('project', p); }
+  for (const pj of [].concat(_dashFilters.project || [])) { if (pj) params.append('project', pj); }
 ```
 
-- [ ] **Step 4: `plannerLoad` project_id-параметр (≈line 10928-10929)**
+- [ ] **Step 6: `plannerLoad` (≈line 10928-10929)** — append на элемент
 
 FIND:
 ```js
@@ -234,18 +266,18 @@ FIND:
 REPLACE:
 ```js
   const qs = new URLSearchParams({ from: plannerFmt(from), to: plannerFmt(to) });
-  const projCsv = Array.isArray(proj) ? proj.join(',') : proj;
-  if (projCsv) qs.set('project_id', projCsv);
+  for (const pid of [].concat(proj || [])) { if (pid) qs.append('project_id', pid); }
 ```
 
-(`proj` здесь = `_plannerProjectId`, которое после флипа станет массивом; до флипа — строка. Обе ветки покрыты.)
+(`proj` = `_plannerProjectId`: массив после флипа, строка до; `[].concat` покрывает обе формы.)
 
-- [ ] **Step 5: Коммит**
+- [ ] **Step 7: Синтаксис + коммит**
 
+Run: `cd /home/claude-user/autowarm-testbench-feat-wp126-1b-multiselect-20260525 && node --check public/paginated-table.js && echo OK`
+Expected: `OK`.
 ```bash
-cd /home/claude-user/autowarm-testbench-feat-wp126-1b-multiselect-20260525
-git add public/index.html
-git commit -m "feat(wp126-1b): фронт сериализует мультивыбор проекта в CSV (queue/tasks/dashboard/planner)"
+git add public/index.html public/paginated-table.js
+git commit -m "feat(wp126-1b): мультивыбор проекта через повторяемые query-параметры (comma-safe)"
 ```
 
 ---
@@ -435,7 +467,8 @@ Expected: 5 коммитов (Task 1-5), дерево чистое.
 ## Self-Review (выполнено автором)
 
 - **Покрытие спеки (§5.3):** 4 серверных точки (queue/dashboard/tasks builders + planner) — Tasks 1-2; фронт-сериализация — Task 3; клиентский мульти Ручной — Task 4; включение — Task 5. ✓
-- **Обратная совместимость:** все серверные правки — `list.length===1 ? '=$?' : 'ANY'`; одиночный CSV (один элемент) идёт прежним путём. Планировщик: `projectIds=null` (нет параметра) → `$3::int[] IS NULL` true → фильтра нет, как раньше. ✓
+- **Обратная совместимость:** все серверные правки нормализуют через `[].concat(query.project)` (строка→[1 элемент], повтор→массив); `list.length===1 ? '=$?' : 'ANY'`. Планировщик: `projectIds=null` → `$3::int[] IS NULL` true → фильтра нет, как раньше. ✓
+- **Comma-safe (codex P2):** имена проектов с запятой больше не ломаются — список идёт повторяемыми параметрами (`project=A&project=B`), а не `join(',')`; сериализация развёрнута через `append` в 4 точках (paginated-table `buildQueryParams`, queue stats-цикл, dashboard-фетч, planner-фетч). ✓
 - **Порядок коммитов безопасен:** backend (принимает и одиночное, и список) → фронт-сериализация и mpqMatch (принимают и строку, и массив) → флип в multi. На каждом коммите приложение рабочее. ✓
 - **Планировщик `projectId`→`projectIds`:** Step 6 Task 2 грепом проверяет отсутствие осиротевшего `projectId`; `ANY($3)` ×4. ⚠ Самая рискованная правка — на ревью смотреть SQL внимательно.
 - **Плейсхолдеры:** нет; все edit-блоки old→new точные. Два идентичных условия планировщика и 4 param-массива — через `replace_all` (явно отмечено). ✓
