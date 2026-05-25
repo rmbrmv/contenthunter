@@ -945,3 +945,19 @@ Worker check'ает между схемами и stops. Не критично п
 ### (опционально) Строгий ≤1080×1920 на выходе уникализации
 
 Уникализация добавляет +70…+260 px (scale_add+pad_add−crop_reduce, у всех 30 схем положительное), поэтому даже корректный 1080×1920 исходник → ~1150–1340 на выходе (соцсети сейчас терпят). Если когда-нибудь понадобится строгий лимит на ВЫХОДЕ — добавить downscale-to-fit в `unic-worker/worker.py::generate_ffmpeg` (финальный `scale=...:force_original_aspect_ratio=decrease`). Сейчас НЕ нужно — фильтр на исходнике решает проблему провалов.
+
+## 2026-05-25 — WP #148 пост-шип (ручная выкладка published-leak): остатки
+
+Фикс зашипан+задеплоен (autowarm prod main `5009575`, ROOT PM2 id=35 `autowarm`, OpenProject #148 → Тестирование): уже опубликованное автовыкладкой (`publish_queue.status='done'`) больше не сваливается в ручную очередь. retry-handoff стал per-account (слот не флипается), populator исключает done (`isAlreadyPublished`). Ретро-зачистка убрала 195 `queued`-дублей (live = 0). См. `docs/superpowers/specs/2026-05-25-wp148-manual-queue-published-leak-design.md` + evidence. Слито с параллельной WP #138 вручную (события retry/handoff в логе сохранены).
+
+### sync-lag окно false-negative у populator'а
+
+`isAlreadyPublished` смотрит `publish_queue.status='done'`, который проставляет `syncQueueStatuses` (~раз в 30 мин). Узкое окно: свежий авто-успех ещё не `done` → может разово попасть в ручную. Восстановимо (уникальный индекс не даст дубль, оператор отменит лишнюю строку). Закомментировано в коде. Не блокер.
+
+### handoff берёт device-поля из снапшота publish_queue (не ре-резолв)
+
+Per-account handoff читает `device_serial/raspberry_number/pack_id/pack_name` напрямую из упавшей строки `publish_queue`, а populator ре-резолвит через `resolveDevice`. Намеренная асимметрия (NOT NULL поля валидны, строка корректна). Отметка на будущее.
+
+### Индекс `uq_manual_pub_result_account` не покрыт миграцией
+
+`enqueueManualRow` опирается на partial unique index `uq_manual_pub_result_account (unic_result_id, account_username, platform) WHERE cancelled_at IS NULL` (ON CONFLICT). Индекс живёт в проде, но не создаётся ни одним файлом в `migrations/` (пре-existing — был и до WP #148). По правилу «миграции для любого писателя БД» стоит добить `CREATE UNIQUE INDEX IF NOT EXISTS` миграцию. Не блокер.
