@@ -1,5 +1,21 @@
 # Backlog tickets
 
+## 2026-05-25 — WP #127: планировщик в деливери — счётчик + клик по карточке + фильтр по дате
+
+### ✅ SHIPPED+DEPLOYED 2026-05-25 — delivery-contenthunter main `07bad1c`; OpenProject #127 → Готово (принято в браузере)
+
+Обращение Анастасии: счётчик планировщика показывал «Частично 0/12» при реально выложенных роликах. Полный цикл superpowers: brainstorm→spec→plan (codex чисто, 1 P2 оказался ложным — `hasColumn` per-column)→subagent-driven (имплементер + spec/quality ревью на таск, финал «READY TO MERGE»). Поймал галлюцинацию имплементера про несуществующий `tests/test_publish_planner.test.js` (11/11) — перепроверил сам, на код не повлияло.
+
+**① Счётчик (корень).** Full-путь `publish_planner.js`/`getPlannerCards` считал успехи по связке `publish_tasks.client_publish_id`, а она часто NULL (22.05 ~73% задач без cpid). `publish_queue.status` (done) при этом надёжен. Фикс (Подход A, бэкенд-only): `buildPlannerCards` синтезирует успех из `queue_status` (∈ done/published/published_no_url), когда привязки нет; дата = последний реальный день попытки иначе `scheduled_date`; `via_manual` из `manual_handoff_date`. Kill-switch `PLANNER_TRUST_QUEUE_STATUS` (дефолт on). Live: Forsal (65) 22.05 → 0/12 → 10/12; флаг OFF → 1/12 (старое).
+
+**② Приёмка выявила ещё 2 правки (та же ветка, прод `07bad1c`).** Клик по карточке вёл в «Запланировано» (`up:queue`) без даты → теперь в «Опубликовано» (`up:tasks`), отфильтровано по проекту + дню выкладки. Добавлен видимый фильтр по дате в таб tasks (бэк: `business_date` = `(pt.created_at AT TIME ZONE 'Europe/Moscow')::date` в `buildPublishTasksFilters`; фронт: инпут `#upt-date-filter` под «Старт» + `data-date` на карточке + проводка в `plannerWireCards`).
+
+**Тесты:** 12 planner (`tests/publish_planner.test.js`) + 4 date-filter (`tests/publish_tasks_date_filter.test.js`); полный сьют autowarm 274/275 (1 fail pre-existing `checkDispatchQueueSlotLineage`, не наш). 3 раунда codex-review чисто. Деплои ff без force-push; pm2 restart autowarm (exec cwd прод-путь).
+
+**Бэклог (заведено в OpenProject):** **WP #147** [Ошибка, relates #127, assignee Данил] — первопричина: `publish_tasks.client_publish_id` заполняется нестабильно (~73% NULL 22.05; интермиттирующе, на 20/23/24/25.05 — 0%). Бьёт ещё и по колонке «попытка» в очереди. Не чинили в #127 (вне scope).
+
+Spec/plan: `docs/superpowers/specs|plans/2026-05-25-wp127-planner-counter*`. Память: `project_wp127_planner_counter_shipped`.
+
 ## 2026-05-25 — WP #72: триаж логов выкладки (Эль-косметик + Онлайн-школа Anecole)
 
 ### ✅ РАЗОБРАНО 2026-05-25 — исследование (кода не менял), OpenProject #72 → Тестирование; 3 дочерних WP заведено
