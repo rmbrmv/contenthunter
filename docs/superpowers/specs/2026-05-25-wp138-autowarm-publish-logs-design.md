@@ -81,17 +81,18 @@
 Добавочные nullable-поля в `publish_queue` (безопасно для `SELECT *` в других потребителях; cross-repo grep перед деплоем — `publish_queue` читают autowarm + валидатор-бэкенд + аналитика):
 ```sql
 ALTER TABLE publish_queue
-  ADD COLUMN IF NOT EXISTS retry_count       int NOT NULL DEFAULT 0,
   ADD COLUMN IF NOT EXISTS last_retry_reason text,
   ADD COLUMN IF NOT EXISTS last_retried_at   timestamptz;
 ```
+**Уточнение по `attempt_count` (найдено при планировании):** отдельная колонка `retry_count` НЕ нужна. `publish_planner.attachQueueTransferColumns` уже вычисляет `attempt_count` (число реальных попыток из `publish_tasks`, без `process_interrupted`) и `transferred_to` (= дата перевода на ручную) — колонка «Попытка» в таблице очереди уже заполняется при `QUEUE_TRANSFER_COLUMNS_ENABLED`. Новое здесь — только **причина/правило** (`last_retry_reason`), которой нет нигде.
+
 Перевод на ручную **новых полей не требует** — `skip_reason` (`retry_handoff:<rule>`) + `manual_handoff_at` уже персистятся.
 
 ### 5.2. `retry_controller.js`
 - В основной `SELECT` добавить `lt.id AS last_task_id` (id последней упавшей попытки), чтобы было куда писать событие.
 - **Атомарность (важно):** запись события в `publish_tasks.events` и переход статуса `publish_queue` должны быть **в одной транзакции**. Иначе падение между ними оставит задачу перезапущенной/переведённой на ручную *без* записи в логе, а контроллер её больше не выберет (после requeue строка не `failed`; после handoff стоит `manual_handoff_at`) — backfill невозможен, и теряется ровно та видимость, ради которой делается задача.
 - **На `requeue`** — обернуть в транзакцию (`BEGIN`…`COMMIT` через `client`), внутри:
-  - `UPDATE publish_queue SET status='pending', publish_task_id=NULL, updated_at=NOW(), retry_count = retry_count + 1, last_retry_reason = $reason, last_retried_at = NOW() WHERE id=$1 AND status='failed' AND manual_handoff_at IS NULL` — событие пишем только если `rowCount===1` (переход реально состоялся; идемпотентность);
+  - `UPDATE publish_queue SET status='pending', publish_task_id=NULL, updated_at=NOW(), last_retry_reason = CASE WHEN $visibility THEN $reason ELSE last_retry_reason END, last_retried_at = CASE WHEN $visibility THEN NOW() ELSE last_retried_at END WHERE id=$1 AND status='failed' AND manual_handoff_at IS NULL` — поля видимости пишем только при включённом kill-switch (см. 5.5); событие — только если `rowCount===1` (переход реально состоялся; идемпотентность);
   - в той же транзакции — `UPDATE publish_tasks SET events = COALESCE(events,'[]'::jsonb) || $evt::jsonb WHERE id = $last_task_id`, где `$evt = {ts, type:'retry', msg:<человеческий текст>, meta:{rule, error_class, error_code, attempt}}`;
   - `COMMIT`. (При `rowCount===0` — `ROLLBACK`, строку увели под нами.)
 - **На `handoff`** — событие `type:'handoff'` (`{ts, msg, meta:{rule, error_class, error_code}}`) в `publish_tasks` по `r.last_task_id` писать **внутри существующей транзакции `handoffToManual`, до `COMMIT`** (рядом с `UPDATE publish_queue ... skip_reason`), чтобы переход и лог фиксировались атомарно.
@@ -101,21 +102,21 @@ ALTER TABLE publish_queue
 **Почему событие пишется в *упавшую* попытку, а не в новую:** ретрай обнуляет `publish_task_id`, новая попытка создаётся позже диспетчером. Решение «после этого падения — перезапуск/перевод» логически принадлежит именно упавшей попытке; там его и видно в модалке 📋. Все попытки видны в таблице задач и в `attempts[]` карточки.
 
 ### 5.3. Бэкенд-эндпоинты
-- `/api/publish/queue` — `PUBLISH_QUEUE_SELECT` уже отдаёт `pq.*` → новые поля приедут автоматически; `skip_reason` уже есть. Доп. правок не требует.
-- `/api/publish/tasks` — `PUBLISH_TASKS_SELECT` джойнит `pq` частично; добавить `pq.retry_count`, `pq.last_retry_reason`, `pq.skip_reason`, `pq.manual_handoff_at`.
-- `/api/publish/planner` (`publish_planner.js`) — в карточку добавить `retry_count` (с активной строки очереди) и флаг `auto_handoff` (вывод: `queue_status='cancelled' AND skip_reason LIKE 'retry_handoff:%'`).
+- `/api/publish/queue` — `PUBLISH_QUEUE_SELECT` уже отдаёт `pq.*` → новое поле `last_retry_reason` приедет автоматически; `skip_reason`, `attempt_count`, `transferred_to` уже есть. Доп. правок не требует.
+- `/api/publish/tasks` — **правок НЕ требует.** Бейджи в таблице задач строим из `pt.events` (он уже в `pt.*`): после `requeue` `pq.publish_task_id` обнулён, а эндпоинт джойнит `pq` по `pq.publish_task_id = pt.id` → для упавшей задачи `pq.*` пришёл бы `null`. Наша запись `type:'retry'/'handoff'` лежит на самой упавшей задаче — её и читаем.
+- `/api/publish/planner` (`publish_planner.js`, `buildPlannerCards`) — финальный объект карточки сейчас НЕ несёт `attempts`/`manual_handoff_date` (они есть только на `intents`). Поэтому в `buildPlannerCards` вычислить на уровне цепочки два флага и положить в карточку: `had_retry` (любой intent имеет ≥2 реальных попыток) и `auto_handoff` (любой intent имеет `manual_handoff_date`).
 
 ### 5.4. UI (`public/index.html`) — «и там, и там»
 Логика бейджей (правила вывода):
-- **«🔁 Повтор после ошибки · попытка {retry_count+1}»** — когда `retry_count > 0`; подсказка (`title`) = человеческий текст `last_retry_reason`.
-- **«❗→✋ Ошибка → ручная»** — когда `status='cancelled' AND skip_reason LIKE 'retry_handoff:%'`; подсказка = человеческий текст правила. Отличается от ручной, которую включил оператор сам (та — `manual_publish_set_by_id IS NOT NULL` без `retry_handoff`, бейдж «👋 вручную»).
+- **«🔁 Повтор после ошибки · попытка N»** — когда `last_retry_reason` не пуст (точный сигнал авто-ретрая); число `N` берём из уже существующего `attempt_count`; подсказка (`title`) = человеческий текст `last_retry_reason`.
+- **«❗→✋ Ошибка → ручная»** — когда `status='cancelled' AND skip_reason LIKE 'retry_handoff:%'`; подсказка = человеческий текст правила. Отличается от ручной, которую включил оператор сам (та — без `retry_handoff` в `skip_reason`, бейдж «👋 вручную»).
 
 Точки правок:
-- Таблица очереди — бейдж рядом со статусом + заполнить колонку «Попытка» из `retry_count`.
-- Таблица задач — бейдж рядом со `UPT_STATUS_BADGE`.
-- Карточки планировщика — маркер `🔁×N` при `retry_count>0` и маркер `❗→✋` при `auto_handoff` (отдельно от обычного `👋 вручную`).
-- Модалка 📋 — в карту иконок добавить `retry:'🔁'`, `handoff:'🤚'`.
-- Единый JS-словарь `RETRY_RULE_LABEL` / `HANDOFF_RULE_LABEL` + парсер `skip_reason='retry_handoff:<rule>'` → подпись.
+- Таблица очереди (`upqRenderRow`) — бейджи в ячейке статуса (рядом с `badge`+`skipNote`). Колонка «Попытка» уже заполнена (`attempt_count`), не трогаем.
+- Таблица задач (`uptRenderRow`) — бейджи рядом со `UPT_STATUS_BADGE`, выводятся из `row.events` (наличие события `type:'retry'`/`'handoff'`), а не из `pq.*` (см. §5.3 — join рвётся после requeue).
+- Карточки планировщика (`plannerCardHtml`) — маркер `🔁` при `c.had_retry` и маркер `❗→✋` при `c.auto_handoff` (отдельно от обычного `👋 вручную`).
+- Модалка 📋 (`typeIcon`/`typeBg` ~ строка с `start:'🚀'...`) — добавить `retry:'🔁'`, `handoff:'🤚'` + фон.
+- Единый JS-словарь `RETRY_RULE_LABEL` / `HANDOFF_RULE_LABEL` + парсер `skip_reason='retry_handoff:<rule>'` → подпись (как в §4).
 
 ### 5.5. Kill-switch
 `RETRY_VISIBILITY_ENABLED` (деф. `true`). При `false` `retry_controller.js` пропускает запись событий и полей `retry_*` (логика ретраев/перевода не страдает). Новые бейджи аддитивны и read-only — при отсутствии данных просто не показываются.
@@ -123,12 +124,12 @@ ALTER TABLE publish_queue
 ## 6. Краевые случаи
 - `last_task_id` может быть `NULL` для легаси-строк без линии намерения — такие строки контроллер и так пропускает (`r.no_intent || !r.error_class`); запись события защитить `if (last_task_id)`.
 - Дубли событий: запись события — в одной транзакции с переходом и только при `rowCount===1` UPDATE-перехода (и для requeue, и для handoff); при `ROLLBACK` событие не остаётся.
-- Многократные ретраи: каждая упавшая попытка получает ровно одно событие; `retry_count` растёт на каждый реальный цикл падение→перезапуск.
+- Многократные ретраи: каждая упавшая попытка получает ровно одно событие; `last_retry_reason`/`last_retried_at` отражают ПОСЛЕДНИЙ авто-перезапуск (число попыток — в `attempt_count`).
 - Идемпотентность тика сохраняется: после requeue строка уже не `failed`, повторный инкремент в том же тике невозможен (guard `WHERE status='failed'`).
 
 ## 7. Тесты
 - `test_retry_controller.test.js` (live-DB, изоляция через `onlyClientPublishId`): добавить проверки —
-  - после `requeue`: `retry_count` инкрементнут, `last_retry_reason` проставлен, в `events` упавшей попытки есть запись `type:'retry'` с нужным `rule`;
+  - после `requeue`: `last_retry_reason`/`last_retried_at` проставлены, в `events` упавшей попытки есть запись `type:'retry'` с нужным `rule`;
   - после `handoff`: в `events` упавшей попытки есть запись `type:'handoff'`; `skip_reason`/`manual_handoff_at` проставлены (как и раньше).
 - Если словарь правил → текст вынесем в чистую функцию — отдельный unit-тест на маппинг (включая `structural_error` × `banned`/`ui_changed`).
 
