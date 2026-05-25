@@ -23,7 +23,7 @@
 | Файл | Действие | Ответственность |
 |---|---|---|
 | `frontend/src/utils/projectSort.ts` | Create | `compareLabels`, `sortOptionsByLabel`, `filterOptions` (чистые, без Vue). |
-| `frontend/src/utils/__tests__/projectSort.test.ts` | Create | Vitest-тесты util. |
+| `frontend/src/utils/__tests__/projectSort.spec.ts` | Create | Vitest-тесты util. |
 | `frontend/src/components/SearchableSelect.vue` | Create | Single-select searchable dropdown (`v-model`, `:options`, `:placeholder`). |
 | 7 client-страниц | Modify | import + computed `projectOptions` + замена `<select>` на `<SearchableSelect>`. |
 
@@ -31,9 +31,9 @@
 
 ## Task 1: Util сортировки/фильтра + тесты (TDD)
 
-**Files:** Create `frontend/src/utils/projectSort.ts`, `frontend/src/utils/__tests__/projectSort.test.ts`
+**Files:** Create `frontend/src/utils/projectSort.ts`, `frontend/src/utils/__tests__/projectSort.spec.ts`
 
-- [ ] **Step 1: Падающий тест** — `frontend/src/utils/__tests__/projectSort.test.ts`:
+- [ ] **Step 1: Падающий тест** — `frontend/src/utils/__tests__/projectSort.spec.ts`:
 
 ```ts
 import { describe, it, expect } from 'vitest'
@@ -60,7 +60,7 @@ describe('projectSort', () => {
 
 - [ ] **Step 2: Запустить — упадёт** (модуль не найден)
 
-Run: `cd /home/claude-user/validator-contenthunter/frontend && npx vitest run src/utils/__tests__/projectSort.test.ts`
+Run: `cd /home/claude-user/validator-contenthunter/frontend && npx vitest run src/utils/__tests__/projectSort.spec.ts`
 Expected: FAIL (cannot resolve `../projectSort`).
 
 - [ ] **Step 3: Реализовать `frontend/src/utils/projectSort.ts`:**
@@ -89,14 +89,14 @@ export function filterOptions(options: SsOption[], query: string): SsOption[] {
 
 - [ ] **Step 4: Запустить — пройдёт**
 
-Run: `cd /home/claude-user/validator-contenthunter/frontend && npx vitest run src/utils/__tests__/projectSort.test.ts`
+Run: `cd /home/claude-user/validator-contenthunter/frontend && npx vitest run src/utils/__tests__/projectSort.spec.ts`
 Expected: PASS (3 теста).
 
 - [ ] **Step 5: Коммит**
 
 ```bash
 cd /home/claude-user/validator-contenthunter
-git add frontend/src/utils/projectSort.ts frontend/src/utils/__tests__/projectSort.test.ts
+git add frontend/src/utils/projectSort.ts frontend/src/utils/__tests__/projectSort.spec.ts
 git commit -m "feat(wp126-2a): projectSort util (compare/sort/filter) + vitest"
 ```
 
@@ -212,10 +212,20 @@ Run: `cd /home/claude-user/validator-contenthunter/frontend && npx vue-tsc --noE
 
 ## Task 4: Смоук и верификация
 
-- [ ] **Step 1: Vitest полностью**
+- [ ] **Step 1: Vitest (vitest-spec'и)**
 
-Run: `cd /home/claude-user/validator-contenthunter/frontend && npm test 2>&1 | tail -25`
-Expected: `projectSort.test.ts` (3) проходит; существующие spec'и (slotStatus, routes, UploadModal, SlotCard, ProjectPublishModeCell) не сломаны.
+ВАЖНО: дефолтный include vitest подхватывает и `src/utils/slotStatus.test.ts`, который написан на `node:test` (не vitest) и ВСЕГДА падает под `vitest run` с «Cannot bundle Node.js built-in node:test» — это ПРЕД-СУЩЕСТВУЮЩЕЕ состояние, НЕ наш регресс (его гоняют через `node --test` отдельно). Поэтому проверяем наш spec + существующие настоящие vitest-spec'и явно:
+
+Run:
+```bash
+cd /home/claude-user/validator-contenthunter/frontend
+npx vitest run src/utils/__tests__/projectSort.spec.ts \
+  src/router/__tests__/routes.spec.ts \
+  src/components/__tests__/UploadModal.spec.ts \
+  src/components/calendar/__tests__/SlotCard.spec.ts \
+  src/components/admin/__tests__/ProjectPublishModeCell.spec.ts 2>&1 | tail -12
+```
+Expected: все указанные spec-файлы проходят (`projectSort.spec.ts` = 3 теста). (Полный `npm test` будет красным ТОЛЬКО из-за пред-существующего `slotStatus.test.ts` — зафиксировать этот факт, не чинить в рамках 2a.)
 
 - [ ] **Step 2: Тип-чек проекта**
 
