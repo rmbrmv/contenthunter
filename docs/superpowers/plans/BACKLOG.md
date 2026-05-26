@@ -1,5 +1,25 @@
 # Backlog tickets
 
+## 2026-05-26 — WP #135: IG `_current_foreground_package` двойной shell → всегда 'unknown'
+
+### ✅ SHIPPED+DEPLOYED 2026-05-26 — delivery-contenthunter main `2d994db`; OpenProject #135 → Тестирование (verify 24ч)
+
+Пришло как вопрос автоворкера (бриф `contenthunter_autoexec/briefs/135`). Полный цикл superpowers: brainstorm→spec→plan (оба codex-clean)→subagent-driven (implementer + spec-review ✅ + quality-review Approved после I1 DRY-фикса)→live-smoke на реальном устройстве→деплой.
+
+**Баг.** `_current_foreground_package` слал `'shell dumpsys…'` в `adb()`, который сам оборачивает в `shell "…"` → двойной shell (`sh: shell: not found`) → ВСЕГДА `'unknown'`. Спали 2 fail-fast-защиты IG (Play-Store-hijack + `external_app` pre-picker) + логирование писало 'unknown'. 3-й случай этого класса (publisher_base:3053; WP#129 завёл отдельный корректный `_ig_probe_foreground_pkg` именно из-за него).
+
+**Фикс.** `_current_foreground_package` делегирует в проверенный `_ig_probe_foreground_pkg` (WP#129). Обе ожившие ветки через wrapper `_ig_pre_picker_guard_pkg()` под единым kill-switch `IG_PRE_PICKER_FG_GUARD_ENABLED` (default ON). Логирование не гейтится.
+
+**Корректировка посылки (важно).** И WP-описание, и бриф утверждали, что guard стр.~2251 = «домен #119» и будет дубль. По коду НЕВЕРНО: guard публикатора = picker ГАЛЕРЕИ (Шаг 5, выбор видео); guard #119 (`_ig_guard_picker_foreground` в `account_switcher.py`, корректный `_detect_foreground_pkg`) = picker АККАУНТОВ (`ig_4_pick_account`). Разные шаги/файлы → пересечения нет, консолидировать нечего. Урок: сверять посылку задачи против реального кода.
+
+**Тесты.** 68 passed. Старые `TestCurrentForegroundPackage` зелёные, но баг не ловили (мокают `adb`, игнорят команду) → добавлен `test_does_not_double_wrap_shell` (ассерт на саму команду). Live-smoke (БД общая прод/стенд → без publish-задачи): на устройстве RF8Y80ZTVFZ OLD→`shell not found`, NEW→реальный пакет, IG-foreground→`com.instagram.android`.
+
+**Деплой.** Merge ветки→main→push (`2d994db`); прод ff-merge; Python-публикатор спавнится свежим на задачу → PM2 restart не нужен (autowarm id=35 exec cwd=прод-путь).
+
+**Остаток.** Verify 24ч: динамика `ig_external_app_foreground` + `ig_edits_promo_playstore_hijack` (единичные, не всплеск) + IG success-rate. Нового бэклог-тикета нет.
+
+Spec/plan: `docs/superpowers/specs|plans/2026-05-26-wp135-*`. Evidence: `docs/evidence/2026-05-26-wp135-double-shell-shipped.md`. Память: `project_wp135_ig_foreground_double_shell_shipped`.
+
 ## 2026-05-25 — WP #127: планировщик в деливери — счётчик + клик по карточке + фильтр по дате
 
 ### ✅ SHIPPED+DEPLOYED 2026-05-25 — delivery-contenthunter main `07bad1c`; OpenProject #127 → Готово (принято в браузере)
