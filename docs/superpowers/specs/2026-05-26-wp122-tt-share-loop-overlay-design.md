@@ -110,7 +110,9 @@ def _handle_samsung_stories_overlay(self, ui_xml: str, wait: int,
     # → 'step': _step. Новый ключ 'phase' в события хендлера НЕ добавляем —
     # иначе payload wait_upload перестанет быть идентичным. Различение фаз идёт
     # через сам 'step' ('wait_upload' vs 'tt_5_share_loop').
-    # stuck-ветка: set_step остаётся 'tt_5_samsung_overlay_stuck' (как сейчас)
+    # stuck-ветка: step тоже phase-aware — share_loop даёт
+    # 'tt_5_share_loop_{samsung_overlay,inapp_stories}_stuck', wait_upload
+    # остаётся 'tt_5_{…}_stuck' (default). Category неизменна.
 ```
 
 То же для `_handle_tt_inapp_stories`. **При default `phase='wait_upload'` `_step` резолвится в `'wait_upload'` и новых ключей не добавляется → payload событий wait_upload идентичен текущему (byte-for-byte); существующие call-sites (`:2279`, `:2300`) не передают параметр.** Единственная правка боевых хендлеров — замена литерала `'step': 'wait_upload'` на `'step': _step` (в share-loop резолвится в `'tt_5_share_loop'`). Ключ `'phase'` в события хендлера **не** добавляем; фазу несёт только `step` (и отдельное dismissed-событие самого хука).
@@ -172,11 +174,11 @@ def _handle_samsung_stories_overlay(self, ui_xml: str, wait: int,
 | `tt_samsung_overlay_detected` | info | Samsung overlay впервые detected в share-loop (iter 1) |
 | `tt_samsung_overlay_dismiss_attempt` | info | каждый dismiss-шаг (strategy: x_button_tap/keycode_back/coord_fallback) |
 | `tt_samsung_overlay_dismissed` | info | counter>0, оверлей ушёл — recovery success |
-| `tt_samsung_overlay_stuck` | error | iter > MAX → 'stuck' → fail attempt |
+| `tt_samsung_overlay_stuck` | error | iter > MAX → 'stuck' → fail attempt; step=`tt_5_share_loop_samsung_overlay_stuck` |
 | `tt_inapp_stories_detected` | info | in-app Stories впервые detected в share-loop |
 | `tt_inapp_stories_dismiss_attempt` | info | каждый dismiss-шаг (back_arrow_tap/keycode_back) |
 | `tt_inapp_stories_dismissed` | info | counter>0, ушёл — recovery success |
-| `tt_inapp_stories_stuck` | error | iter > MAX → 'stuck' → fail attempt |
+| `tt_inapp_stories_stuck` | error | iter > MAX → 'stuck' → fail attempt; step=`tt_5_share_loop_inapp_stories_stuck` |
 
 Триаж после включения: `step='tt_5_share_loop'` (а у dismissed — `meta.phase='share_loop'`) отделяет share-loop dismiss от wait_upload; падение `tt_upload_confirmation_timeout` при росте `tt_samsung_overlay_dismissed`/`tt_inapp_stories_dismissed` (share_loop) = доказательство эффекта.
 
