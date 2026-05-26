@@ -67,11 +67,19 @@ const endIdx = fnBody.indexOf(']);', insIdx);          // конец pool.query(
 assert.ok(endIdx > insIdx, 'нашёлся блок INSERT+params');
 const block = fnBody.slice(insIdx, endIdx);
 
-// 3) контракт: cpid в column-list И в params
-assert.match(block, /client_publish_id/,        'column-list dispatch-INSERT обязан включать client_publish_id');
-assert.match(block, /item\.client_publish_id/,  'params dispatch-INSERT обязан передавать item.client_publish_id');
+// 3) РАЗДЕЛИТЬ column-list (до VALUES) и params (после). Иначе assert на колонку ложно
+//    пройдёт за счёт `item.client_publish_id` в params, даже если колонку выкинули из списка
+//    (codex P2 2026-05-26).
+const valuesIdx = block.indexOf('VALUES');
+assert.ok(valuesIdx > 0, 'нашёлся VALUES в dispatch-INSERT');
+const columnList = block.slice(0, valuesIdx);
+const paramsPart = block.slice(valuesIdx);
+
+// 4) контракт: cpid именно в column-list И item.client_publish_id именно в params
+assert.match(columnList, /client_publish_id/,       'column-list dispatch-INSERT обязан включать client_publish_id');
+assert.match(paramsPart, /item\.client_publish_id/, 'params dispatch-INSERT обязан передавать item.client_publish_id');
 ```
-Якоримся на имени функции и ключевом слове INSERT (не на номерах строк / фиксированных окнах) → устойчиво к форматированию. Точно различает dispatch-INSERT (с cpid) и ручной INSERT на 2754 (без cpid), т.к. ищем строго внутри тела `dispatchPublishQueue`.
+Якоримся на имени функции и ключевом слове INSERT (не на номерах строк / фиксированных окнах) → устойчиво к форматированию. Разделение по `VALUES` ловит ОБА вида регрессии независимо (колонку убрали из списка; param убрали из массива) — проверено негатив-тестами NEG-A/NEG-B. Точно различает dispatch-INSERT (с cpid) и ручной INSERT на 2754 (без cpid), т.к. ищем строго внутри тела `dispatchPublishQueue`.
 
 ### Запуск
 `node --test --test-force-exit test_client_publish_id.test.js` (в корне repo; package.json `test` гоняет `tests/*.test.js`, корневые тесты — этой же командой по имени, как остальные `test_*.test.js`).
