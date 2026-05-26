@@ -29,7 +29,7 @@
 
 - Гасить окно «Добавить в историю» (Samsung overlay + TT in-app Stories) **в share-loop, перед поиском кнопки публикации**, переиспользуя существующие хелперы.
 - Отдельный kill-switch `TT_SHARE_LOOP_OVERLAY_HANDLER_ENABLED` (env, **default `'false'` — OFF**), чтобы выкатить тёмным и включить вручную после смока.
-- Observability: события dismiss/stuck в share-loop помечены своей фазой (`step=tt_5_share_loop`, `phase='share_loop'`), чтобы после включения в проде видеть, что dismiss реально сработал и `tt_upload_confirmation_timeout` падает.
+- Observability: события dismiss/stuck в share-loop помечены своим `step=tt_5_share_loop` (а dismissed-событие самого хука — ещё и `phase='share_loop'`), чтобы после включения в проде видеть, что dismiss реально сработал и `tt_upload_confirmation_timeout` падает.
 - Не менять текущее поведение wait_upload — оно остаётся байт-в-байт.
 
 ## Non-goals
@@ -106,11 +106,14 @@ def _handle_samsung_stories_overlay(self, ui_xml: str, wait: int,
                                     phase: str = 'wait_upload') -> bool:
     ...
     _step = 'tt_5_share_loop' if phase == 'share_loop' else 'wait_upload'
-    # во всех log_event этого метода: 'step': _step, плюс 'phase': phase
+    # во всех log_event этого метода: меняем ТОЛЬКО литерал 'step': 'wait_upload'
+    # → 'step': _step. Новый ключ 'phase' в события хендлера НЕ добавляем —
+    # иначе payload wait_upload перестанет быть идентичным. Различение фаз идёт
+    # через сам 'step' ('wait_upload' vs 'tt_5_share_loop').
     # stuck-ветка: set_step остаётся 'tt_5_samsung_overlay_stuck' (как сейчас)
 ```
 
-То же для `_handle_tt_inapp_stories`. **Default `'wait_upload'` → существующие call-sites (`:2279`, `:2300`) не передают параметр и ведут себя байт-в-байт как сейчас.** Это единственная правка боевых хендлеров, и она поведенчески нейтральна для wait_upload (меняется только лейбл в событиях share-loop ветки).
+То же для `_handle_tt_inapp_stories`. **При default `phase='wait_upload'` `_step` резолвится в `'wait_upload'` и новых ключей не добавляется → payload событий wait_upload идентичен текущему (byte-for-byte); существующие call-sites (`:2279`, `:2300`) не передают параметр.** Единственная правка боевых хендлеров — замена литерала `'step': 'wait_upload'` на `'step': _step` (в share-loop резолвится в `'tt_5_share_loop'`). Ключ `'phase'` в события хендлера **не** добавляем; фазу несёт только `step` (и отдельное dismissed-событие самого хука).
 
 ### Hook point — начало share-loop
 
@@ -162,7 +165,7 @@ def _handle_samsung_stories_overlay(self, ui_xml: str, wait: int,
 
 ### Event categories
 
-Новых категорий нет — переиспользуем существующие, но в share-loop ветке с `step='tt_5_share_loop'` и `phase='share_loop'`:
+Новых категорий нет — переиспользуем существующие. В share-loop ветке события хендлера несут `step='tt_5_share_loop'` (вместо `wait_upload`); **новый ключ `phase` в события хендлера НЕ добавляется** (payload wait_upload-событий сохраняется). Только `*_dismissed`-события, эмитируемые самим хуком (новые, не из хендлера), несут `phase='share_loop'`:
 
 | Category | Type | Когда (share_loop) |
 |---|---|---|
@@ -175,7 +178,7 @@ def _handle_samsung_stories_overlay(self, ui_xml: str, wait: int,
 | `tt_inapp_stories_dismissed` | info | counter>0, ушёл — recovery success |
 | `tt_inapp_stories_stuck` | error | iter > MAX → 'stuck' → fail attempt |
 
-Триаж после включения: `meta.phase='share_loop'` отделяет share-loop dismiss от wait_upload; падение `tt_upload_confirmation_timeout` при росте `tt_samsung_overlay_dismissed`/`tt_inapp_stories_dismissed` (share_loop) = доказательство эффекта.
+Триаж после включения: `step='tt_5_share_loop'` (а у dismissed — `meta.phase='share_loop'`) отделяет share-loop dismiss от wait_upload; падение `tt_upload_confirmation_timeout` при росте `tt_samsung_overlay_dismissed`/`tt_inapp_stories_dismissed` (share_loop) = доказательство эффекта.
 
 ### Config
 
@@ -201,11 +204,11 @@ def _handle_samsung_stories_overlay(self, ui_xml: str, wait: int,
 - `test_hook_inapp_stuck_at_cap` — аналогично для in-app.
 
 **Observability / phase label:**
-- `test_share_loop_events_carry_phase` — события dismiss/stuck несут `step='tt_5_share_loop'` и `meta['phase']='share_loop'`.
-- `test_hook_emits_dismissed_after_recovery` — pre-set `_samsung_overlay_iter=2`, оверлея в текущем dump нет → событие `tt_samsung_overlay_dismissed` (phase=share_loop) + сброс счётчика в 0.
+- `test_share_loop_handler_events_use_share_loop_step` — при `phase='share_loop'` события хендлера (detected/dismiss_attempt) несут `step='tt_5_share_loop'` и **не содержат** ключа `phase`.
+- `test_hook_emits_dismissed_with_phase_after_recovery` — pre-set `_samsung_overlay_iter=2`, оверлея в текущем dump нет → новое событие `tt_samsung_overlay_dismissed` (хука) несёт `step='tt_5_share_loop'` + `meta['phase']='share_loop'` + сброс счётчика в 0.
 
-**Регресс-гард wait_upload (правка phase-параметра нейтральна):**
-- `test_wait_upload_handler_default_phase_unchanged` — вызов `_handle_samsung_stories_overlay(ui, wait)` БЕЗ `phase` → событие по-прежнему `step='wait_upload'` (default сохраняет поведение).
+**Регресс-гард wait_upload (правка phase-параметра нейтральна — payload идентичен):**
+- `test_wait_upload_handler_default_phase_unchanged` — вызов `_handle_samsung_stories_overlay(ui, wait)` БЕЗ `phase` → событие по-прежнему `step='wait_upload'` и в `meta` **нет** ключа `phase` (payload byte-for-byte как до правки).
 - `test_wait_upload_inapp_handler_default_phase_unchanged` — то же для in-app.
 
 **Integration** (extend `test_publisher_tt_wait_upload_integration.py` или новый):

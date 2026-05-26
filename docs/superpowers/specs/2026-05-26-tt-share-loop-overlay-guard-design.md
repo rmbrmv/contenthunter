@@ -65,6 +65,14 @@ if TT_SHARE_LOOP_OVERLAY_GUARD_ENABLED:
 
 `continue` после dismiss возвращает цикл к dump_ui + XML-поиску кнопки → следующая итерация увидит уже очищенный экран. Блок зеркалит структуру wait_upload (детект → хендл → continue; либо reset-on-success при `iter > 0`).
 
+Логика выносится в отдельный метод `_run_tt_share_loop_overlay_guard(ui, attempt)` с tri-state возвратом `'handled' / 'stuck' / None` — точно по образцу существующего `_run_tt_commercial_music_hook(ui, phase)` (тот уже вызывается и в share-loop, и в wait_upload). Это даёт изолированную юнит-тестируемость (не нужно гонять гигантский `publish_tiktok` целиком) и тонкую вставку в сам цикл:
+
+```
+_ov_res = self._run_tt_share_loop_overlay_guard(ui, attempt)
+if _ov_res == 'stuck':   return False
+if _ov_res == 'handled': time.sleep(1.5); continue
+```
+
 ### 3.2. Kill-switch — новый, default OFF
 
 ```
@@ -138,4 +146,4 @@ def _handle_tt_inapp_stories(self, ui_xml, wait, phase='wait_upload'):
 
 ## 8. Объём
 
-Один файл `publisher_tiktok.py`: +1 блок в share-loop (~25 строк), +1 опциональный параметр в двух хендлерах с заменой хардкода step, +1 env-флаг. Плюс тесты. Диф тугой, изменение локализованное.
+Один файл `publisher_tiktok.py`: +1 хелпер-метод `_run_tt_share_loop_overlay_guard` (~30 строк), +4 строки вызова в share-loop, +1 опциональный параметр `phase` в двух хендлерах с заменой хардкода step, +1 env-флаг. Плюс тесты в новом `tests/test_publisher_tt_share_loop_overlay_guard.py`. Диф тугой, изменение локализованное.
