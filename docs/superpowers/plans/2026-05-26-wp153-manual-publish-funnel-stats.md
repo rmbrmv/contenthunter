@@ -4,7 +4,7 @@
 
 **Goal:** Добавить воронку пайплайна (6 шагов + Потеряно/% ручной) и метрику «SR итоговый» в дашборд delivery и утренний TG-отчёт, чтобы было видно где теряется контент и сколько идёт вручную.
 
-**Architecture:** Единый модуль `pipeline_funnel.js` — единственный источник правды для воронки; чистая функция `assembleFunnel` (вся арифметика, тестируется без БД) + `computeFunnel` (3 SQL-запроса по когорте `unic_tasks.slot_date`). Вызывается и эндпоинтом дашборда (`server.js`), и TG-отчётом (`daily_publish_report.js`). Фронт (`public/index.html`) рендерит новый блок и плашку из ответа эндпоинта. Миграций нет — только чтение.
+**Architecture:** Единый модуль `pipeline_funnel.js` — единственный источник правды для воронки; чистая функция `assembleFunnel` (вся арифметика, тестируется без БД) + `computeFunnel` (3 SQL-запроса по когорте текущего slot_date). **Якорь когорты** = `COALESCE(validator_schedule_slots.slot_date, unic_tasks.slot_date)` для очереди и `COALESCE(s.slot_date, m.planned_date)` для ручной — живая дата планировщика (решение «по текущему slot_date»), снапшоты только как fallback при удалённом слоте; обе когорты якорятся одинаково, чтобы не смешивать дни. Вызывается и эндпоинтом дашборда (`server.js`), и TG-отчётом (`daily_publish_report.js`). Фронт (`public/index.html`) рендерит новый блок и плашку из ответа эндпоинта. Миграций нет — только чтение.
 
 **Tech Stack:** Node.js, `pg` (node-postgres), Express, встроенный `node:test`, Tailwind-разметка во фронте.
 
@@ -352,16 +352,22 @@ async function computeFunnel({ pool, slotDateFrom, slotDateToExcl, filters = {} 
     LEFT JOIN validator_schedule_slots s ON s.id = NULLIF(ut.meta->>'slot_id','')::int
     LEFT JOIN validator_projects vp  ON vp.id  = pq.project_id
     LEFT JOIN validator_projects vp2 ON vp2.id = ut.project_id
-    WHERE ut.slot_date >= $1::date AND ut.slot_date < $2::date
+    WHERE COALESCE(s.slot_date, ut.slot_date) >= $1::date
+      AND COALESCE(s.slot_date, ut.slot_date) <  $2::date
       ${f1.conds.length ? 'AND ' + f1.conds.join(' AND ') : ''}
   `, [slotDateFrom, slotDateToExcl, ...f1.params]);
 
   // Q2: вся выложенная вручную (validator_manual_publish_queue по planned_date).
   const f2 = _mqFilters(filters, 2);
+  // Якорь — тот же текущий slot_date, что и в Q1 (join к слоту по m.slot_id),
+  // fallback на снапшот m.planned_date если слот удалён. Иначе при переносах
+  // ручные строки попали бы в чужой день (codex P2).
   const q2 = await pool.query(`
     SELECT COUNT(*) AS manual_published_total
     FROM validator_manual_publish_queue m
-    WHERE m.planned_date >= $1::date AND m.planned_date < $2::date
+    LEFT JOIN validator_schedule_slots s ON s.id = m.slot_id
+    WHERE COALESCE(s.slot_date, m.planned_date) >= $1::date
+      AND COALESCE(s.slot_date, m.planned_date) <  $2::date
       AND m.operator_status = 'published'
       ${f2.conds.length ? 'AND ' + f2.conds.join(' AND ') : ''}
   `, [slotDateFrom, slotDateToExcl, ...f2.params]);
@@ -424,7 +430,7 @@ computeFunnel({pool, slotDateFrom:'2026-05-25', slotDateToExcl:'2026-05-26', fil
   .then(f => { console.log(JSON.stringify(f,null,1)); return pool.end(); });
 "
 ```
-Expected: `plan:280, autotask:126, auto_published:113, manual_handoff:12, manual_published_total:122, lost_count:45, sr_total:0.839`.
+Expected: порядок величин эталона — `plan≈280, autotask≈126, auto_published≈113, manual_handoff≈12, manual_published_total≈122, lost_count≈45, sr_total≈0.839`. Числа из разведки считались по `ut.slot_date`/`planned_date`; при живом якоре `COALESCE(s.slot_date,…)` они могут чуть сдвинуться для перенесённых слотов — **записать фактический вывод как регрессионный эталон** (pure-тест в Task 1 на хардкодных входах от этого не зависит).
 
 - [ ] **Step 6: Коммит**
 
@@ -548,14 +554,17 @@ function renderDashboardOverall(overall) {
       <span class="text-[10px] text-gray-400 uppercase">${label}</span>
     </div>
   `);
-  // SR итоговый (WP #153): (Авто + Ручная) / План — выделенная плашка.
-  const srTotal = overall.sr_total;
-  tiles.push(`
-    <div class="flex flex-col items-center gap-0.5 bg-violet-50 border border-violet-300 rounded-lg px-2 py-2">
-      <span class="text-xl font-bold text-violet-700">${srTotal == null ? '—' : Math.round(srTotal*100)+'%'}</span>
-      <span class="text-[10px] text-violet-600 uppercase font-semibold">SR итоговый</span>
-    </div>
-  `);
+  // SR итоговый (WP #153): (Авто + Ручная) / План. Прячем при выключенной воронке (kill-switch → sr_total:null), honors codex P3.
+  const showSr = overall.sr_total != null;
+  if (showSr) {
+    tiles.push(`
+      <div class="flex flex-col items-center gap-0.5 bg-violet-50 border border-violet-300 rounded-lg px-2 py-2">
+        <span class="text-xl font-bold text-violet-700">${Math.round(overall.sr_total*100)}%</span>
+        <span class="text-[10px] text-violet-600 uppercase font-semibold">SR итоговый</span>
+      </div>
+    `);
+  }
+  root.className = 'grid gap-2 ' + (showSr ? 'grid-cols-8' : 'grid-cols-7');
   root.innerHTML = tiles.join('');
 }
 ```

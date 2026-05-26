@@ -59,9 +59,9 @@ public/index.html  (section-publishing-dashboard)
 
 ## Модель воронки (точные определения; проверено на когорте 2026-05-25)
 
-**Когорта** = строки `publish_queue`, у которых связанный `unic_tasks.slot_date` попадает в окно.
-Связь: `pq.unic_task_id → unic_tasks.id`, иначе через `pq.unic_result_id → unic_results.task_id → unic_tasks.id`.
-Это важно: окно по `unic_tasks.slot_date` (плановый день), **не** по `publish_queue.scheduled_at` (там часто «сейчас+15мин»).
+**Когорта** = строки `publish_queue`, у которых текущая дата слота попадает в окно. Якорь = `COALESCE(validator_schedule_slots.slot_date, unic_tasks.slot_date)` — живая дата планировщика (решение «по текущему slot_date»), снапшот `unic_tasks.slot_date` лишь как fallback при удалённом слоте.
+Связь: `pq.unic_task_id → unic_tasks.id`, иначе через `pq.unic_result_id → unic_results.task_id → unic_tasks.id`; слот через `unic_tasks.meta->>'slot_id'`. Ручная очередь якорится так же: `COALESCE(s.slot_date, validator_manual_publish_queue.planned_date)` (join по `m.slot_id`), чтобы обе когорты были на одном дне.
+Это важно: окно по дате слота (плановый день), **не** по `publish_queue.scheduled_at` (там часто «сейчас+15мин»).
 
 | Шаг / колонка | Определение | 25.05 |
 |---|---|---|
