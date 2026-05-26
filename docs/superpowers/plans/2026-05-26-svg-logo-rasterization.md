@@ -1,5 +1,11 @@
 # SVG-логотипы → PNG: гард + сеть воркера — Implementation Plan
 
+> **СТАТУС: ✅ SHIPPED+DEPLOYED 2026-05-26.** Реализовано subagent-driven (impl+спек-ревью+код-ревью+codex по каждой задаче), оба PR смержены и выкачены в прод:
+> - Worker (③ сеть + ① скрипт): GenGo2/delivery-contenthunter **#105** → прод autowarm `@1af91ce`; воркер поднят под root-PM2 `unic-worker` (deploy впредь: `sudo pm2 restart unic-worker`), живость подтверждена.
+> - Validator (② гард): GenGo2/validator-contenthunter **#22** → прод validator `@deceb19`, рестарт PM2 `validator` id24, старт чистый.
+> - codex P1=0, P2 закрыты. Kill-switches: `UNIC_SVG_RASTERIZE_ENABLED`, `BRAND_SVG_RASTERIZE_ENABLED`. WP #151 → Готово.
+> - Tasks 6–8 (рантайм воркера + деплой) выполнены по ходу; пред-деплой загадка рантайма разрешена (был unmanaged persistent-процесс, отвалился; теперь PM2).
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** Не дать SVG-логотипу ронять видеоконвейер уникализации — гард при загрузке (validator) + сеть на стороне воркера (autowarm), плюс закоммитить разовый скрипт ремедиации.
