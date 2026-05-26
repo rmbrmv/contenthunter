@@ -1,5 +1,19 @@
 # Backlog tickets
 
+## 2026-05-26 — WP #98: adb_push chunked-push для медиа >70MB
+
+### ✅ ЗАКРЫТА 2026-05-26 (resolved-by-prior-PR) — OpenProject #98 → Готово; кода не писали
+
+Пришло как вопрос автоворкера (бриф `contenthunter_autoexec/briefs/98`): переоткрыть как расследование или реимплементировать chunked-push? Брейншторм-разведка (read-only прод-код + БД) показала, что **исходная посылка устарела — фикс уже в проде**.
+
+**Что просил триаж WP #79 (Bucket 6).** 17 фейлов `switch_failed_unspecified::NULL` у Content hunter, приписаны adb_push timeout на медиа >70MB; чек-лист — «реализовать chunked-push + per-hop телеметрия».
+
+**Почему закрыто без кода.** chunked-push (PR #48 `ec91909`, 13.05 11:39) + size-aware watchdog (PR #53 `055161d`, 13.05 **20:45**) уже задеплоены и корректно подключены (`publisher_base.py:4321-4327` → `compute_push_timeout(size_mb)` → `set_step(timeout_s=…)`; `set_step` 537 использует переданный timeout). Триггер chunked = **>3MB** (`CHUNKED_TRIGGER_MB=3.0`), не >70MB. Все 17 фейлов Bucket 6 — задачи **утра 13.05 (05:27–06:13), ДО деплоя**: watchdog статический 180с при медиа 55–78MB (должно быть 290–372с). Триаж 18.05 захватил окно, перекрывающее фикс. **После деплоя (13.05 21:00) — 0 фейлов `adb push медиафайла` по всем проектам за 13 дней.** Content hunter активен (109 done post-deploy), так что это починка, не простой.
+
+**Остаток / out-of-scope.** Residual `switch_failed_unspecified` у Content hunter post-deploy = `adb_preflight` 30с = OTA-инцидент 15.05 (отдельный RC, память `feedback_ota_screen_blocks_adb_preflight`) + хвост 1–2/день 19–20.05, ноль с 20.05. **Per-hop loss telemetry НЕ делаем в publisher** — оставлено на инфра-треке (тикет TimeWeb, mtr hop 4 = 20% loss). Нового бэклог-тикета нет.
+
+Evidence: `docs/evidence/2026-05-26-wp98-adb-push-already-fixed.md`. Память: `project_adb_push_network_issue` (обновлён). Урок: сверять посылку задачи против реального кода + времени деплоя (`feedback_plan_staleness`).
+
 ## 2026-05-26 — WP #135: IG `_current_foreground_package` двойной shell → всегда 'unknown'
 
 ### ✅ SHIPPED+DEPLOYED 2026-05-26 — delivery-contenthunter main `2d994db`; OpenProject #135 → Тестирование (verify 24ч)
