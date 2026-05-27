@@ -79,14 +79,17 @@ Expected: `node_modules OK` (symlink резолвится); pm2 `autowarm-farmin
 
 - [ ] **Step 1: Проверить, что флага ещё нет, и добавить его**
 
-Run:
+Run (идемпотентно — replace если есть, append если нет; без дублей):
 ```bash
 cd /home/claude-user/autowarm-testbench
-grep -n "TT_SHARE_LOOP_OVERLAY_HANDLER_ENABLED" .env || echo "NOT SET — добавляю"
-printf '\nTT_SHARE_LOOP_OVERLAY_HANDLER_ENABLED=true\n' >> .env
-tail -3 .env
+if grep -q '^TT_SHARE_LOOP_OVERLAY_HANDLER_ENABLED=' .env; then
+  sed -i 's/^TT_SHARE_LOOP_OVERLAY_HANDLER_ENABLED=.*/TT_SHARE_LOOP_OVERLAY_HANDLER_ENABLED=true/' .env
+else
+  printf '\nTT_SHARE_LOOP_OVERLAY_HANDLER_ENABLED=true\n' >> .env
+fi
+grep -n "TT_SHARE_LOOP_OVERLAY_HANDLER_ENABLED" .env
 ```
-Expected: до — «NOT SET»; после — последняя строка `TT_SHARE_LOOP_OVERLAY_HANDLER_ENABLED=true`.
+Expected: **ровно одна** строка `TT_SHARE_LOOP_OVERLAY_HANDLER_ENABLED=true` (без дублей при повторном прогоне).
 
 - [ ] **Step 2: Подтвердить, что python-процесс прочитает флаг из этого .env**
 
@@ -200,14 +203,17 @@ Expected: путь(и) к ui-dump и/или URL screencast — приложит�
 
 - [ ] **Step 1: Проверить, что флага ещё нет, и добавить**
 
-Run:
+Run (идемпотентно — без дублей при повторном прогоне):
 ```bash
 P=/root/.openclaw/workspace-genri/autowarm
-grep -n "TT_SHARE_LOOP_OVERLAY_HANDLER_ENABLED" $P/.env || echo "NOT SET — добавляю"
-printf '\nTT_SHARE_LOOP_OVERLAY_HANDLER_ENABLED=true\n' >> $P/.env
-tail -3 $P/.env
+if grep -q '^TT_SHARE_LOOP_OVERLAY_HANDLER_ENABLED=' $P/.env; then
+  sed -i 's/^TT_SHARE_LOOP_OVERLAY_HANDLER_ENABLED=.*/TT_SHARE_LOOP_OVERLAY_HANDLER_ENABLED=true/' $P/.env
+else
+  printf '\nTT_SHARE_LOOP_OVERLAY_HANDLER_ENABLED=true\n' >> $P/.env
+fi
+grep -n "TT_SHARE_LOOP_OVERLAY_HANDLER_ENABLED" $P/.env
 ```
-Expected: до — «NOT SET»; после — строка с `=true`.
+Expected: **ровно одна** строка `TT_SHARE_LOOP_OVERLAY_HANDLER_ENABLED=true`.
 
 - [ ] **Step 2: Рестарт прод-воркера с обновлением env**
 
