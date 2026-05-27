@@ -143,6 +143,8 @@ RETURNING id;"
 ```
 Expected: `RETURNING id` → запомнить как `<SMOKE_ID>`.
 
+> **Гонки с планировщиком нет:** testbench-диспетчер claim'ит задачи из `publish_queue` (`UPDATE publish_queue SET status='running' WHERE status='pending'`, server.js:6169) и только потом создаёт `publish_tasks` + спавнит `publisher.py`. Эта смок-строка живёт **только в `publish_tasks`** (без `publish_queue`-связки) → диспетчер её не видит и не запустит. Единственный запускающий — ручной `publisher.py <SMOKE_ID>` в Step 4.
+
 - [ ] **Step 4: Запустить публикацию вручную (читает свежий код + .env с флагом ON)**
 
 Run:
@@ -152,7 +154,7 @@ nohup python3 -u publisher.py <SMOKE_ID> > /tmp/wp122_smoke_<SMOKE_ID>.log 2>&1 
 echo "PID $!"; sleep 5; tail -20 /tmp/wp122_smoke_<SMOKE_ID>.log
 ```
 Expected: процесс стартовал, в логе — старт публикации (switcher → share-loop). Следить за логом до завершения (`tail -f`); типично 2-5 минут.
-> Запуск идёт как `claude-user` (БД через `.env`, ADB через `adb_host:adb_port` задачи). Если упрётся в права (например, root-only артефакты) — fallback: задача уже `pending`+`testbench=true`, её подхватит штатный testbench-планировщик (root, тот же `.env` с флагом ON) — мониторить тот же `<SMOKE_ID>`.
+> Запуск идёт как `claude-user` (БД через `.env`, ADB через `adb_host:adb_port` задачи). Если упрётся в права (root-only артефакты) — fallback: перезапустить ту же задачу под root тем же кодом+env: `sudo python3 -u publisher.py <SMOKE_ID>`. (Планировщик задачу не подхватит — она вне `publish_queue`, см. Step 3.)
 
 - [ ] **Step 5: GATE — проверить исход и отсутствие ложного срабатывания хука**
 
