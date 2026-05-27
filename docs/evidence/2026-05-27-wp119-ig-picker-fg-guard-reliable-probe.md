@@ -46,3 +46,23 @@ IG-успех 79%→22% (инцидент 26.05, 95/169). Гард откати�
 - Verify 24ч: IG success ≈79%; `ig_target_not_in_picker`→~0; `ig_account_switcher_wrong_foreground`
   только на реальных foreign; `ig_picker_fg_transient` редкие. Откат: `=0`.
 - OpenProject #119 остаётся «В разработке» до SHIPPED+DEPLOYED (после включения флага).
+
+---
+
+## ФИНАЛ 2026-05-27 — задеплоено, гард ВКЛ, #119 → «Тестирование»
+
+**Обе итерации в проде, флаг `IG_PICKER_FG_GUARD_ENABLED=1`:**
+- **PR #111** (merge `48d27a4`) — foreground-пробник `_reliable_foreground_pkg` + 2-sample.
+- **PR #112** (merge `e265dbc`) — освежение маркеров sheet-детектора.
+
+**Хронология выкатки (осторожная, с мониторингом):**
+1. Мерж #111 → прод pull → live read-only smoke: пробник на флоте отдаёт реальный `topResumedActivity` (IG→com.instagram.android, лаунчер→лаунчер) → флип флага `=1` + рестарт autowarm id35.
+2. **Мониторинг вскрыл ВТОРОЙ over-fire** (не пробник): sheet-валидация `_ig_on_account_switcher_sheet` (PR#102) со stale-маркерами `account_switcher_recycler`/`bottom_sheet_container` → 3/3 guard-reaching задачи (11324/11327/11337) упали `ig_picker_wrong_screen`→`wrong_foreground`. **Откат** `=0` за минуты (осторожная выкатка поймала на 3 задачах, не за ночь как R2).
+3. Root cause по прод-дампу (18KB открытого sheet): текущий IG использует `recycler_view_container_id` + тексты «Добавьте аккаунт Instagram»/«Перейти в Центр аккаунтов» (проверено: нет на профиле/Modal/MediaCapture). → **PR #112** освежил маркеры (legacy + текущие) + DRY `_ig_is_on_unexpected_screen`.
+4. Мерж #112 → прод pull → флаг `=1` снова + рестарт. **Over-fire НЕ повторился.** Единственная live-guard-задача (11354, expertestate1) = реальный стойкий **TikTok-hijack** (probe=`com.zhiliaoapp.musically`, дамп 100% TikTok) → гард поймал foreign→recovery→TikTok вернулся→честный `wrong_foreground`. Это КОРРЕКТНО: с гардом OFF была бы misleading `ig_target_not_in_picker`. `wrong_foreground`=1 (не флуд).
+
+**Вывод:** обе первопричины (#119) закрыты — foreground-определение (пробник) + stale sheet-маркеры. Гард ВКЛ и ведёт себя корректно (over-fire не воспроизводится; честные отказы на реальных hijack).
+
+**Что осталось:** живой позитив «реальный sheet прошёл гард и опубликовался» НЕ пойман — дневной объём IG ~0 + шум от рестартов/watchdog #165. Verify — на **утреннем daily-batch** (24ч): IG success не просел; `ig_target_not_in_picker`→~0; `ig_account_switcher_wrong_foreground` только на реальных hijack. Откат `=0` наготове; daily-report 9:50 МСК ловит обвал. #119 → «Тестирование» (по решению Данила).
+
+**Также закрыт бэклог «8 IG-тестов красные на main»** — они краснели из-за этого же гарда; изолированы/обновлены в рамках #111/#112.
