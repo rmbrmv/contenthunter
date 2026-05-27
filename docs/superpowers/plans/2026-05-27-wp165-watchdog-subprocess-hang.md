@@ -676,13 +676,17 @@ git commit -m "chore(wp165): kill-switch'и watchdog-защиты в ecosystem.p
 
 - [ ] **Step 1: Прогнать все новые тесты разом**
 
-Run:
+Run (СЕРИЙНО — live-DB тесты не должны идти параллельно, общая таблица):
 ```bash
-cd /root/.openclaw/workspace-genri/autowarm
-node --test --test-force-exit test_watchdog_breaker.test.js test_watchdog_alert.test.js
+cd /home/claude-user/autowarm-wp165
+node --test --test-force-exit --test-concurrency=1 test_watchdog_breaker.test.js test_watchdog_alert.test.js
 python3 -m pytest test_heartbeat_visibility.py -v
 ```
-Expected: все PASS.
+Expected: все PASS (breaker 6 + alert 4 + heartbeat 2).
+
+> **As-built:** alert-тест сделан **baseline-aware** (порог относительно реальных hang в окне),
+> иначе флапает от контаминации реальными `watchdog_subprocess_hang` или фикстурами параллельных
+> файлов (урок feedback_livedb_controller_test_isolation). Многофайловый прогон — только `--test-concurrency=1`.
 
 - [ ] **Step 2: `codex review` диффа (правило для WP — раундами до 0 P1)**
 
