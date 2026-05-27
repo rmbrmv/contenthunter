@@ -95,38 +95,40 @@ watchdog_subprocess_hang`: Instagram 473 + TikTok 60 + YouTube 31. В пике (
 
 Три независимых компонента, каждый за своим kill-switch.
 
-### 4.1. Компонент A — Circuit-breaker ретрай-шторма
+### 4.1. Компонент A — Circuit-breaker ретрай-шторма (оконный + backoff)
 
 **Где:** `server.js` `watchdogRunningTasks()`, в точке реквью (стр. 7060-7065).
 
-**Идентичность публикации:** `publish_queue.id` стабилен между ретраями (watchdog сбрасывает
-ту же строку pq в pending; dispatch создаёт новый publish_task, но pq тот же). Поэтому счётчик
-живёт на `publish_queue`.
+**Идентичность публикации:** `client_publish_id` (cpid) персистентен на `publish_tasks`
+между ретраями (в инциденте все 551 hang имели cpid, NULL = 0). Используем оконный запрос
+по cpid — **без персистентного счётчика, без миграции, без reset-хука** (само-заживает по
+скользящему окну). Это сознательное упрощение vs первоначальный вариант со счётчиком на
+`publish_queue` (тот требовал миграцию + хук сброса на успехе — лишний риск).
 
-**Миграция:** `publish_queue.watchdog_hang_streak INT NOT NULL DEFAULT 0`
-(файл `migrations/`, см. [[feedback_migrations_for_writers]]).
+**Логика (после того как watchdog уже пометил задачу `failed` с error_code):**
+1. Если `cpid IS NULL` → обычное немедленное реквью (`pq → pending`), breaker неприменим
+   (безопасный дефолт).
+2. Иначе посчитать:
+   `SELECT count(*) FROM publish_tasks WHERE client_publish_id = $cpid
+    AND error_code='watchdog_subprocess_hang'
+    AND updated_at > NOW() - (WATCHDOG_BREAKER_WINDOW_MIN || ' minutes')::interval`
+   (включает текущую только что упавшую задачу).
+3. Если `count < WATCHDOG_BREAKER_MAX_HANGS` (default 3): реквью как сейчас —
+   `pq → pending`, `publish_task_id=NULL`, `scheduled_at` не трогаем (немедленный ретрай).
+4. Если `count >= WATCHDOG_BREAKER_MAX_HANGS`: **backoff-реквью** —
+   `pq → pending`, `publish_task_id=NULL`,
+   `scheduled_at = NOW() + (WATCHDOG_BREAKER_BACKOFF_HOURS || ' hours')::interval` (default 6).
+   `dispatchPublishQueue` берёт только `scheduled_at <= NOW()+10min`, поэтому публикация
+   **выходит из тугого 5-мин цикла**, но **не теряется** — повторится после cooldown (когда
+   ночное окно уже закончится). Записать событие + засчитать в алерт (компонент B).
 
-**Логика:**
-1. При watchdog-kill задачи, привязанной к pq: `watchdog_hang_streak = watchdog_hang_streak + 1`.
-2. Если `watchdog_hang_streak < WATCHDOG_BREAKER_MAX_STREAK` (default 3):
-   реквью как сейчас (`pq → pending`, `publish_task_id=NULL`).
-3. Если `watchdog_hang_streak >= WATCHDOG_BREAKER_MAX_STREAK`:
-   **не реквьюить в pending.** Вместо этого — маршрутизировать в ручную очередь через
-   существующий хелпер `handoffToManual(pq, reason='watchdog_hang_breaker')`
-   (`retry_controller.js:98`): он ставит `pq.status='cancelled'`, `skip_reason`,
-   `manual_handoff_at` и вставляет строку в ручную очередь. Так публикация **гарантированно
-   не теряется** и попадает к человеку. Записать событие + засчитать в алерт (компонент B).
-   *Открытая суб-развилка:* если связывать breaker с handoff-плумбингом нежелательно —
-   fallback-вариант «просто park: `pq.status='cancelled'` + `skip_reason` + алерт» (тогда
-   восстановление только ручное по алерту). Рекомендую handoff-вариант.
-4. Сброс `watchdog_hang_streak=0` на успешной публикации (success-путь sync-queue/dispatch,
-   где `pq → done`).
-
-**Эффект:** 28 публикаций × ~20 ретраев → максимум 28 × 3 = 84 hang вместо 551, и ночь
-устройств не сжигается впустую.
+**Эффект:** вместо ~20 немедленных ретраев за ночь — максимум 3 в окне, затем откат на 6ч.
+28 публикаций → десятки hang вместо 551; ночь устройств не сжигается. Если триггер устойчив,
+после cooldown будет максимум +1 hang/6ч на публикацию (это и есть желаемый backoff).
 
 **Kill-switch:** `WATCHDOG_BREAKER_ENABLED` (default `'true'`). При `'false'` — старое
-безусловное реквью. `WATCHDOG_BREAKER_MAX_STREAK` (default 3).
+безусловное немедленное реквью. Параметры: `WATCHDOG_BREAKER_MAX_HANGS` (default 3),
+`WATCHDOG_BREAKER_WINDOW_MIN` (default 60), `WATCHDOG_BREAKER_BACKOFF_HOURS` (default 6).
 
 ### 4.2. Компонент B — Алерт при всплеске hang
 
@@ -170,28 +172,27 @@ postgresql` (reload, не restart; sudo systemctl — в scope). Логируе�
 
 ## 5. Тестирование
 
-- **Юнит (node):** `test_watchdog_breaker.test.js` — streak инкремент/сброс, граница порога
-  (N-1 → реквью, N → breaker), путь NULL-cpid (по pq_id). Стиль live-теста как
-  `test_retry_controller.test.js` (dedicated client, BEGIN/ROLLBACK).
-- **Юнит:** алерт — порог, дедуп-cooldown, формат текста (мок fetch).
+- **Live-DB тест (node):** `test_watchdog_breaker.test.js` (стиль `test_retry_controller.test.js`
+  — реальный `Pool`, высокие fixture-id, cleanup). Сидим N−1 прошлых hang по cpid →
+  немедленное реквью (`scheduled_at` ≈ now); сидим N hang → backoff-реквью (`scheduled_at` ≈
+  now+6ч). Путь NULL-cpid → обычное реквью.
+- **Live-DB тест:** алерт — порог (N−1 нет отправки, N есть), дедуп-cooldown, формат текста
+  (мок `fetch`).
 - **Юнит:** парсинг `last_step` из `log` (есть строка `💓` / пустой log → null).
 - **Python smoke:** heartbeat-сбой пишет в stderr + файл-fallback (мок `psycopg2.connect`
   кидает исключение).
-- **Live-smoke на testbench:** искусственно заморозить subprocess (sleep до watchdog) →
-  проверить инкремент streak, срабатывание breaker на N, алерт.
-- `codex review` спеки и плана (раундами до 0 P1), затем юзеру (см. [[feedback_codex_review_specs]]).
+- `codex review` спеки и плана (раундами до 0 P1), затем юзеру (правило feedback_codex_review_specs).
 
 ---
 
 ## 6. Деплой
 
-- `server.js` + `migrations/` + `publisher_base.py` → прод autowarm через git post-commit
-  hook ([[reference_autowarm_git_hook]]) + PM2 restart `autowarm`.
-- Миграция: применить `ALTER TABLE publish_queue ADD COLUMN ...` ДО рестарта кода-консьюмера
-  (backfill default 0 безопасен).
+- `server.js` + `publisher_base.py` → прод autowarm через git post-commit hook
+  (reference_autowarm_git_hook) + PM2 restart `autowarm`. **Схема БД не меняется** (компонент A
+  — оконный запрос, миграции нет).
 - C3: правка `postgresql.conf` + `sudo systemctl reload postgresql`.
 - Все компоненты дарк-/лайт-launch за env в `ecosystem.production.config.js`; конвенция —
-  SQL/env kill-switches, не systemd ([[feedback_deploy_scope_constraints]]).
+  env/SQL kill-switches, не systemd (feedback_deploy_scope_constraints).
 
 ---
 
@@ -199,11 +200,11 @@ postgresql` (reload, не restart; sudo systemctl — в scope). Логируе�
 
 | Риск | Митигация |
 |---|---|
-| Breaker остановит публикацию, которая бы дожала | Порог 3 (не 1); публикация уходит в WP#108-движок/ручную, не теряется; kill-switch. |
-| Сброс streak не отрабатывает → ложные срабатывания | Покрыть тестом success→reset; при сомнении поднять порог через env. |
-| Алерт-спам в шторм | Cooldown-дедуп (default 60 мин). |
+| Breaker задержит публикацию, которая бы дожала | Порог 3 в окне (не 1); это backoff, а не отмена — публикация **не теряется**, повторится после cooldown; kill-switch. |
+| Backoff лишь сдвигает шторм на 6ч | Желаемое поведение: max +1 hang/6ч вместо ~20/ночь; ночное окно к моменту повтора закрыто; алерт уведомит. |
+| Публикации без cpid не покрыты breaker'ом | Безопасный дефолт (обычное реквью); в инциденте NULL-cpid = 0; редкий кейс. |
+| Алерт-спам в шторм | Cooldown-дедуп (default 60 мин, in-memory). |
 | Реальная первопричина (lock?) не устранена | Осознанно: WP даёт защиту от класса + диагностику (C3/C2) для локализации рецидива. |
-| Миграция на горячей таблице | `ADD COLUMN ... DEFAULT 0` — метаданные-only в PG16, без переписи таблицы. |
 
 ---
 
