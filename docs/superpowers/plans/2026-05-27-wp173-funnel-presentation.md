@@ -43,9 +43,13 @@ git branch --show-current   # ожидаем feat/wp173-funnel-presentation
 - [ ] **Step 2: ⚠️ Проверить post-commit auto-push hook** (у автоварма есть хук, пушащий в прод — нельзя случайно задеплоить недотестированное)
 
 ```bash
-cat .git/hooks/post-commit 2>/dev/null || echo "no post-commit hook"
+# ВАЖНО: в linked-worktree .git — это файл, хуки лежат в ОБЩЕМ gitdir.
+# Резолвим реальный путь, иначе ложно решим «хука нет».
+HOOK="$(git rev-parse --git-common-dir)/hooks/post-commit"
+echo "hook path: $HOOK"
+cat "$HOOK" 2>/dev/null || echo "no post-commit hook at $HOOK"
 ```
-Expected: либо хука нет, либо он пушит ТОЛЬКО ветку `main`/прод-ремоут. Если хук деплоит ЛЮБОЙ коммит — временно отключить на время работы: `chmod -x .git/hooks/post-commit` (вернуть `+x` перед финальным мержем в main). Деплой делаем осознанно в фазе finishing-a-development-branch, не на каждый коммит фичеветки.
+Expected: либо хука нет, либо он пушит ТОЛЬКО ветку `main`/прод-ремоут. Если хук деплоит ЛЮБОЙ коммит — временно отключить на время работы: `chmod -x "$HOOK"` (вернуть `+x` перед финальным мержем в main). Деплой делаем осознанно в фазе finishing-a-development-branch, не на каждый коммит фичеветки.
 
 - [ ] **Step 3: Базовый прогон тестов — зелёные ДО изменений** (фиксируем исходную точку)
 
