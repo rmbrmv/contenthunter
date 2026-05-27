@@ -46,12 +46,14 @@ Expected: `wp162-skip-reason-canary`
 
 - [ ] **Step 3: Pre-flight — нет ли auto-push post-commit hook**
 
-Run:
+Run (в linked-worktree `.git` — файл, поэтому хуки ищем в common git-dir, а не в `./.git/hooks`):
 ```bash
 cd /home/claude-user/validator-contenthunter-wp162-skip-reason-canary
-ls .git/hooks/post-commit 2>/dev/null; git config --get core.hooksPath
+HOOKS_DIR="$(git config --get core.hooksPath || echo "$(git rev-parse --git-common-dir)/hooks")"
+echo "hooks dir: $HOOKS_DIR"
+ls "$HOOKS_DIR"/post-commit 2>/dev/null && echo "!!! POST-COMMIT HOOK PRESENT" || echo "OK: no post-commit hook"
 ```
-Expected: пусто (если hook есть — НЕ коммитить до выяснения; auto-push в прод недопустим).
+Expected: `OK: no post-commit hook` (если hook есть — НЕ коммитить до выяснения; auto-push в прод недопустим).
 
 ---
 
@@ -234,12 +236,14 @@ Expected: `wp162-skip-reason-canary`
 
 - [ ] **Step 3: Pre-flight — НЕТ auto-push post-commit hook (критично!)**
 
-Run:
+Run (в linked-worktree `.git` — файл; хуки в common git-dir, не в `./.git/hooks`):
 ```bash
 cd /home/claude-user/autowarm-testbench-wp162-skip-reason-canary
-ls .git/hooks/post-commit 2>/dev/null; git config --get core.hooksPath
+HOOKS_DIR="$(git config --get core.hooksPath || echo "$(git rev-parse --git-common-dir)/hooks")"
+echo "hooks dir: $HOOKS_DIR"
+ls "$HOOKS_DIR"/post-commit 2>/dev/null && echo "!!! POST-COMMIT HOOK PRESENT" || echo "OK: no post-commit hook"
 ```
-Expected: пусто. *(У прод-чекаута autowarm есть post-commit→GenGo2 auto-push; убедиться, что в этом dev-worktree его НЕТ, иначе коммит уедет в прод. Если есть — обезвредить/не коммитить до выяснения.)*
+Expected: `OK: no post-commit hook`. *(У прод-чекаута autowarm есть post-commit→GenGo2 auto-push; убедиться, что в этом dev-worktree его НЕТ, иначе коммит уедет в прод. Если есть — обезвредить/не коммитить до выяснения.)*
 
 ---
 
