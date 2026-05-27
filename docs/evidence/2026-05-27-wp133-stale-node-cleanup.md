@@ -41,11 +41,12 @@ sudo systemctl start carousel-maker     # был active, но disabled — то�
 ```
 Юнит-файлы в `/etc/systemd/system/` НЕ удалялись — откат полный и тривиальный.
 
-## Снятие временного гранта (оператор)
+## Снятие временного гранта (оператор) — ✅ ВЫПОЛНЕНО 27.05
 ```bash
 rm -f /etc/sudoers.d/claude-user-wp133 && visudo -c
 rm -f /usr/local/sbin/wp133-diag.sh /usr/local/sbin/wp133-kill.sh
 ```
+Проверено: `sudo -ln` больше не показывает wp133-гранта; скрипты удалены; базовый sudo (chown/pm2/systemctl) цел. Все 6 сервисов остаются `disabled`/`inactive` (фоллаут-рестартов нет).
 
 ## Урок
 `ppid=1` ≠ «осиротевший мусор»: для systemd-сервиса это нормальная родительская связь. Перед гашением «осиротевших» процессов проверять `cat /proc/<pid>/cgroup` / `systemctl list-units` — это снимает вопрос за один шаг и не требует sudo.
