@@ -69,8 +69,8 @@ for pid in "${PIDS[@]}"; do
       | grep -E '^(PWD|NODE_|PM2|OPENCLAW|DATABASE|PG)' | sed 's/^/    /' || echo "    (none matched)"
   echo "  fd (sockets/notable):"
   ls -l "/proc/$pid/fd" 2>/dev/null | grep -E 'socket|\.js|/root|/home' | sed 's/^/    /' || echo "    (none notable)"
-  echo "  tcp sockets (ss):"
-  ss -tnp 2>/dev/null | grep -w "pid=$pid" | sed 's/^/    /' || echo "    (none)"
+  echo "  tcp sockets incl. LISTEN (ss -tan):"
+  ss -tanp 2>/dev/null | grep -w "pid=$pid" | sed 's/^/    /' || echo "    (none)"
 done
 ```
 
@@ -87,6 +87,7 @@ set -uo pipefail
 PIDS=(40742 44622 1292259 3999492 3999503 3999515)
 declare -A EXPECT_START=( [40742]="Mar 12" [44622]="Mar 12" [1292259]="Mar 10" \
   [3999492]="Mar 11" [3999503]="Mar 11" [3999515]="Mar 11" )
+VALIDATED=()
 for pid in "${PIDS[@]}"; do
   if [ ! -d "/proc/$pid" ]; then echo "PID $pid: already gone, skip"; continue; fi
   cmd=$(tr '\0' ' ' < "/proc/$pid/cmdline"); ppid=$(awk '/^PPid:/{print $2}' "/proc/$pid/status")
@@ -94,12 +95,15 @@ for pid in "${PIDS[@]}"; do
   echo "$cmd" | grep -q 'node .*server\.js' || { echo "PID $pid: cmd mismatch ('$cmd') — REFUSE"; continue; }
   [ "$ppid" = "1" ] || { echo "PID $pid: ppid=$ppid (not orphaned) — REFUSE"; continue; }
   echo "$start" | grep -q "${EXPECT_START[$pid]}" || { echo "PID $pid: start '$start' != '${EXPECT_START[$pid]}' — REFUSE (reuse?)"; continue; }
-  echo "PID $pid: validated → SIGTERM"; kill -TERM "$pid"
+  echo "PID $pid: validated → SIGTERM"; kill -TERM "$pid"; VALIDATED+=("$pid")
 done
-echo "waiting 5s..."; sleep 5
-for pid in "${PIDS[@]}"; do
-  [ -d "/proc/$pid" ] && { echo "PID $pid: survived TERM → SIGKILL"; kill -KILL "$pid" 2>/dev/null || true; }
-done
+# SIGKILL только по прошедшим валидацию PID — никогда не добиваем refused/reused процесс
+if [ ${#VALIDATED[@]} -gt 0 ]; then
+  echo "waiting 5s..."; sleep 5
+  for pid in "${VALIDATED[@]}"; do
+    [ -d "/proc/$pid" ] && { echo "PID $pid: survived TERM → SIGKILL"; kill -KILL "$pid" 2>/dev/null || true; }
+  done
+fi
 echo "remaining orphan node server.js:"; pgrep -af 'node .*server\.js' | grep -v workspace-genri || echo "  (none)"
 ```
 
