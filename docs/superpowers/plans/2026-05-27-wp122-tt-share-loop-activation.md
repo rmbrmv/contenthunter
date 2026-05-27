@@ -243,6 +243,7 @@ psql -h localhost -U openclaw -d openclaw -c "
 SELECT pt.status, COUNT(*) AS n
 FROM publish_tasks pt
 WHERE pt.platform='TikTok' AND pt.created_at >= NOW() - INTERVAL '24 hours'
+  AND pt.testbench IS NOT TRUE   -- только прод (БД общая со стендом)
   AND NOT EXISTS (SELECT 1 FROM jsonb_array_elements(pt.events::jsonb) e
                   WHERE e->'meta'->>'category'='watchdog_subprocess_hang')
 GROUP BY pt.status ORDER BY n DESC;"
@@ -259,6 +260,7 @@ SELECT date_trunc('hour', pt.created_at) AS hr,
        COUNT(*) FILTER (WHERE e->'meta'->>'category'='tt_upload_confirmation_timeout') AS timeouts
 FROM publish_tasks pt, LATERAL jsonb_array_elements(pt.events::jsonb) e
 WHERE pt.platform='TikTok' AND pt.created_at >= NOW() - INTERVAL '36 hours'
+  AND pt.testbench IS NOT TRUE
 GROUP BY 1 ORDER BY 1 DESC;"
 ```
 Expected: после включения timeouts не растут (в идеале ↓ относительно до-включения).
@@ -273,6 +275,7 @@ SELECT pt.id, pt.device_serial, pt.status,
        e->'meta'->>'category' AS category, e->'meta'->>'phase' AS phase, pt.created_at
 FROM publish_tasks pt, LATERAL jsonb_array_elements(pt.events::jsonb) e
 WHERE pt.platform='TikTok' AND pt.created_at >= NOW() - INTERVAL '24 hours'
+  AND pt.testbench IS NOT TRUE
   AND e->'meta'->>'phase'='share_loop'
 ORDER BY pt.created_at DESC LIMIT 50;"
 ```
@@ -287,6 +290,7 @@ psql -h localhost -U openclaw -d openclaw -c "
 SELECT pt.id, pt.status, e->'meta'->>'step' AS step, e->'meta'->>'category' AS category, e->>'type' AS typ
 FROM publish_tasks pt, LATERAL jsonb_array_elements(pt.events::jsonb) e
 WHERE pt.platform='TikTok' AND pt.created_at >= NOW() - INTERVAL '24 hours'
+  AND pt.testbench IS NOT TRUE
   AND e->'meta'->>'step' LIKE 'tt_5_share_loop%' AND e->>'type' IN ('error','warning')
 ORDER BY pt.created_at DESC LIMIT 50;"
 ```
