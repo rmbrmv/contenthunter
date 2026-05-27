@@ -1,5 +1,23 @@
 # BACKLOG — Генри
 
+## 🟢 WP #162 — канарейка кросс-репо контракта `skip_reason='moved_from_slot%'` (follow-up WP #154) — SHIPPED+DEPLOYED 2026-05-27 (OpenProject #162)
+**Приоритет:** низкий (хардинг)
+**Статус:** **2 PR** merged — `GenGo2/validator-contenthunter`#23 (`26e056c`) + `GenGo2/delivery-contenthunter`#113 (`3797aea`); прод-деревья синхронизированы `git pull --ff-only` (autowarm `3797aea`, validator `26e056c`); OpenProject #162 → **«Готово»**.
+
+Негласный кросс-репо контракт (follow-up WP #154 re-queue после переноса слота): валидатор отменяет старые pending-строки `publish_queue` со `skip_reason='moved_from_slot_<src>_to_<dst>'` (`schedule.py move_unpublished` — источник литерала → `pipeline_reversal.update_downstream_dates_for_content` — write-site), delivery `assign_candidates.js` re-queue перенесённый контент по `LIKE 'moved_from_slot%'`. Смена текста без координации → delivery МОЛЧА перестаёт re-queue (тихий регресс, как до #154). Ноль UI/рантайма — чисто тест+комментарии.
+
+**Сделано:** (1) канарейка validator `test_schedule_pipeline_reversal.py::test_move_unpublished_updates_dates_not_cancels` — `in`→`startswith('moved_from_slot')` (зеркалит LIKE-префикс, не подстрока); (2) контракт-комменты validator `schedule.py`+`pipeline_reversal.py` + delivery `assign_candidates.js` (обратная ссылка); (3) починен пред-существующий красный delivery `tests/test_pipeline_guards.test.js` (mock-десинк `slotIsEffectivelyManual` в `checkDispatchQueueSlotLineage`, красный с 21.05/WP#125 — добавлена недостающая mock-строка).
+
+**Деплой:** прод-деревья `/root/.openclaw/workspace-genri/{autowarm,validator}` (writable claude-user), fast-forward pull. **PM2 restart НЕ нужен** — правки не-рантаймные.
+
+**Проверки:** validator канарейка 1 passed (мокнутая БД), delivery `test_pipeline_guards` 11/11 (после merge свежего origin/main в отстававшую на 24 ветку, конфликтов нет), codex 0 находок обоих диффов.
+
+**Контекст процесса:** дизайн+реализация автоворкером (бриф `contenthunter_autoexec/briefs/162/`, спека одобрена Данилом, codex-clean) остановились до PR/merge/deploy → доведено до отгрузки другой сессией (обнаружено `git log --all | grep wp162` + воркдеревья → сверка с пользователем → verify→codex→push→PR→merge→ff-pull). Чужие чекауты/воркдеревья не тронуты.
+
+Evidence: `docs/evidence/2026-05-27-wp162-skip-reason-canary-shipped.md`. Spec: `docs/superpowers/specs/2026-05-27-wp162-skip-reason-contract-canary-design.md`. План: `docs/superpowers/plans/2026-05-27-wp162-skip-reason-contract-canary.md`. Память: `project_wp162_skip_reason_contract_canary`.
+
+---
+
 ## 🟢 IG `ig_target_not_in_picker` — foreground-hijack на шаге выбора аккаунта — SHIPPED+DEPLOYED 2026-05-21 (OpenProject #119)
 **Приоритет:** высокий
 **Статус:** merged squash `700e50c` (PR #90) в `GenGo2/delivery-contenthunter` main, прод-дерево обновлено `git pull --ff-only`; OpenProject #119 → Тестирование, investigation #102 → Готово.
