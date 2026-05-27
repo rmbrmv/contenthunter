@@ -403,16 +403,20 @@ Create `watchdog_alert.js`:
 function num(v, d) { const n = parseInt(v, 10); return Number.isFinite(n) ? n : d; }
 let _lastAlertMs = 0;
 let _inFlight = false;
+let _inFlightSince = 0;
+const MAX_INFLIGHT_MS = 120000; // > watchdog-интервал (2 мин): зависший вызов само-сбрасывается
 
 async function maybeAlertHangSpike(pool, env = process.env, deps = {}) {
   const fetchFn = deps.fetch || global.fetch;
   const now = deps.now || (() => Date.now());
 
   if (env.WATCHDOG_ALERT_ENABLED === 'false') return { sent: false, reason: 'kill_switch' };
-  // in-flight guard: watchdog тикает каждые 2 мин fire-and-forget; перекрывающиеся вызовы
-  // не должны оба увидеть неизменный _lastAlertMs и слать дубль-алерт при медленном TG/DB.
-  if (_inFlight) return { sent: false, reason: 'in_flight' };
+  // in-flight guard (time-bounded): watchdog тикает каждые 2 мин fire-and-forget; перекрывающиеся
+  // вызовы не должны слать дубль-алерт. Латч само-сбрасывается через MAX_INFLIGHT_MS, чтобы
+  // зависший pool.query/fetch не заглушил алерт навсегда до рестарта.
+  if (_inFlight && (now() - _inFlightSince) < MAX_INFLIGHT_MS) return { sent: false, reason: 'in_flight' };
   _inFlight = true;
+  _inFlightSince = now();
   try {
     const threshold   = num(env.WATCHDOG_ALERT_THRESHOLD, 20);
     const windowMin   = num(env.WATCHDOG_ALERT_WINDOW_MIN, 30);
@@ -464,7 +468,7 @@ async function maybeAlertHangSpike(pool, env = process.env, deps = {}) {
   }
 }
 
-function _resetCooldownForTest() { _lastAlertMs = 0; _inFlight = false; }
+function _resetCooldownForTest() { _lastAlertMs = 0; _inFlight = false; _inFlightSince = 0; }
 module.exports = { maybeAlertHangSpike, _resetCooldownForTest };
 ```
 
