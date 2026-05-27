@@ -38,8 +38,9 @@ for pid in "${PIDS[@]}"; do
   echo "  started : $(ps -o lstart= -p "$pid")"
   echo "  cwd     : $(readlink "/proc/$pid/cwd")"
   echo "  exe     : $(readlink "/proc/$pid/exe")"
-  echo "  env     :"; tr '\0' '\n' < "/proc/$pid/environ" \
-      | grep -E '^(PWD|NODE_|PM2|OPENCLAW|DATABASE|PG)' | sed 's/^/    /' || echo "    (none matched)"
+  echo "  PWD     : $(tr '\0' '\n' < "/proc/$pid/environ" | sed -n 's/^PWD=//p')"
+  echo "  db/runtime env keys present (values redacted):"
+  tr '\0' '\n' < "/proc/$pid/environ" | grep -oE '^(NODE_[A-Z0-9_]*|PM2[A-Z0-9_]*|OPENCLAW[A-Z0-9_]*|DATABASE[A-Z0-9_]*|PG[A-Z0-9_]*)=' | sed 's/=$//;s/^/    /' || echo "    (none)"
   echo "  fd (sockets/notable):"
   ls -l "/proc/$pid/fd" 2>/dev/null | grep -E 'socket|\.js|/root|/home' | sed 's/^/    /' || echo "    (none notable)"
   echo "  tcp sockets incl. LISTEN (ss -tan):"
@@ -118,11 +119,11 @@ Run:
 ```bash
 sudo -n /usr/local/sbin/wp133-diag.sh | tee /tmp/wp133-diag.out
 ```
-Expected: 6 блоков `===== PID <n> =====`, в каждом заполнены `cwd`, `exe`, `env`, `fd`, `tcp sockets`.
+Expected: 6 блоков `===== PID <n> =====`, в каждом заполнены `cwd`, `exe`, `PWD`, env-ключи, `fd`, `tcp sockets`.
 
-- [ ] **Step 2 [АГЕНТ]: Записать полный вывод forensics в evidence.**
+- [ ] **Step 2 [АГЕНТ]: Записать вывод forensics в evidence (с проверкой на секреты).**
 
-Вставить содержимое `/tmp/wp133-diag.out` в секцию «Forensics» evidence-файла. Не коммитить пока (commit на Task 7).
+`diag.sh` уже редактирует значения env (печатает только имена ключей + `PWD`). Перед вставкой в evidence-файл **просмотреть `/tmp/wp133-diag.out` глазами** и убедиться, что в `fd`/`cmdline`/`PWD` не просочились секреты (токены в путях и т.п.); при необходимости отредактировать. Не коммитить пока (commit на Task 7).
 
 ---
 
@@ -137,16 +138,18 @@ Expected: 6 блоков `===== PID <n> =====`, в каждом заполнен
 1. `cmdline` = `node server.js`, `ppid` = 1 (всё ещё осиротевший).
 2. В блоке `tcp sockets incl. LISTEN` — **нет** строк `LISTEN` и **нет** ESTAB к `:5432`/`:5433`.
 3. В `fd (sockets/notable)` — нет открытых сокетов к БД; открытые `.js`/каталоги указывают на старый/удалённый/нерабочий путь, не на текущий прод.
-4. `env` не содержит указателей на боевую БД (`DATABASE_URL`/`PG*`/`OPENCLAW*` с прод-хостом).
+4. Наличие env-ключей `DATABASE*`/`PG*`/`OPENCLAW*` (значения редактированы) трактовать **вместе** с проверкой сокетов из п.2: ключи есть, но сокетов к БД нет → процесс к БД сейчас не подключён (авторитетный сигнал — сокеты).
 
 - [ ] **Step 2 [АГЕНТ]: Кросс-проверка по БД (вторая линия).**
 
-Run:
+Run (пароль openclaw **НЕ хардкодить** в коммитимых файлах — взять из своего доступа, см. [[project_autowarm_code]]; задать в env-сессии перед запуском):
 ```bash
-PGPASSWORD=openclaw123 psql -h localhost -U openclaw -p 5432 -d openclaw -tAc \
+export PGPASSWORD="<openclaw db password — из памяти/секретов, в репозиторий не писать>"
+psql -h localhost -U openclaw -p 5432 -d openclaw -tAc \
 "SELECT count(*) FROM pg_stat_activity WHERE backend_type='client backend' AND backend_start < '2026-05-01';"
+unset PGPASSWORD
 ```
-Expected: `0` (нет client-backend старше мая → нет постоянного писателя из марта). Записать в evidence.
+Expected: `0` (нет client-backend старше мая → нет постоянного писателя из марта). В evidence записать **только число-результат**, не команду с паролем.
 
 - [ ] **Step 3 [АГЕНТ]: Вынести вердикт гейта.**
 
@@ -236,7 +239,7 @@ Expected: `grant removed`. Записать в evidence.
 
 - [ ] **Step 1 [АГЕНТ]: Финализировать evidence-файл.**
 
-Структура: Бутстрап → Forensics → Гейт (GO/NO-GO + кросс-проверка БД) → Kill (до/после) → Профилактика → Снятие гранта. С итогом: сколько погашено, RAM освобождена, причина, решение.
+Структура: Бутстрап → Forensics → Гейт (GO/NO-GO + кросс-проверка БД) → Kill (до/после) → Профилактика → Снятие гранта. С итогом: сколько погашено, RAM освобождена, причина, решение. **Финальная проверка перед commit:** в файле нет паролей/токенов/connection-string с секретами (ни в forensics-выводе, ни в командах).
 
 - [ ] **Step 2 [АГЕНТ]: Закоммитить doc-артефакты в ветке worktree.**
 

@@ -65,8 +65,9 @@ for pid in "${PIDS[@]}"; do
   echo "  started : $(ps -o lstart= -p "$pid")"
   echo "  cwd     : $(readlink "/proc/$pid/cwd")"
   echo "  exe     : $(readlink "/proc/$pid/exe")"
-  echo "  env     :"; tr '\0' '\n' < "/proc/$pid/environ" \
-      | grep -E '^(PWD|NODE_|PM2|OPENCLAW|DATABASE|PG)' | sed 's/^/    /' || echo "    (none matched)"
+  echo "  PWD     : $(tr '\0' '\n' < "/proc/$pid/environ" | sed -n 's/^PWD=//p')"
+  echo "  db/runtime env keys present (values redacted):"
+  tr '\0' '\n' < "/proc/$pid/environ" | grep -oE '^(NODE_[A-Z0-9_]*|PM2[A-Z0-9_]*|OPENCLAW[A-Z0-9_]*|DATABASE[A-Z0-9_]*|PG[A-Z0-9_]*)=' | sed 's/=$//;s/^/    /' || echo "    (none)"
   echo "  fd (sockets/notable):"
   ls -l "/proc/$pid/fd" 2>/dev/null | grep -E 'socket|\.js|/root|/home' | sed 's/^/    /' || echo "    (none notable)"
   echo "  tcp sockets incl. LISTEN (ss -tan):"
@@ -157,3 +158,4 @@ claude-user ALL = (root) NOPASSWD: /usr/local/sbin/wp133-diag.sh "", /usr/local/
 - **Скрипты пишет оператор как root** — агент не может разместить root-owned файлы (нет `sudo cp`/`mv`,
   только `chown`). Контент даётся дословно для копипаста.
 - **Второй postgres на :5433** — проверкой сокетов в Фазе 1 убеждаемся, что ни один PID к нему не подключён.
+- **Утечка секретов в evidence/репо** — `wp133-diag.sh` печатает только имена env-ключей + `PWD` (значения редактирует), пароль БД для кросс-проверки не хардкодится в коммитимых файлах, перед каждым commit evidence проверяется на секреты.
