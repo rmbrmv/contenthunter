@@ -9,10 +9,17 @@
   каждые 5 мин, без cap по cpid).
 - Сигнатура: 0 событий, heartbeat ни разу, kill до начала работы (0 внутренних `watchdog_fired`).
 - **Доказательно исключено:** перегрузка хоста (sar: CPU 85–98% idle, RAM 14%, 0 swap, 0 blocked),
-  исчерпание коннектов (PG-лог пуст, 0 FATAL), ADB-мост (heartbeat=localhost), конкурирующие
-  scheduler'ы (6 «зомби» = systemd-сервисы других проектов, обработано в WP#133).
-- Вероятная причина: блокировка пути записи в localhost-Postgres в окне; точный триггер не
-  локализован (система была слепа — закрыто компонентом C).
+  ADB-мост (heartbeat=localhost), конкурирующие scheduler'ы (6 «зомби» = systemd-сервисы других
+  проектов, обработано в WP#133).
+- **ПОПРАВКА (27.05):** исчерпание коннектов НЕ исключено твёрдо. Ранний вывод «PG-лог пуст, 0 FATAL»
+  читал `/var/log/postgresql/...16-main` — это **host-Postgres**, а autowarm-БД openclaw живёт в
+  **Docker-контейнере** (172.17.0.3:5432, PG16.12, доступ через docker-proxy). Контейнерный PG-лог
+  не читался; max_connections=100 в контейнере делят docker-proxy(20)+uvicorn+node+python+… —
+  при ночном батче лимит правдоподобно достижим. Версии «lock-wait» и «connection-exhaustion»
+  обе открыты.
+- Вероятная причина: блокировка пути записи в localhost-Postgres (контейнер) в окне; точный
+  триггер не локализован (система была слепа — закрыто компонентом C). `log_lock_waits=on`
+  применён 27.05 именно к контейнерной БД (роль openclaw = superuser контейнера).
 
 ## Что сделано (SHIPPED)
 Прод autowarm merge **ccdf4b4** (ветка `wp165-watchdog-hang` → main), reload PM2 `autowarm` (id 35).
@@ -40,8 +47,9 @@ Kill-switch `WATCHDOG_ALERT_ENABLED`.
   env применены, ошибок загрузки модулей нет.
 
 ## Что осталось
-- **C3 (вручную, нужен postgres-superuser):** `ALTER SYSTEM SET log_lock_waits = on;` + reload —
-  включить до ближайшей ночи, чтобы при рецидиве видеть lock-wait.
+- **C3 — ✅ СДЕЛАНО 27.05:** `log_lock_waits=on` применён к контейнерной openclaw-БД (через роль
+  openclaw=superuser, `ALTER SYSTEM`+`pg_reload_conf()`, live). Гоча: первый прогон по host-PG
+  не подействовал — autowarm-БД в Docker.
 - Наблюдение: при следующем ночном окне проверить `[watchdog] ... [backoff]` и алерт; при рецидиве
   C2/C3 локализуют точный триггер → дочерняя WP на первопричину.
 - Развязка с **#135** (перепроверить IG foreground-гарды под нормальной нагрузкой).
