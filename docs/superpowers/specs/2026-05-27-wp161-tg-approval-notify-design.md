@@ -57,7 +57,8 @@
 ```sql
 SELECT vp.project AS client,
        vc.id AS content_id,
-       array_remove(array_agg(DISTINCT s.slot_date ORDER BY s.slot_date), NULL) AS slot_dates
+       array_agg(to_char(s.slot_date, 'YYYY-MM-DD') ORDER BY s.slot_date)
+         FILTER (WHERE s.slot_date IS NOT NULL) AS slot_dates
 FROM validator_content vc
 JOIN validator_projects vp ON vp.id = vc.project_id
 LEFT JOIN validator_schedule_slots s ON s.content_id = vc.id
@@ -66,7 +67,9 @@ GROUP BY vp.project, vc.id
 ORDER BY vp.project, vc.id;
 ```
 
-Обработка в коде: ровно **одна строка на ролик**. Группировка по `client`; даты ролика (`slot_dates`) собираются через запятую (уже отсортированы, дубли убраны); если массив пуст — пометка «дата не назначена». `N` = число строк = число различных роликов `needs_review`.
+Даты форматируются в SQL текстом `YYYY-MM-DD` (сортируемо лексикографически = хронологически; обходит tz-парсинг `DATE` в node-pg). `FILTER (WHERE … IS NOT NULL)` даёт `NULL` (→ пустой массив в JS), если у ролика нет слота.
+
+Обработка в коде: ровно **одна строка на ролик** (`N` = число строк = число различных роликов `needs_review`). Для вывода группируем по `client`: объединяем `slot_dates` всех роликов клиента → дедуп (`Set`) → сортировка (лексикографическая по ISO) → формат `DD.MM` → склейка через запятую. Если у клиента нет ни одной даты — пометка «дата не назначена».
 
 **Блок 2 — «Контент не загружен» (завтра + послезавтра):**
 
@@ -107,9 +110,9 @@ ORDER BY vp.project;
 
 ## 7. Расписание, идемпотентность, надёжность
 
-- **Тик:** `setInterval` каждые 60 сек. На каждом тике проверяем: текущий час в окне `[09, 18]` МСК и минута соответствует началу часа (первый тик часа) → пробуем отправку.
-- **Пустые часы:** перед отправкой строим сводку; если `pendingApproval` и `emptySlots` оба пусты и `APPROVAL_NOTIFY_SUPPRESS_EMPTY != '0'` — час помечается «отправленным» без реальной отправки (чтобы не пытаться снова в тот же час) и сообщение не уходит.
-- **Идемпотентность:** таблица **`approval_notify_runs`** с уникальным ключом `report_hour TIMESTAMPTZ` (момент начала часа в UTC, полученный усечением `now()` до часа), колонками `status` (`sending`/`sent`/`failed`/`skipped_empty`), `attempts`, `claimed_at`. `INSERT ... ON CONFLICT (report_hour)` claim-апсёрт защищает от двойной отправки при рестарте/двойном тике; staleness-recovery 10 мин (как у `daily_report_runs`).
+- **Тик:** `setInterval` каждые 60 сек. На каждом тике: если текущий час в окне `[09, 18]` МСК (включительно) — пробуем отправку для текущего часового бакета. Один сенд в час гарантирует не минутная проверка, а per-hour claim (ниже), что заодно даёт catch-up, если процесс стартовал посреди часа.
+- **Пустые часы:** сводку строим **до** claim. Если `pendingApproval` и `emptySlots` оба пусты и `APPROVAL_NOTIFY_SUPPRESS_EMPTY != '0'` — выходим без claim и без отправки (строка в журнале не создаётся; следующий тик в этом часе дёшево перепроверит). In-process `_running`-guard не даёт перекрытия тиков внутри процесса.
+- **Идемпотентность:** таблица **`approval_notify_runs`** с уникальным ключом `report_hour TIMESTAMPTZ` (начало текущего UTC-часа; границы UTC-часа совпадают с МСК, т.к. МСК=UTC+3 без DST). Claim делаем только для непустых часов: `INSERT ... ON CONFLICT (report_hour)` с `status` (`sending`/`sent`/`failed`), `attempts`, `claimed_at`. Апсёрт защищает от двойной отправки при рестарте/двойном тике/нескольких процессах; staleness-recovery 10 мин (как у `daily_report_runs`).
 - **Ретраи:** до 3 попыток `sendMessage` с бэкоффом `2^n * 1000 мс`.
 - **Зона/окно:** все часовые расчёты в `Europe/Moscow`.
 
