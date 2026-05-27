@@ -402,60 +402,69 @@ Create `watchdog_alert.js`:
 
 function num(v, d) { const n = parseInt(v, 10); return Number.isFinite(n) ? n : d; }
 let _lastAlertMs = 0;
+let _inFlight = false;
 
 async function maybeAlertHangSpike(pool, env = process.env, deps = {}) {
   const fetchFn = deps.fetch || global.fetch;
   const now = deps.now || (() => Date.now());
 
   if (env.WATCHDOG_ALERT_ENABLED === 'false') return { sent: false, reason: 'kill_switch' };
-  const threshold   = num(env.WATCHDOG_ALERT_THRESHOLD, 20);
-  const windowMin   = num(env.WATCHDOG_ALERT_WINDOW_MIN, 30);
-  const cooldownMin = num(env.WATCHDOG_ALERT_COOLDOWN_MIN, 60);
-  const token  = env.DAILY_REPORT_BOT_TOKEN;
-  const chatId = env.DAILY_REPORT_CHAT_ID;
-
-  const { rows } = await pool.query(
-    `SELECT count(*)::int AS total,
-            count(*) FILTER (WHERE platform='Instagram')::int AS ig,
-            count(*) FILTER (WHERE platform='TikTok')::int    AS tt,
-            count(*) FILTER (WHERE platform='YouTube')::int   AS yt,
-            count(DISTINCT client_publish_id)::int            AS cpids
-     FROM publish_tasks
-     WHERE error_code='watchdog_subprocess_hang'
-       AND updated_at > NOW() - ($1 || ' minutes')::interval`,
-    [String(windowMin)]
-  );
-  const r = rows[0];
-  if (r.total < threshold) return { sent: false, reason: 'below_threshold', total: r.total };
-  // cooldown применяем только если уже был успешный алерт (иначе первый вызов ложно «cooldown»)
-  if (_lastAlertMs > 0 && now() - _lastAlertMs < cooldownMin * 60 * 1000) return { sent: false, reason: 'cooldown', total: r.total };
-  if (!token || !chatId) { console.error('[watchdog-alert] missing DAILY_REPORT_BOT_TOKEN/CHAT_ID'); return { sent: false, reason: 'no_tg_config', total: r.total }; }
-
-  const text = `🚨 <b>watchdog_subprocess_hang всплеск</b>\n`
-    + `За ${windowMin} мин: <b>${r.total}</b> зависаний (IG ${r.ig} / TT ${r.tt} / YT ${r.yt}), публикаций затронуто: ${r.cpids}.\n`
-    + `Проверьте autowarm / ADB-мост / Postgres-локи (log_lock_waits).`;
-  // Таймаут на сетевой вызов: watchdog-тик не должен висеть на зависшем TG (это и есть инцидентный путь).
-  const timeoutMs = num(env.WATCHDOG_ALERT_TIMEOUT_MS, 10000);
-  const ctrl = new AbortController();
-  const timer = setTimeout(() => ctrl.abort(), timeoutMs);
+  // in-flight guard: watchdog тикает каждые 2 мин fire-and-forget; перекрывающиеся вызовы
+  // не должны оба увидеть неизменный _lastAlertMs и слать дубль-алерт при медленном TG/DB.
+  if (_inFlight) return { sent: false, reason: 'in_flight' };
+  _inFlight = true;
   try {
-    const resp = await fetchFn(`https://api.telegram.org/bot${token}/sendMessage`, {
-      method: 'POST', headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ chat_id: chatId, text, parse_mode: 'HTML', disable_web_page_preview: true }),
-      signal: ctrl.signal,
-    });
-    if (!resp.ok) { console.error(`[watchdog-alert] TG status ${resp.status}`); return { sent: false, reason: 'tg_error', total: r.total }; }
-    _lastAlertMs = now();
-    return { sent: true, total: r.total };
-  } catch (e) {
-    console.error(`[watchdog-alert] send failed: ${e.message}`);
-    return { sent: false, reason: 'exception', total: r.total };
+    const threshold   = num(env.WATCHDOG_ALERT_THRESHOLD, 20);
+    const windowMin   = num(env.WATCHDOG_ALERT_WINDOW_MIN, 30);
+    const cooldownMin = num(env.WATCHDOG_ALERT_COOLDOWN_MIN, 60);
+    const token  = env.DAILY_REPORT_BOT_TOKEN;
+    const chatId = env.DAILY_REPORT_CHAT_ID;
+
+    const { rows } = await pool.query(
+      `SELECT count(*)::int AS total,
+              count(*) FILTER (WHERE platform='Instagram')::int AS ig,
+              count(*) FILTER (WHERE platform='TikTok')::int    AS tt,
+              count(*) FILTER (WHERE platform='YouTube')::int   AS yt,
+              count(DISTINCT client_publish_id)::int            AS cpids
+       FROM publish_tasks
+       WHERE error_code='watchdog_subprocess_hang'
+         AND updated_at > NOW() - ($1 || ' minutes')::interval`,
+      [String(windowMin)]
+    );
+    const r = rows[0];
+    if (r.total < threshold) return { sent: false, reason: 'below_threshold', total: r.total };
+    // cooldown применяем только если уже был успешный алерт (иначе первый вызов ложно «cooldown»)
+    if (_lastAlertMs > 0 && now() - _lastAlertMs < cooldownMin * 60 * 1000) return { sent: false, reason: 'cooldown', total: r.total };
+    if (!token || !chatId) { console.error('[watchdog-alert] missing DAILY_REPORT_BOT_TOKEN/CHAT_ID'); return { sent: false, reason: 'no_tg_config', total: r.total }; }
+
+    const text = `🚨 <b>watchdog_subprocess_hang всплеск</b>\n`
+      + `За ${windowMin} мин: <b>${r.total}</b> зависаний (IG ${r.ig} / TT ${r.tt} / YT ${r.yt}), публикаций затронуто: ${r.cpids}.\n`
+      + `Проверьте autowarm / ADB-мост / Postgres-локи (log_lock_waits).`;
+    // Таймаут на сетевой вызов: watchdog-тик не должен висеть на зависшем TG.
+    const timeoutMs = num(env.WATCHDOG_ALERT_TIMEOUT_MS, 10000);
+    const ctrl = new AbortController();
+    const timer = setTimeout(() => ctrl.abort(), timeoutMs);
+    try {
+      const resp = await fetchFn(`https://api.telegram.org/bot${token}/sendMessage`, {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ chat_id: chatId, text, parse_mode: 'HTML', disable_web_page_preview: true }),
+        signal: ctrl.signal,
+      });
+      if (!resp.ok) { console.error(`[watchdog-alert] TG status ${resp.status}`); return { sent: false, reason: 'tg_error', total: r.total }; }
+      _lastAlertMs = now();
+      return { sent: true, total: r.total };
+    } catch (e) {
+      console.error(`[watchdog-alert] send failed: ${e.message}`);
+      return { sent: false, reason: 'exception', total: r.total };
+    } finally {
+      clearTimeout(timer);
+    }
   } finally {
-    clearTimeout(timer);
+    _inFlight = false;
   }
 }
 
-function _resetCooldownForTest() { _lastAlertMs = 0; }
+function _resetCooldownForTest() { _lastAlertMs = 0; _inFlight = false; }
 module.exports = { maybeAlertHangSpike, _resetCooldownForTest };
 ```
 
