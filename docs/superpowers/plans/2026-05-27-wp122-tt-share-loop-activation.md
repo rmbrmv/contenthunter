@@ -6,7 +6,7 @@
 
 **Architecture:** Нового кода нет. Хендлер `_run_tt_stories_overlay_share_loop_hook` в проде (`publisher_tiktok.py:1533`, вызов `:1958`), читается рубильник `TT_SHARE_LOOP_OVERLAY_HANDLER_ENABLED` (`os.environ.get(...,'false')`, default OFF). `publisher.py:33 load_dotenv('.env')` на каждый спавн → флаг подхватывается новыми воркерами. Прод и testbench пишут в одну БД `openclaw`; разделение фолтов — по `device_serial` и колонке `testbench`.
 
-**Tech Stack:** Python (publisher.py), Node (server.js, PM2 id 35), PostgreSQL `openclaw:openclaw123@localhost:5432/openclaw`, ADB, PM2.
+**Tech Stack:** Python (publisher.py), Node (server.js, PM2 id 35), PostgreSQL (БД `openclaw`@localhost; psql-креды берём рантаймом из `publisher_kernel.DB_CONFIG`, в доке не хардкодим), ADB, PM2.
 
 **Spec:** `docs/superpowers/specs/2026-05-27-wp122-tt-share-loop-activation-design.md`
 
@@ -107,7 +107,7 @@ Expected: `flag= true`.
 
 Run:
 ```bash
-export PGPASSWORD=openclaw123
+export PGPASSWORD="$(cd /home/claude-user/autowarm-testbench && python3 -c 'from publisher_kernel import DB_CONFIG; print(DB_CONFIG["password"])')"  # из кода, не хардкодим
 psql -h localhost -U openclaw -d openclaw -x -c "
 SELECT id, device_serial, adb_port, adb_host, raspberry, account, project,
        media_path, media_type, status, created_at
@@ -130,7 +130,7 @@ Expected: файл существует, размер > 0. (Память: выд
 
 Run (подставить значения донора из Step 1):
 ```bash
-export PGPASSWORD=openclaw123
+export PGPASSWORD="$(cd /home/claude-user/autowarm-testbench && python3 -c 'from publisher_kernel import DB_CONFIG; print(DB_CONFIG["password"])')"  # из кода, не хардкодим
 psql -h localhost -U openclaw -d openclaw -c "
 INSERT INTO publish_tasks
   (device_serial, adb_port, adb_host, raspberry, platform, account, project,
@@ -160,7 +160,7 @@ Expected: процесс стартовал, в логе — старт публ
 
 Run:
 ```bash
-export PGPASSWORD=openclaw123
+export PGPASSWORD="$(cd /home/claude-user/autowarm-testbench && python3 -c 'from publisher_kernel import DB_CONFIG; print(DB_CONFIG["password"])')"  # из кода, не хардкодим
 psql -h localhost -U openclaw -d openclaw -x -c "
 SELECT pt.id, pt.status,
        COUNT(*) FILTER (WHERE e->'meta'->>'phase'='share_loop')                          AS share_loop_evts,
@@ -181,7 +181,7 @@ Run:
 ```bash
 ls -lt /tmp/autowarm_ui_dumps/ 2>/dev/null | head
 # screenrecord URL (если есть) — из событий задачи:
-export PGPASSWORD=openclaw123
+export PGPASSWORD="$(cd /home/claude-user/autowarm-testbench && python3 -c 'from publisher_kernel import DB_CONFIG; print(DB_CONFIG["password"])')"  # из кода, не хардкодим
 psql -h localhost -U openclaw -d openclaw -tA -c "
 SELECT e->'meta'->>'screen_record_url'
 FROM publish_tasks pt, LATERAL jsonb_array_elements(pt.events::jsonb) e
@@ -238,7 +238,7 @@ Expected: `flag= true`. (publisher.py всё равно делает load_dotenv
 
 Run:
 ```bash
-export PGPASSWORD=openclaw123
+export PGPASSWORD="$(cd /home/claude-user/autowarm-testbench && python3 -c 'from publisher_kernel import DB_CONFIG; print(DB_CONFIG["password"])')"  # из кода, не хардкодим
 psql -h localhost -U openclaw -d openclaw -c "
 SELECT pt.status, COUNT(*) AS n
 FROM publish_tasks pt
@@ -253,7 +253,7 @@ Expected: распределение статусов; `done`/`awaiting_url` д�
 
 Run:
 ```bash
-export PGPASSWORD=openclaw123
+export PGPASSWORD="$(cd /home/claude-user/autowarm-testbench && python3 -c 'from publisher_kernel import DB_CONFIG; print(DB_CONFIG["password"])')"  # из кода, не хардкодим
 psql -h localhost -U openclaw -d openclaw -c "
 SELECT date_trunc('hour', pt.created_at) AS hr,
        COUNT(*) FILTER (WHERE e->'meta'->>'category'='tt_upload_confirmation_timeout') AS timeouts
@@ -267,7 +267,7 @@ Expected: после включения timeouts не растут (в идеа�
 
 Run:
 ```bash
-export PGPASSWORD=openclaw123
+export PGPASSWORD="$(cd /home/claude-user/autowarm-testbench && python3 -c 'from publisher_kernel import DB_CONFIG; print(DB_CONFIG["password"])')"  # из кода, не хардкодим
 psql -h localhost -U openclaw -d openclaw -c "
 SELECT pt.id, pt.device_serial, pt.status,
        e->'meta'->>'category' AS category, e->'meta'->>'phase' AS phase, pt.created_at
@@ -282,7 +282,7 @@ Expected (GREEN): ≥1 `tt_samsung_overlay_dismissed`/`tt_inapp_stories_dismisse
 
 Run:
 ```bash
-export PGPASSWORD=openclaw123
+export PGPASSWORD="$(cd /home/claude-user/autowarm-testbench && python3 -c 'from publisher_kernel import DB_CONFIG; print(DB_CONFIG["password"])')"  # из кода, не хардкодим
 psql -h localhost -U openclaw -d openclaw -c "
 SELECT pt.id, pt.status, e->'meta'->>'step' AS step, e->'meta'->>'category' AS category, e->>'type' AS typ
 FROM publish_tasks pt, LATERAL jsonb_array_elements(pt.events::jsonb) e
