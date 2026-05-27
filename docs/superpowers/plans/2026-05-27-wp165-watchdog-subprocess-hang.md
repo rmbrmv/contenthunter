@@ -427,16 +427,22 @@ async function maybeAlertHangSpike(pool, env = process.env, deps = {}) {
   );
   const r = rows[0];
   if (r.total < threshold) return { sent: false, reason: 'below_threshold', total: r.total };
-  if (now() - _lastAlertMs < cooldownMin * 60 * 1000) return { sent: false, reason: 'cooldown', total: r.total };
+  // cooldown применяем только если уже был успешный алерт (иначе первый вызов ложно «cooldown»)
+  if (_lastAlertMs > 0 && now() - _lastAlertMs < cooldownMin * 60 * 1000) return { sent: false, reason: 'cooldown', total: r.total };
   if (!token || !chatId) { console.error('[watchdog-alert] missing DAILY_REPORT_BOT_TOKEN/CHAT_ID'); return { sent: false, reason: 'no_tg_config', total: r.total }; }
 
   const text = `🚨 <b>watchdog_subprocess_hang всплеск</b>\n`
     + `За ${windowMin} мин: <b>${r.total}</b> зависаний (IG ${r.ig} / TT ${r.tt} / YT ${r.yt}), публикаций затронуто: ${r.cpids}.\n`
     + `Проверьте autowarm / ADB-мост / Postgres-локи (log_lock_waits).`;
+  // Таймаут на сетевой вызов: watchdog-тик не должен висеть на зависшем TG (это и есть инцидентный путь).
+  const timeoutMs = num(env.WATCHDOG_ALERT_TIMEOUT_MS, 10000);
+  const ctrl = new AbortController();
+  const timer = setTimeout(() => ctrl.abort(), timeoutMs);
   try {
     const resp = await fetchFn(`https://api.telegram.org/bot${token}/sendMessage`, {
       method: 'POST', headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ chat_id: chatId, text, parse_mode: 'HTML', disable_web_page_preview: true }),
+      signal: ctrl.signal,
     });
     if (!resp.ok) { console.error(`[watchdog-alert] TG status ${resp.status}`); return { sent: false, reason: 'tg_error', total: r.total }; }
     _lastAlertMs = now();
@@ -444,6 +450,8 @@ async function maybeAlertHangSpike(pool, env = process.env, deps = {}) {
   } catch (e) {
     console.error(`[watchdog-alert] send failed: ${e.message}`);
     return { sent: false, reason: 'exception', total: r.total };
+  } finally {
+    clearTimeout(timer);
   }
 }
 
@@ -481,11 +489,13 @@ const { maybeAlertHangSpike } = require('./watchdog_alert');
 
 - [ ] **Step 2: Вызвать алерт после обработки задач**
 
-В `watchdogRunningTasks()`, **после** цикла `for (const task of rows) { ... }` и **до** `catch` (т.е. перед закрывающей скобкой try, ≈стр. 7067), добавить:
+В `watchdogRunningTasks()`, **после** цикла `for (const task of rows) { ... }` и **до** `catch` (т.е. перед закрывающей скобкой try, ≈стр. 7067), добавить.
+**Важно: fire-and-forget (без `await`)** — watchdog-тик не должен ждать сетевой вызов TG
+(сам модуль тоже имеет timeout, это вторая линия защиты):
 
 ```javascript
-    // WP#165: проверить всплеск зависаний и при необходимости алертнуть
-    await maybeAlertHangSpike(pool);
+    // WP#165: проверить всплеск зависаний и алертнуть — НЕ блокируя watchdog-тик
+    maybeAlertHangSpike(pool).catch(e => console.error('[watchdog-alert]', e.message));
 ```
 
 - [ ] **Step 3: Smoke — синтаксис**
@@ -626,6 +636,7 @@ git commit -m "feat(wp165): сделать сбой heartbeat-записи ви�
         WATCHDOG_ALERT_THRESHOLD: '20',
         WATCHDOG_ALERT_WINDOW_MIN: '30',
         WATCHDOG_ALERT_COOLDOWN_MIN: '60',
+        WATCHDOG_ALERT_TIMEOUT_MS: '10000',
         WATCHDOG_DIAG_ENABLED: 'true',
 ```
 
