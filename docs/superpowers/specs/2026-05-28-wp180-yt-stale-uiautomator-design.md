@@ -101,13 +101,13 @@ self.p.log_event(
 )
 self._save_dump('yt_3_stale_dump', xml)
 
+# ВАЖНО: _open_app_aggressive() в этом файле — read-only/revision-only
+# (может выполнить `pm clear` и снести login-сессию). В publisher-пути
+# используем простой am start, как в TT retap3 (account_switcher.py:3166-3173).
 self.p.adb(f'am force-stop {cfg["package"]}')
-time.sleep(POST_TAP_WAIT_S)
-self._open_app_aggressive(
-    cfg['package'], cfg['launch_activity'],
-    step_name='yt_3_stale_recovery_relaunch', deadline_s=30.0,
-)
-time.sleep(POST_TAP_WAIT_S + 1)
+time.sleep(2)
+self.p.adb(f'am start -n {cfg["launch_activity"]}')
+time.sleep(OPEN_APP_WAIT_S + 2)
 self._go_to_profile_tab(cfg, 'yt_3_stale_recovery_profile')
 time.sleep(POST_TAP_WAIT_S + 1)
 
