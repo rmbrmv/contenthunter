@@ -1,5 +1,44 @@
 # Backlog tickets
 
+## 2026-05-28 — WP #179+#185: unic-worker mobile-safe transcode для ручной выкладки IG
+
+### ✅ ГОТОВО 2026-05-28 — OpenProject #179 + #185 → Готово; impl на main `delivery-contenthunter` 98d0f67 → прод pulled + pm2 restart unic-worker; verified Данилом на 19/SM-A175F (плеер + IG-редактор OK)
+
+Пришло как баг-репорт (`sources/bugs/inbox/2026-05-28T085657Z-Danil_Pavlov_123-ни-она-инста-не-груз.md` + парный `…T090243Z-…фвыафыв.md` + видео-доказательство https://disk.yandex.ru/i/rh1chvMsDXmWrw). Симптом: ручная выкладка через мобильный Instagram → «+ Reels → выбрать видео из галереи». Чёрные миниатюры у новых файлов, IG не реагирует на тап выбора, «Не поддерживается видеокодек» в системном плеере, файла НЕТ в IG-галерее «Недавние». Старые опубликованные выбираются нормально.
+
+**Root cause в два слоя.**
+
+**Слой 1 (WP #179, faststart):** `unic-worker/worker.py:322` финальный concat без `-movflags +faststart` → `moov atom` уходил в хвост mp4 → мобильная галерея читает первые 1-2MB при построении миниатюры → не находит moov → чёрный thumb + не выбирается. Авто-публикатор не страдал — `publisher_base.py:2789 _remux_mp4_if_available` уже делал faststart-remux перед загрузкой в IG-аппликуху. Ручная выкладка отдавала прямую CDN-ссылку → сырой файл.
+
+**Слой 2 (WP #185, mobile HW-decoder):** Verified Данилом — faststart-only оказался недостаточен. Файл с moov в head всё равно «не поддерживался видеокодек» и не виден в IG-галерее. Сравнение со старым работающим (1560×2680, H.264 High Level 5.0, 6 Mbps) показало почти идентичные параметры с broken (1570×2690, та же Level 5.0, 8 Mbps) — разница лишь в схеме уникализации: схема #4 агрессивная (rotate=-2.15°, speed=1.20×, scale_add=230, crop_reduce=430) vs working схема #30 мягкая (rotate=+1.10°, speed=1.07×, scale_add=140, crop_reduce=260). HW-decoder Samsung A17 фейлит на специфике bitstream агрессивных схем, даже когда параметры контейнера формально валидны.
+
+**Решение (WP #185).** Финальный safety-transcode в `worker.py:322`: replaced `-c copy +faststart` на полноценный lossy `ffmpeg -c:v libx264 -profile:v main -level 4.1 -pix_fmt yuv420p -preset medium -crf 23 -c:a aac -b:a 128k -movflags +faststart` с `-vf scale=1080:1920:force_original_aspect_ratio=decrease,pad=1080:1920:(ow-iw)/2:(oh-ih)/2:color=black,fps=30`. Размер строго 1080×1920 теряет нестандартный uniqueness `scale_add`/`pad_add`, но content-level (rotate/speed/crop_offset/overlays/color) остаётся — согласовано с Данилом, соц-сети всё равно нормализуют при upload.
+
+**Observability.** `unic.final.transcode_ok` / `transcode_DEVIANT` с **fail-closed** `RuntimeError` на deviant (требует ffprobe-проверки width=1080+height=1920+profile=Main+level=41+pix_fmt=yuv420p+audio=aac+faststart). Это проктовый regression-сигнал для любой будущей правки worker.
+
+**Backfill.** `scripts/backfill_faststart.py` расширен флагами `--queue-only` (JOIN с `validator_manual_publish_queue` published_at IS NULL AND cancelled_at IS NULL) и `--transcode` (full transcode vs faststart-only). `is_already_mobile_safe` для idempotency (fast-path tag `wp185_transcoded=1`, slow-path ffprobe head 256KB). `_local_is_mobile_safe` post-transcode validation. `.pretranscode.mp4` бэкап + tagging. `cleanup_preremux.py` для T+24ч очистки (двойной фильтр: суффикс + тег + LastModified).
+
+**Деплой и волны бэкфилла.**
+- WP #179 (faststart-only): clickpay 26.05 (--project-id 85 --since 2026-05-26) 32/32 + queue-only 154/154 + превентивный --since 2026-05-21 1133/1239 (упал на S3 transient — остаток переписан через WP #185 transcode-pass).
+- WP #185 (full transcode): queue-only --transcode 141/141 (~45мин, 0 failed); превентивный --since 2026-05-21 --transcode 1135 файлов (~9-10ч, pid 4009575, отвязан от сессии через nohup, лог `/tmp/backfill_transcode_week.log`).
+
+**TDD-цепочка (subagent-driven).** WP #179: 4 task'a (failing test → +faststart → observability → backfill+cleanup+tests) + 3 hotfix-итерации (Beget S3 config / SQL escape / put_object / checksum_validation=when_required). WP #185: 4 task'a + 8 раундов codex (0 P1, 6 P2 закрыто: pix_fmt, full skip-check, atom-window 256KB, audio_ok, try-around-IO, fail-closed на DEVIANT). 20/20 unit-тестов GREEN.
+
+**PR'ы.** GenGo2/delivery-contenthunter: #114 (WP#179 фикс+бэкфилл), #115 (Beget S3 config), #116 (put_object), #117 (checksum_validation), #118 (--queue-only), #121 (WP#185 transcode+backfill). rmbrmv/contenthunter: #18 (WP#179 spec+plan), #22 (WP#185 spec+plan).
+
+**Остаток / out-of-scope.**
+- Hardware-accel transcode (h264_nvenc / VAAPI) если CPU станет bottleneck (сейчас ~30с/файл OK на нашем объёме).
+- Silent-source synthesis в worker.py concat (теоретический edge case, в pipeline невозможен — `generate_ffmpeg` всегда даёт AAC).
+- Audit «достаточно ли Level 4.1» на iOS 11+ устройствах.
+- T+24ч cleanup `.preremux.mp4` + `.pretranscode.mp4` бэкапов: `cd /root/.openclaw/workspace-genri/autowarm/unic-worker && python3 -m scripts.cleanup_preremux --older-than-hours 24` (вручную после 29.05 утром).
+
+Evidence: spec `docs/superpowers/specs/2026-05-27-wp179-unic-worker-faststart-design.md` + `2026-05-28-wp185-unic-final-transcode-design.md`; plan `docs/superpowers/plans/2026-05-27-wp179-unic-worker-faststart.md` + `2026-05-28-wp185-unic-final-transcode.md`. Память: `project_wp179_wp185_unic_mobile_safe_transcode`, `feedback_faststart_vs_transcode_hw_decoder`. Урок: для mobile-decoder compat одного faststart недостаточно при aggressive uniqueness; не обозначай разрешение/level как «вторичные» в Phase 1, тестируй на устройстве сразу.
+
+**Параллельные бэклог-итемы** (не связаны напрямую):
+- `contenthunter_bugs_bot` (`bot.py:135 download_media`): ловить `TelegramBadRequest: file is too big` (TG Bot API лимит 20MB), отвечать «пришли Yandex Disk ссылку», вписывать `media: failed (too big)` в md-репорт. Видео Данила первый раз не дошло — пришлось ему вручную делать download-link.
+
+---
+
 ## 2026-05-28 — WP #181: IG `ig_share_tap_no_progress` (#1 топ-IG-фейл 99/7д) — post-mortem success probe
 
 ### ✅ SHIPPED+DEPLOYED 2026-05-28 — OpenProject #181 → Тестирование; impl на main `delivery-contenthunter` 521ce12, прод pulled + pm2 restart
