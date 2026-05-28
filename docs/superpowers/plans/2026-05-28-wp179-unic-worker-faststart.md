@@ -196,12 +196,37 @@ Verified: до правки head=[ftyp,free,mdat], moov в хвосте; пос�
 В функции `create_final_output`, сразу после `subprocess.run(...concat...)` и до возврата `op`, добавить (в самый конец функции, перед `return op`):
 
 ```python
-    # Observability: подтверждаем, что moov в head (WP #179)
+    # Observability: ПРОВЕРЯЕМ, что moov реально раньше mdat (а не просто что
+    # ffmpeg вернул 0). Это и есть smoke-сигнал по WP #179.
     try:
+        import struct as _struct
         with open(op, "rb") as _fh:
-            _head = _fh.read(64)
-        _atom0 = _head[4:8].decode("ascii", errors="replace") if len(_head) >= 8 else "?"
-        logger.info(f"unic.final.faststart scheme_id={scheme_id} size={os.path.getsize(op)} atom0={_atom0}")
+            _head = _fh.read(1024 * 1024)  # 1MB достаточно для любого реалистичного moov
+        _i = 0
+        _moov_off = _mdat_off = None
+        while _i + 8 <= len(_head):
+            _sz = _struct.unpack(">I", _head[_i:_i+4])[0]
+            _name = _head[_i+4:_i+8].decode("ascii", errors="replace")
+            if not _name.isalnum():
+                break
+            if _name == "moov" and _moov_off is None:
+                _moov_off = _i
+            if _name == "mdat" and _mdat_off is None:
+                _mdat_off = _i
+            if _sz < 8:
+                break
+            _i += _sz
+        _ok = (_moov_off is not None) and (_mdat_off is None or _moov_off < _mdat_off)
+        if _ok:
+            logger.info(
+                f"unic.final.faststart_ok scheme_id={scheme_id} size={os.path.getsize(op)} "
+                f"moov_off={_moov_off} mdat_off={_mdat_off}"
+            )
+        else:
+            logger.warning(
+                f"unic.final.faststart_MISSING scheme_id={scheme_id} size={os.path.getsize(op)} "
+                f"moov_off={_moov_off} mdat_off={_mdat_off} — флаг -movflags +faststart не применился!"
+            )
     except Exception as _e:
         logger.warning(f"unic.final.faststart_check_failed scheme_id={scheme_id} err={_e}")
 ```
@@ -225,7 +250,7 @@ with tempfile.TemporaryDirectory() as td:
 "
 ```
 
-Expected: stderr строка `unic.final.faststart scheme_id=0 size=... atom0=ftyp` (atom0 — первый атом, должен быть `ftyp`; moov идёт сразу после ftyp по индексу, но atom0 в позиции 0 — это всегда ftyp; критерий «moov раньше mdat» проверяется тестом, лог нужен только для подтверждения «работает в проде»).
+Expected: stderr строка `unic.final.faststart_ok scheme_id=0 size=... moov_off=N mdat_off=M` где `N<M` (moov раньше mdat). Если когда-то правка `worker.py:322` уйдёт, лог сменится на `unic.final.faststart_MISSING ...` — это и есть проктовый regression-сигнал.
 
 - [ ] **Step 3: Commit**
 
@@ -420,7 +445,11 @@ def process_one(s3, row: dict, dry_run: bool) -> str:
             log.warning(f"head_object_failed id={row['id']} key={key} err={e}")
             return "failed"
         extra_args = _extra_args_from_head(head_meta)
-        s3.upload_file(dst, S3_BUCKET, key, ExtraArgs=extra_args)
+        try:
+            s3.upload_file(dst, S3_BUCKET, key, ExtraArgs=extra_args)
+        except Exception as e:
+            log.warning(f"upload_failed id={row['id']} key={key} err={e} backup_kept={backup_key}")
+            return "failed"
         log.info(f"remuxed id={row['id']} key={key} backup={backup_key} preserved={sorted(extra_args)}")
         return "remuxed"
 
