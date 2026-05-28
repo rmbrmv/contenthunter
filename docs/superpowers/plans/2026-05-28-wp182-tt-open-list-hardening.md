@@ -136,12 +136,12 @@ def test_phase2_fallback_kill_switch_off(monkeypatch):
 
 
 def test_probe_stale_guard_kill_switch_default_on(monkeypatch):
-    monkeypatch.delenv('TT_OPEN_LIST_PROBE_STALE_GUARD', raising=False)
+    monkeypatch.delenv('TT_OPEN_LIST_PROBE_STALE_GUARD_ENABLED', raising=False)
     assert _tt_open_list_probe_stale_guard_enabled() is True
 
 
 def test_probe_stale_guard_kill_switch_off(monkeypatch):
-    monkeypatch.setenv('TT_OPEN_LIST_PROBE_STALE_GUARD', '0')
+    monkeypatch.setenv('TT_OPEN_LIST_PROBE_STALE_GUARD_ENABLED', '0')
     assert _tt_open_list_probe_stale_guard_enabled() is False
 ```
 
@@ -177,7 +177,7 @@ def _tt_open_list_probe_stale_guard_enabled() -> bool:
     Default ON. `TT_OPEN_LIST_PROBE_STALE_GUARD=0` → legacy: dump !usable
     идёт по обычной ветке probe-fail → `tt_account_sheet_closed_before_parse`.
     """
-    return os.environ.get('TT_OPEN_LIST_PROBE_STALE_GUARD', '1') != '0'
+    return os.environ.get('TT_OPEN_LIST_PROBE_STALE_GUARD_ENABLED', '1') != '0'
 ```
 
 - [ ] **Step 4: Run tests, expect PASS**
@@ -497,7 +497,7 @@ def _stub_open_list_phase1(sw, log_calls, dumps_in_order, dumpsys_tt=True):
 
 
 def test_probe_stale_both_attempts_emits_honest_code(monkeypatch):
-    monkeypatch.delenv('TT_OPEN_LIST_PROBE_STALE_GUARD', raising=False)
+    monkeypatch.delenv('TT_OPEN_LIST_PROBE_STALE_GUARD_ENABLED', raising=False)
     sw, log_calls = _make_switcher()
     _stub_open_list_phase1(
         sw, log_calls,
@@ -521,7 +521,7 @@ def test_probe_stale_first_attempt_recovers_on_second(monkeypatch):
     """Codex P2: transient stale на 1-й попытке не должен фейлить — 2-я попытка
     может восстановиться и открыть sheet. Stale-guard срабатывает только на
     последней (2-й) попытке."""
-    monkeypatch.delenv('TT_OPEN_LIST_PROBE_STALE_GUARD', raising=False)
+    monkeypatch.delenv('TT_OPEN_LIST_PROBE_STALE_GUARD_ENABLED', raising=False)
     sw, log_calls = _make_switcher()
     # 1-я probe → opaque, 2-я → валидный dump с маркером open sheet.
     valid_sheet_xml = (
@@ -550,7 +550,7 @@ def test_probe_stale_first_attempt_recovers_on_second(monkeypatch):
 def test_probe_stale_dump_but_foreground_drifted_falls_through(monkeypatch):
     """Stale + dumpsys=другое приложение → НЕ наш guard, существующая WP#130 fg-drift
     логика на верхнем уровне (`if not stories_seen:`) разберётся."""
-    monkeypatch.delenv('TT_OPEN_LIST_PROBE_STALE_GUARD', raising=False)
+    monkeypatch.delenv('TT_OPEN_LIST_PROBE_STALE_GUARD_ENABLED', raising=False)
     sw, log_calls = _make_switcher()
     # Этот тест не должен звать Phase 2; убираем stub, чтобы не упало по AssertionError.
     sw._run_tt_phase2_menu_path = MagicMock()
@@ -694,7 +694,7 @@ def test_probe_fail_valid_dump_triggers_phase2_fallback(monkeypatch):
     """Доминанта 4/5 в день: probe 2× → валидный профиль БЕЗ открытого sheet'а →
     запускаем Phase 2 menu-path вместо legacy fail."""
     monkeypatch.delenv('TT_OPEN_LIST_PHASE2_FALLBACK_ENABLED', raising=False)
-    monkeypatch.delenv('TT_OPEN_LIST_PROBE_STALE_GUARD', raising=False)
+    monkeypatch.delenv('TT_OPEN_LIST_PROBE_STALE_GUARD_ENABLED', raising=False)
     sw, log_calls = _make_switcher()
     sw._tap_profile_header = MagicMock(return_value=True)
     sw.p.dump_ui = MagicMock(side_effect=[PROFILE_NO_SHEET_XML, PROFILE_NO_SHEET_XML])
@@ -725,7 +725,7 @@ def test_probe_fail_no_profile_signature_keeps_legacy_fail(monkeypatch):
     """Если probe не открыл sheet И мы не на профиле (например, Search tab):
     Phase 2 НЕ вызываем, legacy emit как было."""
     monkeypatch.delenv('TT_OPEN_LIST_PHASE2_FALLBACK_ENABLED', raising=False)
-    monkeypatch.delenv('TT_OPEN_LIST_PROBE_STALE_GUARD', raising=False)
+    monkeypatch.delenv('TT_OPEN_LIST_PROBE_STALE_GUARD_ENABLED', raising=False)
     sw, log_calls = _make_switcher()
     sw._tap_profile_header = MagicMock(return_value=True)
     sw.p.dump_ui = MagicMock(side_effect=[NON_PROFILE_XML, NON_PROFILE_XML])
@@ -827,7 +827,7 @@ def test_kill_switches_off_keep_legacy(monkeypatch):
     """Оба флага OFF: stale-dump → legacy, sheet-not-opened-valid-dump → legacy.
     Phase 2 fallback и stale-guard НЕ вызываются."""
     monkeypatch.setenv('TT_OPEN_LIST_PHASE2_FALLBACK_ENABLED', '0')
-    monkeypatch.setenv('TT_OPEN_LIST_PROBE_STALE_GUARD', '0')
+    monkeypatch.setenv('TT_OPEN_LIST_PROBE_STALE_GUARD_ENABLED', '0')
 
     # --- sub-case 1: stale dump → legacy (без stale-honest-code) ---
     sw, log_calls = _make_switcher()
@@ -914,7 +914,7 @@ def test_stories_pivot_still_works(monkeypatch):
     """Регрессионный: Stories detected на probe → BACK → _tt_is_own_profile True →
     _run_tt_phase2_menu_path вызван. Та же helper-поверхность, что у WP#182
     fallback, но через существующий Stories-pivot путь."""
-    monkeypatch.delenv('TT_OPEN_LIST_PROBE_STALE_GUARD', raising=False)
+    monkeypatch.delenv('TT_OPEN_LIST_PROBE_STALE_GUARD_ENABLED', raising=False)
     monkeypatch.delenv('TT_OPEN_LIST_PHASE2_FALLBACK_ENABLED', raising=False)
     sw, log_calls = _make_switcher()
     sw._tap_profile_header = MagicMock(return_value=True)
@@ -1058,7 +1058,7 @@ PM2 reload через post-commit auto-pull (без systemd, per [feedback_deplo
 **3. Type consistency.**
 - `_run_tt_phase2_menu_path(target, step_base, anchors, cfg)` — сигнатура одинакова в Task 3 (определение) и Task 5 (вызов).
 - `_has_tt_profile_screen_signature(elements: list) -> bool` — одинакова в Task 2 (определение) и Task 5 (вызов).
-- env-имена `TT_OPEN_LIST_PHASE2_FALLBACK_ENABLED` / `TT_OPEN_LIST_PROBE_STALE_GUARD` — одинаковы в Task 1 (helpers) и Task 6 (off-test).
+- env-имена `TT_OPEN_LIST_PHASE2_FALLBACK_ENABLED` / `TT_OPEN_LIST_PROBE_STALE_GUARD_ENABLED` — одинаковы в Task 1 (helpers) и Task 6 (off-test).
 - Категория `tt_open_list_probe_stale_ui` / `tt_open_list_probe_fallback_to_phase2` — одинаковы по всему плану.
 - Все паттерны соответствуют spec §4 таблице.
 

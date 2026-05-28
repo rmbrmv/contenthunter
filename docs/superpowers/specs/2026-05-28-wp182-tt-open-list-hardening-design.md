@@ -44,7 +44,7 @@ Phase 1: 2× probe via _tap_profile_header
 
 ### 3.1. Изменение №1 — stale-guard на probe dump
 
-**Kill-switch:** `TT_OPEN_LIST_PROBE_STALE_GUARD` (default `1`).
+**Kill-switch:** `TT_OPEN_LIST_PROBE_STALE_GUARD_ENABLED` (default `1`).
 
 **Logic.** Внутри цикла `for attempt in range(2):` Phase 1 probe — **после** `probe_elements = parse_ui_dump(probe_dump) if probe_dump else []` и **перед** sheet-detection. Эмит **только на последней (2-й) попытке**, чтобы дать первой возможность восстановиться (transient stale на 1-й попытке — известный пред-RC поведения):
 
@@ -120,7 +120,7 @@ def _has_tt_profile_screen_signature(self, elements: list) -> bool:
 | element | kind | scope |
 |---|---|---|
 | `TT_OPEN_LIST_PHASE2_FALLBACK_ENABLED` env | feature-flag | module-level helper `_tt_open_list_phase2_fallback_enabled()` |
-| `TT_OPEN_LIST_PROBE_STALE_GUARD` env | feature-flag | module-level helper `_tt_open_list_probe_stale_guard_enabled()` |
+| `TT_OPEN_LIST_PROBE_STALE_GUARD_ENABLED` env | feature-flag | module-level helper `_tt_open_list_probe_stale_guard_enabled()` |
 | `_has_tt_profile_screen_signature` | instance method | switcher class |
 | `_run_tt_phase2_menu_path` | instance method (рефактор) | switcher class |
 | `tt_open_list_probe_stale_ui` | error code | новый, под классификатор |
