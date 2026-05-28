@@ -703,14 +703,29 @@ Expected: atom0=ftyp, atom1=moov (а не mdat).
 
 - [ ] **Step 6: Запуск бэкфилла clickpay 26.05**
 
+⚠️ **Чёткий date-filter обязателен**. У ClickPay (project_id=85) ~454 done
+unic_results с 05.05 по 26.05. Без `--since` бэкфилл пройдётся по всем 454,
+что не нужно (старые могут быть уже опубликованы, остаются как историческая
+запись; ремукс старых тоже безопасен, но не цель этого WP — цель разблокировать
+свежие, на которые сейчас завязана ручная выкладка Данила).
+
 ```bash
 cd /root/.openclaw/workspace-genri/autowarm/unic-worker
-python -m scripts.backfill_faststart --project-id 85 --dry-run
-# подтверждение N=30 → запуск без dry-run
-python -m scripts.backfill_faststart --project-id 85
+# 1) Сначала dry-run строго по нужному окну (26.05 → сегодня):
+python -m scripts.backfill_faststart --project-id 85 --since 2026-05-26 --dry-run
+# подтверждение N≈30 (видели в БД на момент спеки 28.05)
+# 2) Если N в норме — без dry-run, тот же фильтр:
+python -m scripts.backfill_faststart --project-id 85 --since 2026-05-26
 ```
 
-Expected: `done {'skipped': 0, 'remuxed': 30, 'failed': 0}`.
+Expected: `done {'skipped': 0, 'remuxed': ≈30, 'failed': 0}`. Если N сильно
+отклоняется от ожидаемого — ОСТАНОВИТЬСЯ, проверить фильтр перед без-dry-run.
+
+**Широкий бэкфилл (опционально, после успешного user-verify):** прогнать всю
+историю clickpay через `--project-id 85` (без `--since`) — это разблокирует
+ручную выкладку и для старых файлов проекта. По другим проектам — по той же
+схеме `--project-id <id> --since YYYY-MM-DD`, отдельным шагом за пределами
+этого WP.
 
 - [ ] **Step 7: User-verify ручной выкладки**
 
