@@ -46,10 +46,12 @@ Phase 1: 2× probe via _tap_profile_header
 
 **Kill-switch:** `TT_OPEN_LIST_PROBE_STALE_GUARD` (default `1`).
 
-**Logic.** Внутри цикла `for attempt in range(2):` Phase 1 probe — **после** `probe_elements = parse_ui_dump(probe_dump) if probe_dump else []` и **перед** sheet-detection:
+**Logic.** Внутри цикла `for attempt in range(2):` Phase 1 probe — **после** `probe_elements = parse_ui_dump(probe_dump) if probe_dump else []` и **перед** sheet-detection. Эмит **только на последней (2-й) попытке**, чтобы дать первой возможность восстановиться (transient stale на 1-й попытке — известный пред-RC поведения):
 
 ```python
+is_last_attempt = (attempt + 1 == 2)
 if _tt_open_list_probe_stale_guard_enabled() \
+        and is_last_attempt \
         and not is_dump_usable(probe_elements) \
         and self._tt_dumpsys_confirms_foreground(cfg['package']):
     variant = ('opaque_hierarchy'
@@ -62,6 +64,8 @@ if _tt_open_list_probe_stale_guard_enabled() \
          'probe_empty': not bool(probe_dump),
          'target': target})
 ```
+
+На 1-й попытке `attempt+1 == 1` гард не срабатывает — цикл переходит к 2-й probe (даём transient stale шанс восстановиться). На 2-й попытке `attempt+1 == 2`, если dump всё ещё stale → honest emit.
 
 **Не делаем:** cold-restart внутри метода — это территория оркестратора (как в WP#131). Метод возвращает honest code, оркестратор решает что дальше.
 
@@ -90,7 +94,11 @@ if _tt_open_list_phase2_fallback_enabled() \
     # вынесен в отдельный helper для общего вызова Stories-pivot и нашего fallback.
 ```
 
-**Helper-рефактор.** Чтобы не дублировать Phase 2 код в двух местах, выносим текущие строки ~4894–конец-метода в private helper `_run_tt_phase2_menu_path(elements_hint, target, step_base, anchors, cfg)` — возвращает `(anchor_bounds, error_code)`, тот же контракт что и сам `_open_tt_account_switcher`. Stories-pivot и новый fallback оба вызывают этот helper. Это **необходимо** для аккуратности: иначе либо дублим ~80 строк, либо ветвимся goto-стилем. Рефактор узкий и сопровождается чёрно-ящичными тестами.
+**Helper-рефактор.** Чтобы не дублировать Phase 2 код в двух местах, выносим логику «открыть drawer → найти trigger → settings-nested fallback → scroll-search» — то есть строки **начиная с комментария `# --- Phase 2: menu path (inline tap; orchestrator owns pre-tap dump) ---` (account_switcher.py:4894) и до конца метода** — в private helper `_run_tt_phase2_menu_path(target, step_base, anchors, cfg)`. Helper возвращает `(anchor_bounds, error_code)`, тот же контракт что и сам `_open_tt_account_switcher`. Helper НЕ включает Stories-BACK блок (4874-4892) — он остаётся inline в Stories-pivot ветке (BACK нужен только когда мы пришли через Stories).
+
+Stories-pivot ветка (4874-4892) делает BACK + own-profile проверку, потом вызывает `_run_tt_phase2_menu_path(...)`. Новый fallback (3.2 этой спеки) сразу вызывает `_run_tt_phase2_menu_path(...)` — мы уже на профиле, BACK не нужен. Контракт helper'а: предполагает «foreground=TT, на собственном профиле». Это инвариант, который обе ветки гарантируют до вызова.
+
+Рефактор узкий (~100 строк out, ~3 строки helper-call in) и сопровождается чёрно-ящичными тестами.
 
 **Helper-метод сигнатуры:**
 ```
@@ -122,28 +130,32 @@ def _has_tt_profile_screen_signature(self, elements: list) -> bool:
 
 ### Unit (TDD, без устройства, по образцу `tests/test_account_switcher_tt.py`)
 
-**1. `test_probe_stale_dump_emits_honest_code`**
-- Setup: мок `_tap_profile_header→True`, `dump_ui→<opaque 1-node XML>`, `_tt_dumpsys_confirms_foreground→True`.
-- Expect: вернулся `(None, 'tt_open_list_probe_stale_ui')`, в `log_event` есть meta.variant ∈ {opaque_hierarchy, launcher_empty}.
+**1. `test_probe_stale_both_attempts_emits_honest_code`**
+- Setup: мок `_tap_profile_header→True`, `dump_ui→<opaque 1-node XML>` для обеих probe-попыток, `_tt_dumpsys_confirms_foreground→True`.
+- Expect: вернулся `(None, 'tt_open_list_probe_stale_ui')`, в `log_event` есть `meta.variant ∈ {opaque_hierarchy, launcher_empty}` и `meta.probe_attempt == 2`.
 
-**2. `test_probe_stale_dump_but_foreground_drifted_falls_through`**
-- Setup: dump !usable + dumpsys=другое приложение.
-- Expect: stale-guard НЕ срабатывает (foreground drift — другая категория, дальше WP#130 / fg_drift логика).
+**2. `test_probe_stale_first_attempt_recovers_on_second`** (граничный кейс из codex P2)
+- Setup: 1-я probe → `dump_ui→<opaque XML>` (stale). 2-я probe → `dump_ui→<dump со sheet-anchor>` (recovery).
+- Expect: вернулся `(anchor_bounds, None)` (success), `tt_probe_opened_bottomsheet` эмит с `attempt=2`. Honest stale-code НЕ эмитится (мы пропустили его на 1-й попытке).
 
-**3. `test_probe_fail_valid_dump_triggers_phase2_fallback`**
-- Setup: probe 2× → валидный dump с «Меню профиля» button, без sheet-anchor, без Stories.
-- Expect: `_run_tt_phase2_menu_path` вызван; emit `tt_open_list_probe_fallback_to_phase2` присутствует в log.
+**3. `test_probe_stale_dump_but_foreground_drifted_falls_through`**
+- Setup: обе probe → dump !usable + `_tt_dumpsys_confirms_foreground→False` (drift на другое приложение).
+- Expect: stale-guard НЕ срабатывает (foreground drift — другая категория, дальше WP#130 / fg_drift логика на верхнем уровне `if not stories_seen:`).
 
-**4. `test_probe_fail_no_profile_signature_keeps_legacy_fail`**
+**4. `test_probe_fail_valid_dump_triggers_phase2_fallback`**
+- Setup: probe 2× → валидный dump с «Меню профиля» button (content-desc), без sheet-anchor, без Stories.
+- Expect: `_run_tt_phase2_menu_path` вызван; emit `tt_open_list_probe_fallback_to_phase2` присутствует в log; legacy `tt_account_sheet_closed_before_parse` НЕ эмитится.
+
+**5. `test_probe_fail_no_profile_signature_keeps_legacy_fail`**
 - Setup: probe 2× → валидный dump БЕЗ «Меню профиля» button (не на профиле) + не Stories.
-- Expect: эмитится legacy `tt_account_sheet_closed_before_parse` (как сейчас).
+- Expect: `_run_tt_phase2_menu_path` НЕ вызывается; эмитится legacy `tt_account_sheet_closed_before_parse` (как сейчас).
 
-**5. `test_kill_switches_off_keep_legacy`**
-- Setup: env `TT_OPEN_LIST_*=0` для обоих флагов.
-- Expect: stale-dump → legacy `tt_account_sheet_closed_before_parse`, sheet-not-opened → legacy `tt_account_sheet_closed_before_parse`, Phase 2 fallback НЕ вызывается.
+**6. `test_kill_switches_off_keep_legacy`**
+- Setup: env `TT_OPEN_LIST_PROBE_STALE_GUARD=0` и `TT_OPEN_LIST_PHASE2_FALLBACK_ENABLED=0`.
+- Expect: stale-dump на 2-й попытке → legacy `tt_account_sheet_closed_before_parse`, sheet-not-opened-valid-dump → legacy `tt_account_sheet_closed_before_parse`, Phase 2 fallback НЕ вызывается.
 
-**6. `test_stories_pivot_still_works`**
-- Регресс-тест: Stories detected на probe → BACK → `_run_tt_phase2_menu_path` вызван (та же поверхность что у нового fallback).
+**7. `test_stories_pivot_still_works`**
+- Регресс-тест: Stories detected на probe → BACK → `_tt_is_own_profile→True` → `_run_tt_phase2_menu_path` вызван. Та же helper-поверхность что у нового fallback, но через Stories-pivot путь.
 
 ### Smoke / live verification
 
@@ -183,7 +195,7 @@ def _has_tt_profile_screen_signature(self, elements: list) -> bool:
 ## 10. Этапы
 
 1. Поднять worktree `autowarm-testbench/feat/wp182-tt-open-list-hardening`.
-2. Написать 6 unit-тестов (RED).
+2. Написать 7 unit-тестов (RED).
 3. Имплементация (степ-1 helper-рефактор; степ-2 stale-guard; степ-3 Phase 2 fallback). После каждого стега — целевые тесты GREEN.
 4. Полный test suite GREEN.
 5. `codex review` плана и diff — 0 P1.
