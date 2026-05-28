@@ -1,13 +1,27 @@
 # WP #183 — `manual operator_status='in_progress'` блокирует автодиспатч на том же `device_serial`
 
-**Статус: SHIPPED + DEPLOYED 2026-05-28, WP#183 → «Тестирование».**
+**Статус: SHIPPED + DEPLOYED 2026-05-28 (2 итерации), WP#183 → «Тестирование».**
 
-- PR `GenGo2/delivery-contenthunter#120` merged → `22fe866`.
-- PR `rmbrmv/contenthunter#20` (этот evidence) merged → `5429dfd`.
-- Прод `/root/.openclaw/workspace-genri/autowarm` fast-forward pull, HEAD=`22fe866`.
-- `sudo pm2 restart autowarm` (id=35), online, диспатч работает, ошибок старта нет.
-- `MANUAL_INPROGRESS_BLOCKS_AUTO_DISPATCH_ENABLED` default=on.
+- **Iter 1** (operator_status `'in_progress'`): PR `GenGo2/delivery-contenthunter#120` merged → `22fe866`. Прод HEAD=`22fe866`, `pm2 restart autowarm` ~13:23.
+- **Iter 2** (operator_status `IN ('queued','in_progress')`, покрытие «Частично выложен»): PR `GenGo2/delivery-contenthunter#122` merged → `efd0264`. Прод HEAD=`efd0264`, `pm2 restart autowarm` ~13:57.
+- Verify-лог: `pq=5917 device=RFGYC31P7DT занят, откладываем` (phone 151 заблокирован после iter2: id=487 IG in_progress + id=1422 TT queued в manual queue).
+- PR `rmbrmv/contenthunter#20` (iter1 evidence) merged → `5429dfd`; `rmbrmv/contenthunter#21` (post-deploy update) merged.
+- `MANUAL_INPROGRESS_BLOCKS_AUTO_DISPATCH_ENABLED` default=on (один флаг на оба слоя).
 - Follow-up (codex P2.2): **WP#186** в Бэклоге — вынести helpers в side-effect-free модуль `dispatch_busy.js`.
+
+## Iter 2 (28.05): «Частично выложен» / partial
+
+**User-report 28.05:** phone 151 (RFGYC31P7DT), карточка ручной выкладки `ClickPay_151b` со статусом «Частично выложено» (TT/YT=published, IG=queued/in_progress), при этом авто запустила publish_tasks на тот же device.
+
+**Природа `partial`:** UI-derived agg по `unic_result_id` (`mpqAgg` в `public/index.html:12230`): группа в которой есть `published` + ещё `queued`/`in_progress`. В БД статуса нет (`CHECK ck_manual_pub_status` только `'queued','in_progress','published'`).
+
+**Фикс:** расширил оба слоя гарда — `operator_status IN ('queued','in_progress')`. Семантика `queued` row = «оператор зарезервировал аккаунт под ручную выкладку» → блокирует device. `partial`-группы покрыты автоматически: `queued`/`in_progress` row внутри partial-группы попадает в гард.
+
+**Тесты iter2 (11/11 GREEN, 71/71 c регресс-соседями):**
+- `INCLUDES manual queued device` (инверт iter1-теста).
+- `partial-group scenario`: 3 rows одной `unic_result`, 2×published + 1×queued на одном device → device в busy.
+- `insertPublishTaskRaceSafe (iter2)`: queued тоже блокирует атомарный INSERT.
+- kill-switch off: queued игнорируется (legacy).
 
 ## Что было не так
 
