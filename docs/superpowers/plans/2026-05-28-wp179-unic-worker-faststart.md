@@ -14,9 +14,10 @@
 
 - **Modify:** `unic-worker/worker.py` — добавить `-movflags +faststart` в финальный concat (l.322); добавить INFO-лог `unic.final.faststart`.
 - **Create:** `unic-worker/tests/test_create_final_output_faststart.py` — TDD-канарейка на atom-order.
-- **Create:** `unic-worker/scripts/backfill_faststart.py` — одноразовый remux существующих CDN-объектов.
-- **Create:** `unic-worker/tests/test_backfill_faststart.py` — unit-тесты бэкфилла (skip-already-faststart, remux-when-needed).
-- **No new shared helpers** — `atom_offsets()` живёт в test-файле (DRY обоснован: используется в обоих тестах через перенос во второй).
+- **Create:** `unic-worker/scripts/backfill_faststart.py` — одноразовый remux существующих CDN-объектов (с preserve metadata + tagging бэкапов).
+- **Create:** `unic-worker/scripts/cleanup_preremux.py` — T+24ч cleanup `.preremux.mp4` бэкапов (фильтр: суффикс + тег `wp179_preremux=1` + LastModified > N часов).
+- **Create:** `unic-worker/tests/test_backfill_faststart.py` — unit-тесты бэкфилла (skip-already-faststart, dry-run, preserve metadata).
+- **No new shared helpers** — `atom_offsets()` живёт в test-файле; `head_has_moov`/`_extra_args_from_head` — в backfill-скрипте (используются только там).
 
 ---
 
@@ -339,6 +340,34 @@ def select_candidates(conn, project_id: int | None, since: str | None) -> list[d
         return list(cur.fetchall())
 
 
+_PRESERVE_HEADERS = (
+    "ContentType",
+    "CacheControl",
+    "ContentDisposition",
+    "ContentEncoding",
+    "ContentLanguage",
+)
+
+
+def _extra_args_from_head(head_meta: dict) -> dict:
+    """Скопировать sysmd headers + user Metadata из head_object для re-upload.
+
+    Если у объекта стоят Cache-Control / Content-Disposition / custom Metadata —
+    сохраняем, чтобы re-upload не сбрасывал поведение CDN. ACL не трогаем
+    (бакет статический, ACL объекта обычно наследуется от политики бакета)."""
+    args: dict = {}
+    for h in _PRESERVE_HEADERS:
+        v = head_meta.get(h)
+        if v is not None:
+            args[h] = v
+    md = head_meta.get("Metadata") or {}
+    if md:
+        args["Metadata"] = dict(md)
+    # дефолт-фоллбэк, если у объекта почему-то нет ContentType
+    args.setdefault("ContentType", "video/mp4")
+    return args
+
+
 def process_one(s3, row: dict, dry_run: bool) -> str:
     """Returns one of: 'skipped', 'remuxed', 'failed'."""
     key = url_to_s3_key(row["output_url"])
@@ -358,15 +387,31 @@ def process_one(s3, row: dict, dry_run: bool) -> str:
         dst = os.path.join(td, "dst.mp4")
         s3.download_file(S3_BUCKET, key, src)
         remux_to_faststart(src, dst)
-        # backup оригинал → <key>.preremux.mp4
+        # backup оригинал → <key>.preremux.mp4 (MetadataDirective=COPY: дефолт copy_object)
         backup_key = key + ".preremux.mp4"
         try:
-            s3.copy_object(Bucket=S3_BUCKET, CopySource={"Bucket": S3_BUCKET, "Key": key}, Key=backup_key)
+            s3.copy_object(
+                Bucket=S3_BUCKET,
+                CopySource={"Bucket": S3_BUCKET, "Key": key},
+                Key=backup_key,
+                # explicit MetadataDirective=COPY — оставить настройки оригинала на бэкапе
+                MetadataDirective="COPY",
+                # пометка для cleanup-шага: бэкап создан этим скриптом
+                Tagging="wp179_preremux=1",
+                TaggingDirective="REPLACE",
+            )
         except Exception as e:
             log.warning(f"backup_failed id={row['id']} key={key} err={e}")
             return "failed"
-        s3.upload_file(dst, S3_BUCKET, key, ExtraArgs={"ContentType": "video/mp4"})
-        log.info(f"remuxed id={row['id']} key={key} backup={backup_key}")
+        # re-upload remuxed: сохраняем настройки оригинала (Cache-Control, Metadata и пр.)
+        try:
+            head_meta = s3.head_object(Bucket=S3_BUCKET, Key=key)
+        except Exception as e:
+            log.warning(f"head_object_failed id={row['id']} key={key} err={e}")
+            return "failed"
+        extra_args = _extra_args_from_head(head_meta)
+        s3.upload_file(dst, S3_BUCKET, key, ExtraArgs=extra_args)
+        log.info(f"remuxed id={row['id']} key={key} backup={backup_key} preserved={sorted(extra_args)}")
         return "remuxed"
 
 
@@ -456,6 +501,29 @@ def test_process_one_dry_run_does_not_upload():
     assert bf.process_one(s3, row, dry_run=True) == "remuxed"
     s3.download_file.assert_not_called()
     s3.upload_file.assert_not_called()
+
+
+def test_extra_args_from_head_preserves_sysmd_and_metadata():
+    head = {
+        "ContentType": "video/mp4",
+        "CacheControl": "public, max-age=86400",
+        "ContentDisposition": "inline; filename=foo.mp4",
+        "Metadata": {"x-project": "85", "x-scheme": "20"},
+        # шумовые поля, которые НЕ должны попадать в ExtraArgs
+        "ETag": "abc",
+        "LastModified": "today",
+    }
+    args = bf._extra_args_from_head(head)
+    assert args["ContentType"] == "video/mp4"
+    assert args["CacheControl"] == "public, max-age=86400"
+    assert args["ContentDisposition"] == "inline; filename=foo.mp4"
+    assert args["Metadata"] == {"x-project": "85", "x-scheme": "20"}
+    assert "ETag" not in args and "LastModified" not in args
+
+
+def test_extra_args_from_head_defaults_contenttype():
+    args = bf._extra_args_from_head({})
+    assert args["ContentType"] == "video/mp4"
 ```
 
 - [ ] **Step 3: Запустить тесты**
@@ -622,6 +690,82 @@ curl -sS -u "apikey:$OPENPROJECT_API_TOKEN" -X PATCH \
   "$OPENPROJECT_URL/api/v3/work_packages/179" > /dev/null
 ```
 
+- [ ] **Step 9: T+24ч — cleanup `.preremux.mp4` backups**
+
+Через 24ч после успешного `--project-id 85` бэкфилла и user-verify (если регрессов
+нет) — удалить временные `.preremux.mp4` бэкапы, чтобы не копить в CDN-бакете
+индефинитно.
+
+Создать `unic-worker/scripts/cleanup_preremux.py`:
+
+```python
+"""WP #179 — удалить preremux backups, созданные backfill_faststart.py старше N часов.
+
+Используется как ручной/cron-шаг через 24ч после успешного бэкфилла. Безопасно:
+удаляет ТОЛЬКО ключи с суффиксом '.preremux.mp4' под нашим S3_PREFIX И с тегом
+'wp179_preremux=1' (двойной фильтр — суффикс + тег)."""
+from __future__ import annotations
+
+import argparse
+import logging
+import os
+from datetime import datetime, timedelta, timezone
+
+import boto3
+
+log = logging.getLogger("cleanup_preremux")
+S3_BUCKET = os.environ.get("UNIC_S3_BUCKET", "save-gengo-io")
+S3_PREFIX = os.environ.get("UNIC_S3_PREFIX", "autowarm/unic/")
+
+
+def main():
+    logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(name)s: %(message)s")
+    ap = argparse.ArgumentParser()
+    ap.add_argument("--older-than-hours", type=int, default=24)
+    ap.add_argument("--dry-run", action="store_true")
+    args = ap.parse_args()
+    s3 = boto3.client("s3")
+    cutoff = datetime.now(timezone.utc) - timedelta(hours=args.older_than_hours)
+    paginator = s3.get_paginator("list_objects_v2")
+    counts = {"checked": 0, "deleted": 0, "skipped_tag": 0, "skipped_age": 0}
+    for page in paginator.paginate(Bucket=S3_BUCKET, Prefix=S3_PREFIX):
+        for obj in page.get("Contents") or []:
+            key = obj["Key"]
+            if not key.endswith(".preremux.mp4"):
+                continue
+            counts["checked"] += 1
+            if obj["LastModified"] > cutoff:
+                counts["skipped_age"] += 1
+                continue
+            tags = {t["Key"]: t["Value"] for t in s3.get_object_tagging(Bucket=S3_BUCKET, Key=key).get("TagSet", [])}
+            if tags.get("wp179_preremux") != "1":
+                counts["skipped_tag"] += 1
+                continue
+            if args.dry_run:
+                log.info(f"DRYRUN_would_delete {key}")
+            else:
+                s3.delete_object(Bucket=S3_BUCKET, Key=key)
+                log.info(f"deleted {key}")
+            counts["deleted"] += 1
+    log.info(f"done {counts}")
+
+
+if __name__ == "__main__":
+    main()
+```
+
+Запуск:
+
+```bash
+cd /root/.openclaw/workspace-genri/autowarm/unic-worker
+# смок
+python -m scripts.cleanup_preremux --older-than-hours 24 --dry-run
+# применить
+python -m scripts.cleanup_preremux --older-than-hours 24
+```
+
+Expected: `done {'checked': 30, 'deleted': 30, 'skipped_tag': 0, 'skipped_age': 0}`.
+
 ---
 
 ## Self-Review (после написания плана)
@@ -636,6 +780,8 @@ curl -sS -u "apikey:$OPENPROJECT_API_TOKEN" -X PATCH \
 - ✅ Live-smoke → Task 6 Step 5
 - ✅ User-verify → Task 6 Step 7
 - ✅ OpenProject статус → Task 6 Step 8
+- ✅ Cleanup preremux backups через 24ч (codex P2) → Task 6 Step 9
+- ✅ Preserve S3 metadata при re-upload (codex P2) → Task 4 Step 1 (`_extra_args_from_head` + `MetadataDirective=COPY` для backup)
 
 **2. Placeholder scan:**
 - Нет "TBD", "TODO", "implement later"
