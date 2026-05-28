@@ -1,6 +1,13 @@
 # WP #183 — `manual operator_status='in_progress'` блокирует автодиспатч на том же `device_serial`
 
-**Статус:** код готов в ветке `fix/wp-manual-inprogress-blocks-auto` (worktree autowarm-testbench), 64/64 тестов GREEN, codex review pending, PR/деплой ждут согласования.
+**Статус: SHIPPED + DEPLOYED 2026-05-28, WP#183 → «Тестирование».**
+
+- PR `GenGo2/delivery-contenthunter#120` merged → `22fe866`.
+- PR `rmbrmv/contenthunter#20` (этот evidence) merged → `5429dfd`.
+- Прод `/root/.openclaw/workspace-genri/autowarm` fast-forward pull, HEAD=`22fe866`.
+- `sudo pm2 restart autowarm` (id=35), online, диспатч работает, ошибок старта нет.
+- `MANUAL_INPROGRESS_BLOCKS_AUTO_DISPATCH_ENABLED` default=on.
+- Follow-up (codex P2.2): **WP#186** в Бэклоге — вынести helpers в side-effect-free модуль `dispatch_busy.js`.
 
 ## Что было не так
 
