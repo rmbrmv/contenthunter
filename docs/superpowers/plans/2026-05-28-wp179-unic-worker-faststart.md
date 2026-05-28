@@ -574,17 +574,89 @@ python -m pytest tests/test_backfill_faststart.py -v
 
 Expected: 5 passed.
 
-- [ ] **Step 4: Commit**
+- [ ] **Step 4: Создать `scripts/cleanup_preremux.py` (адресный cleanup бэкапов)**
+
+⚠️ **Создаём сейчас, не на Step 9.** Если скрипт не попадёт в PR — на проде команда
+`python -m scripts.cleanup_preremux` упадёт с ModuleNotFoundError через 24ч.
+
+Создать `unic-worker/scripts/cleanup_preremux.py`:
+
+```python
+"""WP #179 — удалить preremux backups, созданные backfill_faststart.py старше N часов.
+
+Используется как ручной/cron-шаг через 24ч после успешного бэкфилла. Безопасно:
+удаляет ТОЛЬКО ключи с суффиксом '.preremux.mp4' под нашим S3_PREFIX И с тегом
+'wp179_preremux=1' (двойной фильтр — суффикс + тег)."""
+from __future__ import annotations
+
+import argparse
+import logging
+import os
+from datetime import datetime, timedelta, timezone
+
+import boto3
+
+log = logging.getLogger("cleanup_preremux")
+S3_BUCKET = os.environ.get("UNIC_S3_BUCKET", "save-gengo-io")
+S3_PREFIX = os.environ.get("UNIC_S3_PREFIX", "autowarm/unic/")
+
+
+def main():
+    logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(name)s: %(message)s")
+    ap = argparse.ArgumentParser()
+    ap.add_argument("--older-than-hours", type=int, default=24)
+    ap.add_argument("--dry-run", action="store_true")
+    args = ap.parse_args()
+    s3 = boto3.client("s3")
+    cutoff = datetime.now(timezone.utc) - timedelta(hours=args.older_than_hours)
+    paginator = s3.get_paginator("list_objects_v2")
+    counts = {"checked": 0, "deleted": 0, "skipped_tag": 0, "skipped_age": 0}
+    for page in paginator.paginate(Bucket=S3_BUCKET, Prefix=S3_PREFIX):
+        for obj in page.get("Contents") or []:
+            key = obj["Key"]
+            if not key.endswith(".preremux.mp4"):
+                continue
+            counts["checked"] += 1
+            if obj["LastModified"] > cutoff:
+                counts["skipped_age"] += 1
+                continue
+            tags = {t["Key"]: t["Value"] for t in s3.get_object_tagging(Bucket=S3_BUCKET, Key=key).get("TagSet", [])}
+            if tags.get("wp179_preremux") != "1":
+                counts["skipped_tag"] += 1
+                continue
+            if args.dry_run:
+                log.info(f"DRYRUN_would_delete {key}")
+            else:
+                s3.delete_object(Bucket=S3_BUCKET, Key=key)
+                log.info(f"deleted {key}")
+            counts["deleted"] += 1
+    log.info(f"done {counts}")
+
+
+if __name__ == "__main__":
+    main()
+```
+
+- [ ] **Step 5: Commit обоих скриптов + тестов**
 
 ```bash
 cd /home/claude-user/autowarm-testbench
-git add unic-worker/scripts/backfill_faststart.py unic-worker/tests/test_backfill_faststart.py
-git commit -m "feat(wp179): бэкфилл-скрипт remux существующих unic_results в +faststart
+git add unic-worker/scripts/backfill_faststart.py \
+        unic-worker/scripts/cleanup_preremux.py \
+        unic-worker/tests/test_backfill_faststart.py
+git commit -m "feat(wp179): бэкфилл +faststart существующих unic_results + cleanup preremux
 
-scripts/backfill_faststart.py — одноразовый: SELECT candidates через project/since,
-fetch head 4KB → head_has_moov-чек → download+remux+upload (с .preremux.mp4 бэкапом).
-Идемпотентный (skip уже-faststart). --dry-run для смока. Pure-функции head_has_moov
-и url_to_s3_key покрыты тестами, S3-зависимое process_one тестируется через mock."
+scripts/backfill_faststart.py — одноразовый: SELECT candidates по --project-id/--since,
+head-fetch 4KB → head_has_moov → download+remux+upload (с .preremux.mp4 бэкапом и
+preserve metadata из head_object). Идемпотентный (skip уже-faststart). --dry-run для
+смока. Pure-функции head_has_moov и _extra_args_from_head покрыты тестами,
+S3-зависимое process_one тестируется через mock.
+
+scripts/cleanup_preremux.py — T+24ч cleanup .preremux.mp4 бэкапов с двойным
+фильтром (суффикс + тег wp179_preremux=1 + LastModified > N часов). --dry-run.
+
+Скрипт cleanup создаётся ДО PR-pushа (а не в deployment-step), чтобы на проде
+команда python -m scripts.cleanup_preremux была доступна сразу."
 ```
 
 ---
@@ -744,71 +816,9 @@ curl -sS -u "apikey:$OPENPROJECT_API_TOKEN" -X PATCH \
   "$OPENPROJECT_URL/api/v3/work_packages/179" > /dev/null
 ```
 
-- [ ] **Step 9: T+24ч — cleanup `.preremux.mp4` backups**
+- [ ] **Step 9: T+24ч — запуск `cleanup_preremux` (скрипт уже в репо после Task 4)**
 
-Через 24ч после успешного `--project-id 85` бэкфилла и user-verify (если регрессов
-нет) — удалить временные `.preremux.mp4` бэкапы, чтобы не копить в CDN-бакете
-индефинитно.
-
-Создать `unic-worker/scripts/cleanup_preremux.py`:
-
-```python
-"""WP #179 — удалить preremux backups, созданные backfill_faststart.py старше N часов.
-
-Используется как ручной/cron-шаг через 24ч после успешного бэкфилла. Безопасно:
-удаляет ТОЛЬКО ключи с суффиксом '.preremux.mp4' под нашим S3_PREFIX И с тегом
-'wp179_preremux=1' (двойной фильтр — суффикс + тег)."""
-from __future__ import annotations
-
-import argparse
-import logging
-import os
-from datetime import datetime, timedelta, timezone
-
-import boto3
-
-log = logging.getLogger("cleanup_preremux")
-S3_BUCKET = os.environ.get("UNIC_S3_BUCKET", "save-gengo-io")
-S3_PREFIX = os.environ.get("UNIC_S3_PREFIX", "autowarm/unic/")
-
-
-def main():
-    logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(name)s: %(message)s")
-    ap = argparse.ArgumentParser()
-    ap.add_argument("--older-than-hours", type=int, default=24)
-    ap.add_argument("--dry-run", action="store_true")
-    args = ap.parse_args()
-    s3 = boto3.client("s3")
-    cutoff = datetime.now(timezone.utc) - timedelta(hours=args.older_than_hours)
-    paginator = s3.get_paginator("list_objects_v2")
-    counts = {"checked": 0, "deleted": 0, "skipped_tag": 0, "skipped_age": 0}
-    for page in paginator.paginate(Bucket=S3_BUCKET, Prefix=S3_PREFIX):
-        for obj in page.get("Contents") or []:
-            key = obj["Key"]
-            if not key.endswith(".preremux.mp4"):
-                continue
-            counts["checked"] += 1
-            if obj["LastModified"] > cutoff:
-                counts["skipped_age"] += 1
-                continue
-            tags = {t["Key"]: t["Value"] for t in s3.get_object_tagging(Bucket=S3_BUCKET, Key=key).get("TagSet", [])}
-            if tags.get("wp179_preremux") != "1":
-                counts["skipped_tag"] += 1
-                continue
-            if args.dry_run:
-                log.info(f"DRYRUN_would_delete {key}")
-            else:
-                s3.delete_object(Bucket=S3_BUCKET, Key=key)
-                log.info(f"deleted {key}")
-            counts["deleted"] += 1
-    log.info(f"done {counts}")
-
-
-if __name__ == "__main__":
-    main()
-```
-
-Запуск:
+Через 24ч после успешного бэкфилла и user-verify (если регрессов нет):
 
 ```bash
 cd /root/.openclaw/workspace-genri/autowarm/unic-worker
@@ -818,7 +828,7 @@ python -m scripts.cleanup_preremux --older-than-hours 24 --dry-run
 python -m scripts.cleanup_preremux --older-than-hours 24
 ```
 
-Expected: `done {'checked': 30, 'deleted': 30, 'skipped_tag': 0, 'skipped_age': 0}`.
+Expected: `done {'checked': ≈30, 'deleted': ≈30, 'skipped_tag': 0, 'skipped_age': 0}`.
 
 ---
 
@@ -834,8 +844,12 @@ Expected: `done {'checked': 30, 'deleted': 30, 'skipped_tag': 0, 'skipped_age': 
 - ✅ Live-smoke → Task 6 Step 5
 - ✅ User-verify → Task 6 Step 7
 - ✅ OpenProject статус → Task 6 Step 8
-- ✅ Cleanup preremux backups через 24ч (codex P2) → Task 6 Step 9
+- ✅ Cleanup preremux backups через 24ч (codex P2) → Task 4 Step 4 (создание) + Task 6 Step 9 (запуск)
 - ✅ Preserve S3 metadata при re-upload (codex P2) → Task 4 Step 1 (`_extra_args_from_head` + `MetadataDirective=COPY` для backup)
+- ✅ Чёткий `--since` в runbook бэкфилла (codex P1) → Task 6 Step 6
+- ✅ Observability реально проверяет moov<mdat (codex P2 round 3) → Task 3
+- ✅ upload_failed handled, бэкфилл продолжает (codex P2 round 3) → Task 4 Step 1
+- ✅ Cleanup-скрипт committed ДО deployment (codex P2 round 4) → Task 4 Step 4 (перенос из Step 9)
 
 **2. Placeholder scan:**
 - Нет "TBD", "TODO", "implement later"
