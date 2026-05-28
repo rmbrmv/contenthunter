@@ -32,7 +32,7 @@ yt_3_open_accounts_postmortem  usable=False bytes=4936
 
 `_yt_try_accounts_btn_with_retries` (`account_switcher.py:4405`) видит пустые elements, ни один trigger не матчится — 2 retap'а, alt-avatar и T9 Settings-Activity жгутся впустую и заканчиваются ложным postmortem'ом.
 
-Триаж и evidence: [`docs/evidence/2026-05-28-yt-triage.md`](../evidence/2026-05-28-yt-triage.md).
+Триаж и evidence: [`docs/evidence/2026-05-28-yt-triage.md`](../../evidence/2026-05-28-yt-triage.md).
 
 ## Прецеденты
 
