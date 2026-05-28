@@ -1,5 +1,25 @@
 # Backlog tickets
 
+## 2026-05-28 — WP #181: IG `ig_share_tap_no_progress` (#1 топ-IG-фейл 99/7д) — post-mortem success probe
+
+### ✅ SHIPPED+DEPLOYED 2026-05-28 — OpenProject #181 → Тестирование; impl на main `delivery-contenthunter` 521ce12, прод pulled + pm2 restart
+
+Пришло как пользовательский запрос на триаж IG-фейлов. Разведка 22.05–28.05: 807 failed IG-задач, после вычета штормового 26.05 (`watchdog_subprocess_hang` 475 — WP #165 уже задеплоен) и PM2-шума `process_interrupted` — топ-1 устойчивый = `ig_share_tap_no_progress` (99/7д, тренд 27.05=45, 28.05/неполный=12).
+
+**Гипотеза перевернулась в процессе.** Первоначально (со всей разведки 10/10 UI-dump): «новый pre-Share экран Добавить значок ИИ блокирует Share». **Опровергнуто** при разборе скринкастов: «Добавить значок ИИ» = inline-опция Reels editor рядом с «Отметить людей»/«Добавить место», toggle серый/выключен по умолчанию, Share-кнопка активна, ничего не блокирует.
+
+**Реальный root cause** (3/3 проверенных скринкастов 11660/11472/11646 = Reels feed с нашим контентом на финале, caption совпадает = пост опубликован): false-negative от **stale uiautomator + долгий transit ModalActivity → Reels feed (>30s pre-Tier1 probe deadline)**. Это рецидив паттерна WP #131 (TT) / WP #105 (IG) для share-tap. WP #73 фиксил похожий случай через `InstagramMainActivity` в `SUCCESS_ACT_TOKENS`, но не покрыл сценарий долгого transit.
+
+**Решение.** Post-mortem success probe в `_wait_instagram_upload` перед записью `ig_share_tap_no_progress`: polling `dumpsys activity` 20s grace / 5s poll. Decision-логика — отрицательная сигнатура: IG в foreground И не `ModalActivity` И не `creation.activity.*` (через helper `_is_ig_post_share_progressed`). Если transit подтверждён → info-event `ig_share_postmortem_success` + fall-through в основной success-loop (url-poller WP #86 подберёт URL). Kill-switch `IG_SHARE_NO_PROGRESS_POSTMORTEM_PROBE_ENABLED` (default true), `IG_SHARE_POSTMORTEM_GRACE_S=20`, `IG_SHARE_POSTMORTEM_POLL_S=5`. `_safe_float_env` с try/except + clamp ≥0.1.
+
+**TDD-цепочка (subagent-driven).** Pre-flight + 6 tasks (helper + 3 behavior-теста + impl + regression+codex). 22/22 IG-тестов GREEN (5 unit + 3 behavior + 11 share_retry + 2 wait_upload_diag + 1 amended share_retry); 3 pre-existing red в `test_publisher_ig_camera_recovery.py` + `test_publisher_intermediate_probes.py` существовали на main до WP#181 (вне нашей области). Codex review 3 раунда: 0 P1 / 0 P2 / 0 P3.
+
+**Деплой.** `feat/wp181-ig-share-postmortem` push → ff-merge в `delivery-contenthunter` main (`4609ab4..521ce12`) → `git pull` в `/root/.openclaw/workspace-genri/autowarm/` → `sudo pm2 restart autowarm` (id 35). Процесс up без env-warning'ов, активные публикации идут. Spec+plan в `contenthunter` main (`da66259..eaf8f45`).
+
+**Остаток / out-of-scope.** ~12-24ч мониторинг метрик: `ig_share_postmortem_success` count + падение `ig_share_tap_no_progress` от baseline (27.05=45, 28.05/неполн=12). Sample-валидация 5 случайных задач с `ig_share_postmortem_success` — проверить наличие поста в IG-аккаунте → OP#181 → «Готово». Откат: `IG_SHARE_NO_PROGRESS_POSTMORTEM_PROBE_ENABLED=false` в `.env` + `pm2 restart`. **Задача 11459** (Search-экран на финале, не Reels feed) — отдельный сценарий, возможно реальный fail, не блокер.
+
+Evidence: spec `docs/superpowers/specs/2026-05-28-wp181-ig-share-no-progress-postmortem-design.md`, plan `docs/superpowers/plans/2026-05-28-wp181-ig-share-postmortem-probe.md`. Память: `project_wp181_ig_ai_label_overlay` (имя файла стало misleading после смены гипотезы, контент актуальный — переименовать при следующем правке). Урок: гипотеза по UI-dump оказалась red herring; проверка скринкастов «что на финале» с самого начала сэкономила бы 1 итерацию дизайна.
+
 ## 2026-05-26 — WP #149: Anecole не публикуется с 6 мая (битый SVG-ассет в схемах 4/5)
 
 ### ✅ ЗАКРЫТА 2026-05-26 — OpenProject #149 → Тестирование; кода не писали (первопричина устранена ранее + проверено re-queue)
