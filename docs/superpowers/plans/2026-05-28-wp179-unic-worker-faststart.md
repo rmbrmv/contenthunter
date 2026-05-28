@@ -49,8 +49,12 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 import worker  # noqa: E402
 
 
-def atom_offsets(path: str, max_bytes: int = 4096) -> dict[str, int]:
-    """Возвращает {atom_name: offset_in_file} для top-level ISOBMFF атомов из первых max_bytes."""
+def atom_offsets(path: str, max_bytes: int = 1024 * 1024) -> dict[str, int]:
+    """Возвращает {atom_name: offset_in_file} для top-level ISOBMFF атомов в первых max_bytes.
+
+    Окно 1MB достаточно для любого реалистичного moov atom (типично <100KB), что-бы
+    канарейка не ложно-фейлила для faststart-файлов с большим moov, у которых mdat
+    легитимно начинается после первых 4KB."""
     with open(path, "rb") as f:
         data = f.read(max_bytes)
     result: dict[str, int] = {}
@@ -86,12 +90,18 @@ def test_moov_before_mdat(monkeypatch, tmp_path):
     seed = _make_seed(str(tmp_path))
     out = worker.create_final_output(seed, scheme_id=0, base_name="ff_canary")
     atoms = atom_offsets(out)
-    assert "moov" in atoms, f"moov atom not in first 4KB: {atoms}"
-    assert "mdat" in atoms, f"mdat atom not in first 4KB: {atoms}"
-    assert atoms["moov"] < atoms["mdat"], (
-        f"moov должен быть раньше mdat для faststart-ready mp4. "
-        f"Текущий порядок: {sorted(atoms.items(), key=lambda kv: kv[1])}"
+    assert "moov" in atoms, (
+        f"moov atom не найден в первых 1MB финального output: {atoms}. "
+        f"Похоже, ffmpeg не вставил moov upfront (-movflags +faststart)."
     )
+    # Faststart-валидный output: либо mdat виден в окне И moov раньше mdat,
+    # либо mdat ещё не виден (moov достаточно большой и упёрся бы за окно — но
+    # сама вершина moov уже raньше любых данных, что нам и нужно).
+    if "mdat" in atoms:
+        assert atoms["moov"] < atoms["mdat"], (
+            f"moov должен быть раньше mdat для faststart-ready mp4. "
+            f"Текущий порядок: {sorted(atoms.items(), key=lambda kv: kv[1])}"
+        )
 ```
 
 - [ ] **Step 2: Запустить тест — должен УПАСТЬ**
