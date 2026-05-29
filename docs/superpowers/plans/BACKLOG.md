@@ -2,7 +2,7 @@
 
 ## 2026-05-29 — WP #187: кнопка «Выложено авто» + «Отменить» для ручной выкладки
 
-### ✅ SHIPPED+DEPLOYED 2026-05-29 — OpenProject #187 → Тестирование; impl на main `delivery-contenthunter` `f38bf15`, прод pulled (FF) + PM2 id35 restart
+### ✅ SHIPPED+DEPLOYED+VERIFIED 2026-05-29 — OpenProject #187 → Готово; impl на main `delivery-contenthunter` `f38bf15`, прод pulled (FF) + PM2 id35 restart
 
 Проблема (от Анастасии, мокап во вложении): на ручную выкладку периодически попадают слоты, фактически уже выложенные автовыкладкой (false-negative хэндофф). Честно закрыть нечем — «Отметить выложенным» требует ссылку и засчитывает как ручную, раздувая метрику ручного труда; иначе пак висит.
 
@@ -12,7 +12,7 @@
 
 29/29 тестов GREEN; `codex review` 5 раундов → 0 P1/P2 (закрыты: двойной счёт, дубль-импорт, редиспатч, slot-only over-match, manual_inflight; остался 1 P3 — косметика `gapAuto` в диагностической строке, принят). Защита от редиспатча = существующий `manual_handoff_at` (retry берёт только `status='failed' AND manual_handoff_at IS NULL`), НЕ `matched_post_url` (проверено). Спека+план: `docs/superpowers/{specs,plans}/2026-05-29-wp187-manual-publish-auto*`.
 
-**Осталось:** verify на боевой пачке (когда оператор реально нажмёт «Выложено авто») — что слот закрывается, пак→«Выложено», воронка считает как авто; kill-switch `MANUAL_PUBLISHED_AUTO_ENABLED=false` наготове.
+**VERIFIED:** Данил проверил в боевом UI 29.05 — кнопки, статус пака, бейдж корректны → «Готово». Kill-switch `MANUAL_PUBLISHED_AUTO_ENABLED=false` наготове при регрессе.
 
 ## 2026-05-29 — WP #192: YT `yt_editor_not_reached` (launcher-drift) — SHIPPED; follow-up по YT-хвосту
 
