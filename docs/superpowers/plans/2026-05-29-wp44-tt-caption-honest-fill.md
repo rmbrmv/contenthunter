@@ -146,6 +146,15 @@ def test_focused_false_when_neither_signal_present(tt_mixin_stub):
     s._is_keyboard_shown = MagicMock(return_value=False)
     s.adb = MagicMock(return_value='mInputShown=false')
     assert s._tiktok_caption_field_focused() is False
+
+
+def test_focused_false_when_other_true_flag_on_same_line(tt_mixin_stub):
+    """mInputShown=false but another flag on the line is true → must NOT be
+    treated as focused (codex P1: parse mInputShown specifically)."""
+    s = tt_mixin_stub
+    s._is_keyboard_shown = MagicMock(return_value=False)
+    s.adb = MagicMock(return_value='mInputShown=false mSystemReady=true')
+    assert s._tiktok_caption_field_focused() is False
 ```
 
 - [ ] **Step 2: Run test to verify it fails**
@@ -173,13 +182,16 @@ Add to `TikTokMixin` in `publisher_tiktok.py` (place just above `publish_tiktok`
             'dumpsys input_method 2>/dev/null | grep -i "mInputShown" | head -1',
             timeout=5,
         ) or ''
-        return 'true' in ime
+        # Parse the mInputShown value specifically — a bare `true in line`
+        # check false-positives when another `...=true` flag shares the line
+        # (codex P1). Normalize spaces + case before matching.
+        return 'minputshown=true' in ime.lower().replace(' ', '')
 ```
 
 - [ ] **Step 4: Run test to verify it passes**
 
 Run: `cd /home/claude-user/autowarm-testbench && python -m pytest tests/test_publisher_tt_caption_focus_gate.py -v`
-Expected: 3 passed
+Expected: 4 passed
 
 - [ ] **Step 5: Commit**
 
@@ -260,13 +272,25 @@ def test_fill_killswitch_off_keeps_legacy_blind_type(tt_mixin_stub, monkeypatch)
     s = _fill_stub(tt_mixin_stub, monkeypatch, focused=False)
     result = s._fill_tiktok_caption()
     assert result is True, 'OFF → legacy: не валим задачу'
-    assert s.adb_text.called, 'OFF → legacy: печатаем как раньше'
+    assert s.adb_text.called, 'OFF → legacy: печатаем как раньше (экран описания найден)'
+
+
+def test_fill_fails_when_focused_but_desc_screen_not_found(tt_mixin_stub, monkeypatch):
+    """codex P1: IME может быть открыт на ДРУГОМ экране (поиск/иное поле).
+    Без распознанного экрана описания печатать нельзя даже при focused=True."""
+    s = _fill_stub(tt_mixin_stub, monkeypatch, focused=True)
+    s.dump_ui = MagicMock(return_value='<hierarchy/>')  # нет маркеров экрана описания
+    result = s._fill_tiktok_caption()
+    assert result is False, 'Фокус без экрана описания → честный фейл'
+    assert not s.adb_text.called, 'Не печатаем вне экрана описания'
+    cats = [(c.kwargs.get('meta') or {}).get('category') for c in s.log_event.call_args_list]
+    assert 'tt_caption_field_not_focused' in cats
 ```
 
 - [ ] **Step 2: Run tests to verify they fail**
 
 Run: `cd /home/claude-user/autowarm-testbench && python -m pytest tests/test_publisher_tt_caption_focus_gate.py -v`
-Expected: the 5 new tests FAIL — `AttributeError: ... '_fill_tiktok_caption'`
+Expected: the 6 new tests FAIL — `AttributeError: ... '_fill_tiktok_caption'`
 
 - [ ] **Step 3: Write the implementation**
 
@@ -331,24 +355,33 @@ Add to `TikTokMixin` in `publisher_tiktok.py` (just below `_tiktok_caption_field
             time.sleep(2)
 
         # === WP#44 focus gate ===
+        # Success requires BOTH: the description screen was recognized AND the
+        # field is confirmed focused. Focus alone is insufficient — the IME may
+        # be open on another screen (search/other field), which would recreate
+        # the blind-type bug (codex P1).
         focused = self._tiktok_caption_field_focused()
-        if focused:
+        if desc_found and focused:
             self.adb_text(caption)
             time.sleep(1)
             log.info(f'  ✅ TikTok: caption введён (фокус подтверждён, {len(caption)} символов)')
             self.log_event('info', f'TikTok: caption введён (фокус подтверждён, {len(caption)} символов)')
             return True
 
-        # Not focused — never reached caption field or field never took focus.
         if not gate_enabled:
-            # Legacy behavior (kill-switch OFF): type blindly, report success.
-            self.adb_text(caption)
-            time.sleep(1)
-            log.warning(f'  ⚠️ TikTok: caption введён БЕЗ подтверждения фокуса (gate OFF, {len(caption)} символов)')
-            self.log_event('warning', 'TikTok: caption введён без подтверждения фокуса (gate OFF)')
+            # Legacy behavior (kill-switch OFF): restore the prior path —
+            # typed when the desc screen was found (regardless of focus) and
+            # never aborted publishing.
+            if desc_found:
+                self.adb_text(caption)
+                time.sleep(1)
+                log.warning(f'  ⚠️ TikTok: caption введён БЕЗ подтверждения фокуса (gate OFF, {len(caption)} символов)')
+                self.log_event('warning', 'TikTok: caption введён без подтверждения фокуса (gate OFF)')
+            else:
+                log.warning('  Шаг 4: экран описания не найден — продолжаем без caption (gate OFF)')
             return True
 
-        log.error('  ❌ TikTok: поле описания не сфокусировано — НЕ печатаем вслепую (честный фейл)')
+        # Gate ON and not (desc_found AND focused) → honest fail, no blind type.
+        log.error('  ❌ TikTok: экран описания/фокус не подтверждены — НЕ печатаем вслепую (честный фейл)')
         self.log_event(
             'error',
             'TikTok: поле описания не сфокусировано — описание не введено',
@@ -369,7 +402,7 @@ Add to `TikTokMixin` in `publisher_tiktok.py` (just below `_tiktok_caption_field
 - [ ] **Step 4: Run tests to verify they pass**
 
 Run: `cd /home/claude-user/autowarm-testbench && python -m pytest tests/test_publisher_tt_caption_focus_gate.py -v`
-Expected: 8 passed (3 from Task 2 + 5 here)
+Expected: 10 passed (4 from Task 2 + 6 here)
 
 - [ ] **Step 5: Commit**
 
@@ -414,7 +447,7 @@ Expected: no output (the old silent-continue path is removed).
 - [ ] **Step 4: Run the focus-gate test suite again (regression check)**
 
 Run: `cd /home/claude-user/autowarm-testbench && python -m pytest tests/test_publisher_tt_caption_focus_gate.py -v`
-Expected: 8 passed
+Expected: 10 passed
 
 - [ ] **Step 5: Commit**
 
