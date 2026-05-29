@@ -629,30 +629,47 @@ def test_format_code_used_for_serialization():
 Run: `cd /home/claude-user/validator-contenthunter/backend && python -m pytest tests/test_wp174_content_codes.py::test_format_code_used_for_serialization -v`
 Expected: PASS.
 
-- [ ] **Step 3: Добавить `code` в сериализацию**
+- [ ] **Step 3a: Сделать сериализатор fail-closed (opt-in `include_code`)**
 
-В `_content_to_dict_with_publish` (async, есть `db` и `c`): после формирования базового `d`, добавить вычисление кода. Префикс берём по `c.project_id`:
+Код — admin-only поле. `_content_to_dict_with_publish` используется и клиентскими, и админскими эндпоинтами, поэтому код добавляем **только по явному запросу** (по умолчанию скрыт — fail-closed).
+
+Изменить сигнатуру `_content_to_dict_with_publish` (строка ~510):
 
 ```python
-    # WP#174 — полный код ролика (prefix + номер)
-    from ..services.prefix_service import format_code
-    prefix = (await db.execute(
-        text("SELECT code_prefix FROM validator_projects WHERE id=:id"),
-        {"id": c.project_id})).scalar()
-    d["code"] = format_code(prefix, c.code_number)
+async def _content_to_dict_with_publish(c, db, include_code: bool = False) -> dict:
+```
+
+После формирования базового `d`, перед `return d`, добавить:
+
+```python
+    # WP#174 — полный код ролика (prefix + номер). Admin-only: только при include_code.
+    if include_code:
+        from ..services.prefix_service import format_code
+        prefix = (await db.execute(
+            text("SELECT code_prefix FROM validator_projects WHERE id=:id"),
+            {"id": c.project_id})).scalar()
+        d["code"] = format_code(prefix, c.code_number)
 ```
 
 Если `text` не импортирован в `content.py` — добавить `from sqlalchemy import text`.
 
-> **Role-check:** код виден всем, КТО получает админскую сериализацию. В клиентском планировщике контент сериализуется тем же `_content_to_dict_with_publish`; чтобы скрыть код у клиента — на уровне endpoint, отдающего клиенту, удалить ключ: `if current_user.role.value == "client": d.pop("code", None)`. Применить в endpoints `content.py`, отдающих список клиенту (там, где есть `current_user`).
+- [ ] **Step 3b: Включить код только в admin-вызовах**
 
-- [ ] **Step 4: Endpoint-тест — админ видит code, клиент нет**
+Найти ВСЕ вызовы хелпера: `grep -n "_content_to_dict_with_publish(" backend/src/routers/content.py` (строки ~91, 140, 228, 270, 352, 448). Для каждого, где в области видимости есть `current_user`, передать флаг по роли:
+
+```python
+    _content_to_dict_with_publish(c, db, include_code=(current_user.role.value == "admin"))
+```
+
+Где `current_user` НЕ в области видимости — оставить вызов без флага (код останется скрыт; fail-closed). Это гарантирует: клиент (role=`client`) кода не получает ни через один путь.
+
+- [ ] **Step 4: Endpoint-тест — admin видит code, не-admin нет**
 
 ```python
 # Добавить в backend/tests/test_wp174_content_codes.py
 @pytest.mark.asyncio
-async def test_content_code_in_admin_serialization():
-    # Берём существующий контент с известным project_id, у которого есть префикс+номер.
+async def test_content_code_admin_only_serialization():
+    # Берём существующий контент с присвоенным кодом.
     async with async_session() as db:
         row = (await db.execute(text(
             "SELECT vc.id FROM validator_content vc "
@@ -663,8 +680,12 @@ async def test_content_code_in_admin_serialization():
         from src.routers.content import _content_to_dict_with_publish
         from src.models.content import ValidatorContent
         c = await db.get(ValidatorContent, row[0])
-        d = await _content_to_dict_with_publish(c, db)
-        assert d["code"] and "-" in d["code"]
+        # admin (include_code=True) — код есть
+        d_admin = await _content_to_dict_with_publish(c, db, include_code=True)
+        assert d_admin["code"] and "-" in d_admin["code"]
+        # клиент (include_code=False, дефолт) — ключа code нет
+        d_client = await _content_to_dict_with_publish(c, db)
+        assert "code" not in d_client
 ```
 
 Run: `cd /home/claude-user/validator-contenthunter/backend && python -m pytest tests/test_wp174_content_codes.py -v`
