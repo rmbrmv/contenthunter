@@ -299,7 +299,10 @@ def _setup(monkeypatch, role=UserRole.admin):
     monkeypatch.setattr(uc, "_upload_bytes_to_s3", _mock_upload)
     monkeypatch.setattr(uc, "get_public_url", lambda key: f"https://cdn.example/{key}")
     app.dependency_overrides[get_current_user] = lambda: _fake_user(role)
-    app.dependency_overrides[get_db] = lambda: _gen_db()
+    # ВАЖНО: регистрируем генератор-функцию НАПРЯМУЮ (не lambda: _gen_db()).
+    # Иначе FastAPI не распознает её как generator-зависимость, и в `db` попадёт
+    # сам объект-генератор → `await db.execute(...)` упадёт «не по той причине».
+    app.dependency_overrides[get_db] = _gen_db
     return captured
 
 
