@@ -11,10 +11,10 @@
 **Spec:** `docs/superpowers/specs/2026-05-29-wp174-part-a-content-codes-design.md`
 
 **Репозитории:**
-- Валидатор: `/home/claude-user/validator-contenthunter/backend`
+- Валидатор: `/home/claude-user/validator-contenthunter-wp174-codes/backend`
 - Delivery: `/home/claude-user/autowarm-testbench` (origin = `delivery-contenthunter`)
 
-**Команда тестов (валидатор):** `cd /home/claude-user/validator-contenthunter/backend && python -m pytest <путь> -v` (тесты ходят в живую БД; `conftest.py` диспоузит engine между тестами).
+**Команда тестов (валидатор):** `cd /home/claude-user/validator-contenthunter-wp174-codes/backend && python -m pytest <путь> -v` (тесты ходят в живую БД; `conftest.py` диспоузит engine между тестами).
 
 **psql:** перед командами `psql`/`PGPASSWORD` экспортировать пароль из локального секрета (не хранить в репозитории): `export PGPASSWORD=<openclaw-пароль из локальной конфигурации>`.
 
@@ -39,7 +39,7 @@
 ## Task 1: Миграция схемы
 
 **Files:**
-- Create: `backend/alembic/versions/008_wp174_content_codes.py`
+- Create: `backend/alembic/versions/009_wp174_content_codes.py`
 - Modify: `backend/src/models/content.py` (ORM-колонка `code_number`)
 
 - [ ] **Step 1: Написать миграцию**
@@ -47,14 +47,14 @@
 ```python
 """WP #174 Часть A: коды роликов — code_prefix/code_seq на проекте, code_number на контенте
 
-Revision ID: 008
-Revises: 007
+Revision ID: 009
+Revises: 008
 Create Date: 2026-05-29
 """
 from alembic import op
 
-revision = '008'
-down_revision = '007'
+revision = '009'
+down_revision = '008'
 branch_labels = None
 depends_on = None
 
@@ -89,8 +89,8 @@ def downgrade() -> None:
 
 - [ ] **Step 2: Применить миграцию**
 
-Run: `cd /home/claude-user/validator-contenthunter/backend && alembic upgrade head`
-Expected: `Running upgrade 007 -> 008`
+Run: `cd /home/claude-user/validator-contenthunter-wp174-codes/backend && alembic upgrade head`
+Expected: `Running upgrade 008 -> 009`
 
 - [ ] **Step 3: Проверить колонки**
 
@@ -112,7 +112,7 @@ Expected: обе колонки присутствуют; индекс `uq_valid
 - [ ] **Step 5: Commit**
 
 ```bash
-cd /home/claude-user/validator-contenthunter/backend
+cd /home/claude-user/validator-contenthunter-wp174-codes/backend
 git add alembic/versions/008_wp174_content_codes.py src/models/content.py
 git commit -m "feat(wp174): миграция + ORM-колонка code_number — code_prefix/code_seq/code_number"
 ```
@@ -163,7 +163,7 @@ def test_format_code_padding():
 
 - [ ] **Step 2: Запустить — убедиться, что падает**
 
-Run: `cd /home/claude-user/validator-contenthunter/backend && python -m pytest tests/test_wp174_content_codes.py -v`
+Run: `cd /home/claude-user/validator-contenthunter-wp174-codes/backend && python -m pytest tests/test_wp174_content_codes.py -v`
 Expected: FAIL (ModuleNotFoundError: prefix_service).
 
 - [ ] **Step 3: Реализовать pure-функции**
@@ -222,13 +222,13 @@ def format_code(prefix, number) -> str | None:
 
 - [ ] **Step 4: Запустить — убедиться, что проходит**
 
-Run: `cd /home/claude-user/validator-contenthunter/backend && python -m pytest tests/test_wp174_content_codes.py -v`
+Run: `cd /home/claude-user/validator-contenthunter-wp174-codes/backend && python -m pytest tests/test_wp174_content_codes.py -v`
 Expected: PASS (4 теста).
 
 - [ ] **Step 5: Commit**
 
 ```bash
-cd /home/claude-user/validator-contenthunter/backend
+cd /home/claude-user/validator-contenthunter-wp174-codes/backend
 git add src/services/prefix_service.py tests/test_wp174_content_codes.py
 git commit -m "feat(wp174): prefix_service — генерация префикса + format_code (pure)"
 ```
@@ -280,7 +280,7 @@ async def test_ensure_prefix_and_assign_code_sequence():
 
 - [ ] **Step 2: Запустить — убедиться, что падает**
 
-Run: `cd /home/claude-user/validator-contenthunter/backend && python -m pytest tests/test_wp174_content_codes.py::test_ensure_prefix_and_assign_code_sequence -v`
+Run: `cd /home/claude-user/validator-contenthunter-wp174-codes/backend && python -m pytest tests/test_wp174_content_codes.py::test_ensure_prefix_and_assign_code_sequence -v`
 Expected: FAIL (ImportError: ensure_project_prefix).
 
 - [ ] **Step 3: Реализовать DB-операции**
@@ -344,13 +344,13 @@ async def assign_content_code(db: AsyncSession, project_id: int) -> int:
 
 - [ ] **Step 4: Запустить — убедиться, что проходит**
 
-Run: `cd /home/claude-user/validator-contenthunter/backend && python -m pytest tests/test_wp174_content_codes.py -v`
+Run: `cd /home/claude-user/validator-contenthunter-wp174-codes/backend && python -m pytest tests/test_wp174_content_codes.py -v`
 Expected: PASS (все тесты).
 
 - [ ] **Step 5: Commit**
 
 ```bash
-cd /home/claude-user/validator-contenthunter/backend
+cd /home/claude-user/validator-contenthunter-wp174-codes/backend
 git add src/services/prefix_service.py tests/test_wp174_content_codes.py
 git commit -m "feat(wp174): ensure_project_prefix + assign_content_code (race-safe)"
 ```
@@ -391,7 +391,7 @@ async def test_projects_create_path_sets_prefix():
 
 - [ ] **Step 2: Запустить — убедиться, что падает**
 
-Run: `cd /home/claude-user/validator-contenthunter/backend && python -m pytest tests/test_wp174_content_codes.py::test_projects_create_path_sets_prefix -v`
+Run: `cd /home/claude-user/validator-contenthunter-wp174-codes/backend && python -m pytest tests/test_wp174_content_codes.py::test_projects_create_path_sets_prefix -v`
 Expected: FAIL (code_prefix is None).
 
 - [ ] **Step 3a: Хук в `projects.py::create_project`**
@@ -431,13 +431,13 @@ async def create_project(
 
 - [ ] **Step 4: Запустить тест**
 
-Run: `cd /home/claude-user/validator-contenthunter/backend && python -m pytest tests/test_wp174_content_codes.py -v`
+Run: `cd /home/claude-user/validator-contenthunter-wp174-codes/backend && python -m pytest tests/test_wp174_content_codes.py -v`
 Expected: PASS.
 
 - [ ] **Step 5: Commit**
 
 ```bash
-cd /home/claude-user/validator-contenthunter/backend
+cd /home/claude-user/validator-contenthunter-wp174-codes/backend
 git add src/routers/projects.py src/routers/clients.py tests/test_wp174_content_codes.py
 git commit -m "feat(wp174): авто-генерация префикса в обоих путях создания проекта"
 ```
@@ -478,7 +478,7 @@ async def test_assign_code_to_two_contents_increments():
 
 - [ ] **Step 2: Запустить — зелёный**
 
-Run: `cd /home/claude-user/validator-contenthunter/backend && python -m pytest tests/test_wp174_content_codes.py::test_assign_code_to_two_contents_increments -v`
+Run: `cd /home/claude-user/validator-contenthunter-wp174-codes/backend && python -m pytest tests/test_wp174_content_codes.py::test_assign_code_to_two_contents_increments -v`
 Expected: PASS.
 
 - [ ] **Step 3: Вставить вызов во все 4 точки**
@@ -495,7 +495,7 @@ Expected: PASS.
 
 - [ ] **Step 4: Smoke — загрузка проставляет code_number**
 
-Run: `cd /home/claude-user/validator-contenthunter/backend && python -m pytest tests/test_content_publish_response.py -v`
+Run: `cd /home/claude-user/validator-contenthunter-wp174-codes/backend && python -m pytest tests/test_content_publish_response.py -v`
 Expected: PASS (существующий тест загрузки не сломан).
 
 Дополнительно проверить вручную (если есть смок-загрузка): свежий `validator_content.code_number` не NULL для нового проекта с префиксом.
@@ -503,7 +503,7 @@ Expected: PASS (существующий тест загрузки не слом
 - [ ] **Step 5: Commit**
 
 ```bash
-cd /home/claude-user/validator-contenthunter/backend
+cd /home/claude-user/validator-contenthunter-wp174-codes/backend
 git add src/routers/upload.py tests/test_wp174_content_codes.py
 git commit -m "feat(wp174): авто-присвоение code_number в 4 точках upload.py"
 ```
@@ -575,7 +575,7 @@ async def test_prefix_override_validation_and_unique():
 
 - [ ] **Step 2: Запустить — падает**
 
-Run: `cd /home/claude-user/validator-contenthunter/backend && python -m pytest tests/test_wp174_content_codes.py::test_prefix_override_validation_and_unique -v`
+Run: `cd /home/claude-user/validator-contenthunter-wp174-codes/backend && python -m pytest tests/test_wp174_content_codes.py::test_prefix_override_validation_and_unique -v`
 Expected: FAIL (ProjectBody без `prefix` / нет валидации).
 
 - [ ] **Step 3a: Добавить `prefix` в `ProjectBody`**
@@ -629,13 +629,13 @@ Expected: FAIL (ProjectBody без `prefix` / нет валидации).
 
 - [ ] **Step 4: Запустить тест**
 
-Run: `cd /home/claude-user/validator-contenthunter/backend && python -m pytest tests/test_wp174_content_codes.py -v`
+Run: `cd /home/claude-user/validator-contenthunter-wp174-codes/backend && python -m pytest tests/test_wp174_content_codes.py -v`
 Expected: PASS.
 
 - [ ] **Step 5: Commit**
 
 ```bash
-cd /home/claude-user/validator-contenthunter/backend
+cd /home/claude-user/validator-contenthunter-wp174-codes/backend
 git add src/routers/projects.py tests/test_wp174_content_codes.py
 git commit -m "feat(wp174): ручной override префикса (валидация+UNIQUE) + code_prefix в list_projects"
 ```
@@ -661,7 +661,7 @@ def test_format_code_used_for_serialization():
 
 - [ ] **Step 2: Запустить — зелёный**
 
-Run: `cd /home/claude-user/validator-contenthunter/backend && python -m pytest tests/test_wp174_content_codes.py::test_format_code_used_for_serialization -v`
+Run: `cd /home/claude-user/validator-contenthunter-wp174-codes/backend && python -m pytest tests/test_wp174_content_codes.py::test_format_code_used_for_serialization -v`
 Expected: PASS.
 
 - [ ] **Step 3a: Сделать сериализатор fail-closed (opt-in `include_code`)**
@@ -723,13 +723,13 @@ async def test_content_code_admin_only_serialization():
         assert "code" not in d_client
 ```
 
-Run: `cd /home/claude-user/validator-contenthunter/backend && python -m pytest tests/test_wp174_content_codes.py -v`
+Run: `cd /home/claude-user/validator-contenthunter-wp174-codes/backend && python -m pytest tests/test_wp174_content_codes.py -v`
 Expected: PASS (или skip до бэкфилла).
 
 - [ ] **Step 5: Commit**
 
 ```bash
-cd /home/claude-user/validator-contenthunter/backend
+cd /home/claude-user/validator-contenthunter-wp174-codes/backend
 git add src/routers/content.py tests/test_wp174_content_codes.py
 git commit -m "feat(wp174): code в сериализации контента + role-check для клиента"
 ```
@@ -793,7 +793,7 @@ if __name__ == "__main__":
 
 - [ ] **Step 2: Dry-run на одном проекте (проверка идемпотентности)**
 
-Run (один прогон): `cd /home/claude-user/validator-contenthunter/backend && python -m scripts.backfill_content_codes`
+Run (один прогон): `cd /home/claude-user/validator-contenthunter-wp174-codes/backend && python -m scripts.backfill_content_codes`
 Expected: печатает присвоения, `backfill done`.
 
 - [ ] **Step 3: Повторный прогон — 0 изменений**
@@ -813,7 +813,7 @@ Expected: `0` (весь контент получил код).
 - [ ] **Step 5: Commit**
 
 ```bash
-cd /home/claude-user/validator-contenthunter/backend
+cd /home/claude-user/validator-contenthunter-wp174-codes/backend
 git add scripts/backfill_content_codes.py
 git commit -m "feat(wp174): идемпотентный бэкфилл кодов легаси-контента"
 ```
@@ -873,7 +873,7 @@ git commit -m "feat(wp174): колонка Код в админских табл
 
 ## Финал Части A
 
-- [ ] **Прогон всех новых тестов:** `cd /home/claude-user/validator-contenthunter/backend && python -m pytest tests/test_wp174_content_codes.py -v` → все PASS.
+- [ ] **Прогон всех новых тестов:** `cd /home/claude-user/validator-contenthunter-wp174-codes/backend && python -m pytest tests/test_wp174_content_codes.py -v` → все PASS.
 - [ ] **Регрессия:** `python -m pytest tests/test_content_publish_response.py tests/test_client_manual_publish.py -v` → без новых падений.
 - [ ] **Codex review** диффа Части A (по правилу проекта), раундами до 0 P1.
 - [ ] **Деплой-порядок (критично — бэкфилл ДО приёма загрузок):**
