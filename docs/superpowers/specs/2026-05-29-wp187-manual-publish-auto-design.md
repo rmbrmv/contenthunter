@@ -57,15 +57,12 @@ ck_manual_pub_status CHECK (operator_status = ANY (ARRAY['queued','in_progress',
 **`markPublishedAuto(pool, id, { postUrl })`** → новый эндпоинт `POST /api/publishing/manual-queue/:id/publish-auto`:
 - Предусловие: `operator_status='in_progress'` и `cancelled_at IS NULL` (как у `markPublished`); иначе `failTransition`.
 - `SET operator_status='published_auto', published_at=now(), post_url=$postUrl(nullable), updated_at=now()`.
-- Если `postUrl` задан → проставить `slot.matched_post_url`/`matched_at` по условию `matched_post_url IS NULL` (как в `markPublished`). Если не задан — слот не трогаем.
-- Всё в одной транзакции (`withTx`).
+- Опциональная ссылка пишется **только в строку очереди** (`post_url`, для отображения в карточке). `slot.matched_post_url` **НЕ трогаем** (codex P1: иначе слот цепляется к дисплейной метрике «реактивной ручной» выкладки). Один UPDATE — транзакция не нужна.
 
 **`cancelPublishedAuto(pool, id, userId)`** → новый эндпоинт `POST /api/publishing/manual-queue/:id/cancel-auto`:
 - Предусловие: `operator_status='published_auto'` и `cancelled_at IS NULL`; иначе `failTransition`.
-- Считать прежний `post_url` (FOR UPDATE).
 - `SET operator_status='in_progress', post_url=NULL, published_at=NULL, taken_by_id=$userId, taken_at=now(), updated_at=now()`.
-- Если ранее был проставлен `slot.matched_post_url` (равен старому `post_url`) → откатить в NULL (как `reworkItem`, по условию `matched_post_url IS NOT DISTINCT FROM $oldUrl`).
-- Всё в одной транзакции.
+- Слот при подтверждении не трогали → откатывать нечего. Один UPDATE.
 
 Серверные роуты — по образцу существующих в `server.js:5808/5816`, `userId` из `req.session.user.id`.
 
@@ -95,7 +92,7 @@ const pub = rows.filter(r => r.operator_status === 'published').length;
 
 ### 5. Воронка (`pipeline_funnel.js` + рендер в `index.html`)
 
-- Новый подсчёт `published_auto` (отдельный запрос либо ветка в Q2): `COUNT(*) ... WHERE operator_status='published_auto'`, якорь по `COALESCE(s.slot_date, m.planned_date)` в окне (как Q2).
+- Новый подсчёт `published_auto` в Q2: `COUNT(*) FILTER (WHERE operator_status='published_auto' AND NOT EXISTS(publish_queue ... status='done'))`, якорь по `COALESCE(s.slot_date, m.planned_date)` в окне. Дедуп `NOT EXISTS` (codex P1) исключает строки, уже учтённые в `auto_published`, — чтобы не было двойного счёта.
 - Отнести в **«Авто»**: в `assembleFunnel` ввести `auto_acknowledged`, и:
   - `lost_count = clamp0(plan - auto_published - auto_acknowledged - manual_published_total)`;
   - отображаемый авто-успех = `auto_published + auto_acknowledged` (в сверке и `sr_total`).

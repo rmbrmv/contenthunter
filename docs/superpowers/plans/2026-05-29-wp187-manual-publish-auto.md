@@ -104,17 +104,17 @@ test('markPublishedAuto: in_progress → published_auto без ссылки, с�
   assert.equal(out.operator_status, 'published_auto');
   assert.equal(out.post_url, null);
   const slot = await pool.query('SELECT matched_post_url FROM validator_schedule_slots WHERE id=$1', [SLOT]);
-  assert.equal(slot.rows[0].matched_post_url, null, 'без ссылки слот не размечается');
+  assert.equal(slot.rows[0].matched_post_url, null, 'слот не размечается');
 });
 
-test('markPublishedAuto: со ссылкой проставляет slot.matched_post_url', async () => {
+test('markPublishedAuto: ссылка пишется в строку очереди, НЕ в слот', async () => {
   await setup();
   await mpq.takeGroup(pool, RESULT, USER_A);
   const out = await mpq.markPublishedAuto(pool, Q_TT, { postUrl: 'https://tiktok.com/@x/video/1' });
   assert.equal(out.operator_status, 'published_auto');
   assert.equal(out.post_url, 'https://tiktok.com/@x/video/1');
   const slot = await pool.query('SELECT matched_post_url FROM validator_schedule_slots WHERE id=$1', [SLOT]);
-  assert.equal(slot.rows[0].matched_post_url, 'https://tiktok.com/@x/video/1');
+  assert.equal(slot.rows[0].matched_post_url, null, 'слот НЕ размечается даже при ссылке');
 });
 
 test('markPublishedAuto: из не-in_progress → 409', async () => {
@@ -122,7 +122,7 @@ test('markPublishedAuto: из не-in_progress → 409', async () => {
   await assert.rejects(() => mpq.markPublishedAuto(pool, Q_IG, {}), /Expected status 'in_progress'/);
 });
 
-test('cancelPublishedAuto: published_auto → in_progress, чистит url и слот, taken_by_id=userId', async () => {
+test('cancelPublishedAuto: published_auto → in_progress, чистит url, taken_by_id=userId', async () => {
   await setup();
   await mpq.takeGroup(pool, RESULT, USER_A);
   await mpq.markPublishedAuto(pool, Q_YT, { postUrl: 'https://youtube.com/shorts/zzz' });
@@ -130,8 +130,6 @@ test('cancelPublishedAuto: published_auto → in_progress, чистит url и �
   assert.equal(out.operator_status, 'in_progress');
   assert.equal(out.post_url, null);
   assert.equal(out.taken_by, 'wp123_anna');
-  const slot = await pool.query('SELECT matched_post_url FROM validator_schedule_slots WHERE id=$1', [SLOT]);
-  assert.equal(slot.rows[0].matched_post_url, null, 'слот откатан');
 });
 
 test('cancelPublishedAuto: из не-published_auto → 409', async () => {
@@ -151,48 +149,31 @@ Expected: FAIL — `mpq.markPublishedAuto is not a function`.
 В `manual_publish_queue.js` после функции `reworkItem` (строка ~148) вставить:
 ```js
 // WP#187: оператор подтверждает, что слот уже выложен автовыкладкой.
-// Терминальный статус published_auto. Ссылка опциональна: если задана — размечаем слот
-// (как markPublished), иначе слот не трогаем. Транзакция (queue + опц. slot).
+// Терминальный статус published_auto. Ссылка опциональна и пишется ТОЛЬКО в строку
+// очереди (post_url) для отображения — slot.matched_post_url НЕ трогаем (codex P1:
+// иначе слот цепляется к дисплейной метрике «реактивной ручной»). Один UPDATE —
+// транзакция не нужна (в отличие от markPublished/reworkItem, что писали и в слот).
 async function markPublishedAuto(pool, id, { postUrl } = {}) {
   const url = postUrl && String(postUrl).trim() ? String(postUrl).trim() : null;
-  await withTx(pool, async (c) => {
-    const { rows } = await c.query(`
-      UPDATE validator_manual_publish_queue
-      SET operator_status='published_auto', published_at=now(), post_url=$2, updated_at=now()
-      WHERE id=$1 AND operator_status='in_progress' AND cancelled_at IS NULL
-      RETURNING slot_id`, [id, url]);
-    if (!rows.length) await failTransition(c, id, 'in_progress');
-    if (url) {
-      await c.query(`
-        UPDATE validator_schedule_slots
-        SET matched_post_url=$1, matched_at=now(), updated_at=now()
-        WHERE id=$2 AND matched_post_url IS NULL`, [url, rows[0].slot_id]);
-    }
-  });
+  const { rows } = await pool.query(`
+    UPDATE validator_manual_publish_queue
+    SET operator_status='published_auto', published_at=now(), post_url=$2, updated_at=now()
+    WHERE id=$1 AND operator_status='in_progress' AND cancelled_at IS NULL
+    RETURNING id`, [id, url]);
+  if (!rows.length) await failTransition(pool, id, 'in_progress');
   return getItem(pool, id);
 }
 
 // WP#187: отмена ошибочного «Выложено авто» — возврат в in_progress у текущего оператора.
-// Если ранее проставили slot.matched_post_url (была ссылка) — откатываем (как reworkItem).
+// Слот не трогали при подтверждении → откатывать нечего; чистим только строку очереди.
 async function cancelPublishedAuto(pool, id, userId) {
-  await withTx(pool, async (c) => {
-    const cur = await c.query(
-      'SELECT post_url FROM validator_manual_publish_queue WHERE id=$1 FOR UPDATE', [id]);
-    const oldUrl = cur.rows.length ? cur.rows[0].post_url : null;
-    const { rows } = await c.query(`
-      UPDATE validator_manual_publish_queue
-      SET operator_status='in_progress', post_url=NULL, published_at=NULL,
-          taken_by_id=$2, taken_at=now(), updated_at=now()
-      WHERE id=$1 AND operator_status='published_auto' AND cancelled_at IS NULL
-      RETURNING slot_id`, [id, userId]);
-    if (!rows.length) await failTransition(c, id, 'published_auto');
-    if (oldUrl) {
-      await c.query(`
-        UPDATE validator_schedule_slots
-        SET matched_post_url=NULL, matched_at=NULL, updated_at=now()
-        WHERE id=$1 AND matched_post_url IS NOT DISTINCT FROM $2`, [rows[0].slot_id, oldUrl]);
-    }
-  });
+  const { rows } = await pool.query(`
+    UPDATE validator_manual_publish_queue
+    SET operator_status='in_progress', post_url=NULL, published_at=NULL,
+        taken_by_id=$2, taken_at=now(), updated_at=now()
+    WHERE id=$1 AND operator_status='published_auto' AND cancelled_at IS NULL
+    RETURNING id`, [id, userId]);
+  if (!rows.length) await failTransition(pool, id, 'published_auto');
   return getItem(pool, id);
 }
 ```
@@ -287,10 +268,12 @@ git commit -m "feat(wp187): роуты publish-auto/cancel-auto + kill-switch MA
 
 - [ ] **Step 1: Написать падающие тесты**
 
-Добавить в конец `test_mpq_pure.test.js`:
+Сначала добавить `mpqAgg` в существующую деструктуризацию импорта в шапке файла (строка 4):
 ```js
-const { mpqAgg } = require('./public/mpq_pure');
-
+const { mpqStatusVisible, mpqDiff, mpqPlatformVisible, mpqDateInRange, mpqCurrentWeekRange, mpqIsClaimable, mpqAgg } = require('./public/mpq_pure');
+```
+Затем добавить тесты в конец `test_mpq_pure.test.js` (отдельный `require` для `mpqAgg` НЕ добавлять — он уже в импорте выше):
+```js
 test('mpqAgg: все строки закрыты (published/published_auto) → published', () => {
   assert.equal(mpqAgg(['published', 'published_auto']), 'published');
   assert.equal(mpqAgg(['published_auto', 'published_auto']), 'published');
@@ -305,7 +288,6 @@ test('mpqAgg: есть in_progress без закрытых → in_progress; ин
   assert.equal(mpqAgg([]), 'queued');
 });
 ```
-И добавить `mpqAgg` в импорт-деструктуризацию в шапке файла (строка 4).
 
 - [ ] **Step 2: Запустить — падает**
 
@@ -520,12 +502,21 @@ Expected: PASS.
 
 - [ ] **Step 5: Подсчёт `auto_acknowledged` в Q2 + исключение из Q4**
 
-Заменить Q2 (строки 123–131) — считаем оба статуса:
+Заменить Q2 (строки 123–131) — считаем оба статуса. `auto_acknowledged` дедуплицируется
+против уже-авто-выложенных строк (codex P1): если для той же (unic_result × account × platform)
+есть `publish_queue.status='done'`, слот уже в `auto_published` — повторно не считаем.
 ```js
   const q2 = await pool.query(`
     SELECT
       COUNT(*) FILTER (WHERE m.operator_status = 'published')      AS manual_published_total,
-      COUNT(*) FILTER (WHERE m.operator_status = 'published_auto') AS auto_acknowledged
+      COUNT(*) FILTER (WHERE m.operator_status = 'published_auto'
+        AND NOT EXISTS (
+          SELECT 1 FROM publish_queue pq2
+          WHERE pq2.unic_result_id = m.unic_result_id
+            AND LOWER(pq2.account_username) = LOWER(m.account_username)
+            AND LOWER(pq2.platform) = LOWER(m.platform)
+            AND pq2.status = 'done')
+      ) AS auto_acknowledged
     FROM validator_manual_publish_queue m
     LEFT JOIN validator_schedule_slots s ON s.id = m.slot_id
     WHERE COALESCE(s.slot_date, m.planned_date) >= $1::date
