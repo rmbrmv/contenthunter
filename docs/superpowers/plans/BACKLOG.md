@@ -1,5 +1,15 @@
 # Backlog tickets
 
+## 2026-05-29 — WP #192: YT `yt_editor_not_reached` (launcher-drift) — SHIPPED; follow-up по YT-хвосту
+
+### ✅ SHIPPED+DEPLOYED 2026-05-29 — OpenProject #192 → Тестирование; impl на main `delivery-contenthunter` PR #125, прод `a37f299`
+
+Триаж YT-фейлов 29.05 (evidence `docs/evidence/2026-05-29-yt-fails-triage.md`): 12 фейлов = 9 `yt_accounts_btn_missing` (все estate-z5i, ночные ретраи, дамп `usable=true` = video-player overlay — **уже закрыт WP#180 iter2** `4642df2`, дубль не заводился) + 3 `yt_editor_not_reached` (3 акк/устройства). Корень editor_not_reached: после `Shell_UploadActivity` YouTube уходит в фон за время sleep+dialog-loop, на foreground всплывает Samsung launcher → `_verify_yt_editor_reached` фейлит fast. Фикс `_yt_recover_editor_from_launcher_drift` (рестарт upload-activity при fg=launcher), kill-switch `YT_EDITOR_LAUNCHER_DRIFT_RECOVERY_ENABLED` (default ON). 6 тестов GREEN, codex 0 findings. Evidence `docs/evidence/2026-05-29-wp192-yt-editor-launcher-drift.md`.
+
+### Follow-up: `yt_target_not_in_picker_after_scroll` (следующий YT-кандидат)
+
+За 7д (на 29.05) = 23 задачи, **7 уникальных аккаунтов / 7 устройств** — широкий, не account-specific, без открытого WP. За 29.05 — 0 (не попал в дневной триаж, который шёл по «за сегодня»). Если в ближайшие дни рецидивит — отдельная задача: разбор скринкастов + аккаунт-пикер scroll-логики (зеркало TT-truncation WP#163 / picker-структуры YT). Не блокер.
+
 ## 2026-05-28 — WP #181: IG `ig_share_tap_no_progress` (#1 топ-IG-фейл 99/7д) — post-mortem success probe
 
 ### ✅ SHIPPED+DEPLOYED 2026-05-28 — OpenProject #181 → Тестирование; impl на main `delivery-contenthunter` 521ce12, прод pulled + pm2 restart
