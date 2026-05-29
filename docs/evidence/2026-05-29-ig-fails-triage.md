@@ -74,3 +74,23 @@ WP#181 (OpenProject «Готово»): root = false-negative от stale uiautoma
 ## Артефакты
 - Скринкасты: task11711, task11632, task12027, task11893 (save.gengo.io/autowarm/screenrecords/instagram/).
 - UI-дампы: save.gengo.io/autowarm/ui_dumps/instagram/.
+
+## Исход (29.05)
+
+### WP#181 (ig_share_tap_no_progress) — ВЕРИФИЦИРОВАН PASS
+Post-mortem probe активен в прод с ночи 28→29.05 (~04:52). После активации **0**
+no_progress-фейлов; 5 реклассификаций `ig_share_postmortem_success` → post_url
+захвачен. Все 123 «фейла» в БД предшествовали активации (≤28.05 12:11). #181
+оставлен «Готово» + verify-комментарий.
+
+### WP#193 (ig_caption_screen_not_reached) — SHIPPED+DEPLOYED 29.05
+Фикс `_dismiss_ig_editor_interstitials` (publisher_instagram.py): ladder перед
+abort в `_fill_instagram_caption_and_publish` — промо «новой кнопкой камеры»→«Не
+сейчас»; Edits-промо→WP#61 `_dismiss_ig_edits_promo`; coach-mark→recovery-focus.
+Kill-switch `IG_CAPTION_INTERSTITIAL_DISMISS_ENABLED` (default on). 12 unit-тестов,
+369 passed (1 pre-existing fail camera_recovery не связан), codex 0 P1/P2.
+PR #126 → merged main `f4d3bb3`; прод `/root/.openclaw/workspace-genri/autowarm`
+FF-pull → f4d3bb3 (HEAD==origin/main, синтаксис OK, server.js не менялся →
+PM2-restart не нужен). OP#193 → «Тестирование». Verify: утренняя пачка — рост
+`ig_camera_button_promo_dismissed`/`ig_edits_promo_dismissed`, падение
+`ig_caption_screen_not_reached`.
