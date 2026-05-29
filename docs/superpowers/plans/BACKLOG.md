@@ -1,5 +1,25 @@
 # Backlog tickets
 
+## 2026-05-29 — WP #191: TikTok переключатель тапает «Заблокированные аккаунты» (substring-leak)
+
+### ✅ SHIPPED+DEPLOYED 2026-05-29 — OpenProject #191 → Тестирование; impl на main `delivery-contenthunter` `55bdbd9` (+doc `b67e088`), прод pulled (FF) + PM2 id35 restart (#29)
+
+Триаж падений TikTok за 29.05 (`publish_tasks`, 22 failed): **топ-1 причина `tt_drawer_tap_did_not_open_sheet` = 5/22 (≈23%)**, все clickpay-аккаунты (tasks 11919/11944/12019/12025/12038, 3 устройства). Кластер «переключение аккаунтов» в целом = 16/22 ≈ 73%.
+
+**Root cause (сошлись 4 источника).** В settings-фолбэке свитчера (`account_switcher.py::_run_tt_phase2_menu_path`) матчер `_find_tt_account_switcher_anchor_in_drawer` ищет точку входа **подстрокой** (`trigger in label.lower()`, строки 4975/4985). Триггер `'аккаунты'` (`TT_DRAWER_ACCOUNT_TRIGGERS`) ⊂ «заблокированные аккаунты» → на скролле страницы «Настройки и конфиденциальность» строка «Заблокированные аккаунты» (раздел Приватность) ошибочно опознаётся как переключатель и тапается → dead-end → шит не открывается. Доказано: UI-дампы шага `tt_3_open_list_sheet` у всех 5 = читаемая страница «Заблокированные аккаунты» (usable=False 8312b) + скринкаст 12038 висит на ней + предыдущие шаги usable=True + `sheet_open_signal=false`/`drawer_anchor_label=''` (Pass 2). Word-boundary НЕ помогает — «аккаунты» там целое слово.
+
+**Решение.** Blocklist `TT_DRAWER_DEADEND_SUBSTRINGS` (`заблокированные аккаунт`, `blocked account`) + `_tt_label_is_account_deadend` + skip в обоих pass-ах матчера. Kill-switch `TT_DRAWER_DEADEND_SKIP_ENABLED` (default ON; OFF = legacy). TDD: 7 unit-тестов (оба pass-а RU/EN, позитив «Сменить аккаунт»/«Управление аккаунтами», kill-switch). Регресс: 427 switcher/TT unit зелёных, 0 регрессий. Codex review: 0 P1.
+
+**Деплой.** Прод-autowarm `/root/.openclaw/workspace-genri/autowarm` (PM2 id35) FF к origin/main `b67e088`; флаг ON; PM2 id35 restart (#29, account_switcher импортируется воркером). Прод-HEAD сверен, import-smoke OK.
+
+**Остаток.**
+- Verify 24-48ч: 0 `tt_drawer_tap_did_not_open_sheet` с переходом на «Заблокированные аккаунты» на clickpay.
+- Остальной TT-кластер падений (не в scope #191): `tt_upload_confirmation_timeout` (3), `tt_account_not_in_list` (3, см. WP#163 truncation), `tt_account_sheet_closed_before_parse` (3, WP#182 на тестировании), `tt_fg_drift_unrecoverable` (2), `tt_switch_blocked` (2 = аккаунт забанен, не код). Наблюдать; отдельные WP при рецидиве.
+
+Evidence: `docs/evidence/2026-05-29-tt-publish-fails-triage.md` (+ `evidence/publish-triage/tt_blocked_accounts_substring-20260529.md` в autowarm). Память: `project_wp191_tt_blocked_accounts_substring`. Откат: `TT_DRAWER_DEADEND_SKIP_ENABLED=0`.
+
+---
+
 ## 2026-05-29 — WP #44 (iter2): TikTok публикуется БЕЗ описания — честный focus-gate
 
 ### ✅ SHIPPED+DEPLOYED 2026-05-29 — OpenProject #44 → Тестирование; impl на main `delivery-contenthunter` `b1ee6d2`, прод pulled (FF, без PM2-restart)
