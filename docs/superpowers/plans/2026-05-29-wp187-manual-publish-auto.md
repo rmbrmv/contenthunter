@@ -595,9 +595,11 @@ git commit -m "feat(wp187): рендер воронки — строка «по�
 
 ---
 
-## Task 8: Верификация смежных модулей (без правок кода)
+## Task 8: Верификация смежных модулей (защита от редиспатча)
 
-**Files:** проверка — `manual_queue_assign.js`, `server.js` (dispatch-гард ~6704)
+**Files:** проверка — `manual_queue_assign.js`, `server.js` (dispatch-гард ~6704), `retry_controller.js:49`
+
+> **Анализ редиспатча (codex P2).** `published_auto` намеренно не трогает `publish_queue`/`slot.matched_post_url`. Защита от повторной авто-выкладки реактивных строк — durable-маркер `manual_handoff_at` на строке `publish_queue`: он проставляется при хэндоффе (`retry_controller.js` handoffToManual / server.js) и НЕ очищается. `retry_controller` берёт в ретрай только `pq.status='failed' AND pq.manual_handoff_at IS NULL` → строка, отданная в ручную, исключена из ретрая навсегда, независимо от `operator_status`. То есть `matched_post_url` НЕ был защитой от редиспатча (он для расписания/воронки); защита = `manual_handoff_at`. Для проактивных ручных строк (без хэндоффа) экспозиция идентична существующему статусу `published` — нового регресса нет. Шаги ниже это подтверждают.
 
 - [ ] **Step 1: Populator не реквеуит `published_auto`**
 
@@ -616,6 +618,14 @@ Expected: видно `WHERE cancelled_at IS NULL DO NOTHING`. ✔ изменен
 grep -n "operator_status IN ('queued','in_progress')" server.js
 ```
 Expected: 2 совпадения, `published_auto` отсутствует. ✔ изменений не нужно.
+
+- [ ] **Step 2b: Durable-защита от редиспатча через `manual_handoff_at`**
+
+Подтвердить, что ретрай-контроллер durable-исключает отданные в ручную строки независимо от `operator_status`:
+```bash
+grep -n "status = 'failed' AND pq.manual_handoff_at IS NULL\|manual_handoff_at" retry_controller.js | head
+```
+Expected: SELECT-условие (строка ~49) содержит `pq.manual_handoff_at IS NULL` → строка с проставленным `manual_handoff_at` (реактивный хэндофф) в ретрай не попадёт. ✔ `published_auto` не открывает путь к дублю для реактивных строк; для проактивных — поведение как у `published` (без регресса).
 
 - [ ] **Step 3: Зафиксировать вывод в spec/evidence (опц.)**
 
