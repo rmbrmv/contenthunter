@@ -305,7 +305,10 @@ function _uploadUnicToS3(localPath, s3Key, contentType) {
   });
 }
 
-app.post('/api/unic-content/upload', requireAuth, express.json({ limit: '200mb' }), async (req, res) => {
+// Лимит парсера (180mb) — это потолок ВСЕГО запроса (base64 всех файлов ~×1.34 + overhead).
+// Per-file decoded cap ниже = 100 МБ, поэтому одиночный файл у потолка (~134mb base64) проходит
+// парсер с запасом до 180mb (codex P2: парсер должен быть выше декодированного cap).
+app.post('/api/unic-content/upload', requireAuth, express.json({ limit: '180mb' }), async (req, res) => {
   const { content_kind, usage_type, project_id, chromakey_color, files } = req.body || {};
   let cfg;
   try { cfg = unicMap.resolveKind(content_kind); }
@@ -330,7 +333,7 @@ app.post('/api/unic-content/upload', requireAuth, express.json({ limit: '200mb' 
       const b64 = String((f && f.data_b64) || '').replace(/^data:[^;]*;base64,/, '');
       const buf = Buffer.from(b64, 'base64');
       if (buf.length === 0) throw new Error(`Файл «${f.filename}» пустой или не прочитан`);
-      if (buf.length > 200 * 1024 * 1024) throw new Error(`Файл «${f.filename}» больше 200 МБ`);
+      if (buf.length > 100 * 1024 * 1024) throw new Error(`Файл «${f.filename}» больше 100 МБ`);
       tmp = path.join(os.tmpdir(), `unic_${crypto.randomUUID()}.${ext}`);
       fs.writeFileSync(tmp, buf);
       const key = unicMap.buildS3Key(cfg.folder, ext);
