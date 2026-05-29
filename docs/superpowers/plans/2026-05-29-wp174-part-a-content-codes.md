@@ -312,9 +312,18 @@ async def ensure_project_prefix(db: AsyncSession, project_id: int, project_name:
             continue
         try:
             async with db.begin_nested():  # SAVEPOINT изолирует возможный unique-конфликт
-                await db.execute(
-                    text("UPDATE validator_projects SET code_prefix=:p WHERE id=:id"),
+                res = await db.execute(
+                    text("UPDATE validator_projects SET code_prefix=:p "
+                         "WHERE id=:id AND code_prefix IS NULL"),
                     {"p": cand, "id": project_id})
+            if res.rowcount == 0:
+                # параллельный вызов для ЭТОГО ЖЕ проекта уже присвоил префикс — вернуть его
+                cur = (await db.execute(
+                    text("SELECT code_prefix FROM validator_projects WHERE id=:id"),
+                    {"id": project_id})).scalar()
+                if cur:
+                    return cur
+                continue  # строки нет/код всё ещё NULL по иной причине — следующий кандидат
             return cand
         except IntegrityError:
             # параллельная сессия заняла этот префикс между SELECT и UPDATE — берём следующий
