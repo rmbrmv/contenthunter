@@ -190,28 +190,35 @@ git commit -m "feat(wp189-autowarm): unic_upload_map module + node:test unit tes
 **Files:**
 - Create: `unic_s3_upload.py`
 
-- [ ] **Step 1: Реализовать** `unic_s3_upload.py` (зеркало S3-настроек `publisher_kernel.py:upload_artifact_to_s3`):
+- [ ] **Step 1: Реализовать** `unic_s3_upload.py`.
+
+**Креды S3 берутся ТОЛЬКО из окружения** (никаких секретов в файле — codex P1). На рантайме `server.js` делает `require('dotenv').config()` (стр.4), а прод `.env` autowarm уже содержит `S3_ENDPOINT/S3_BUCKET/S3_ACCESS_KEY/S3_SECRET_KEY/S3_PUBLIC_URL`. Python-child запускается через `execFile` без опции `env`, поэтому наследует `process.env` родителя → получает эти переменные. Не-секретные значения (endpoint/bucket/public) имеют дефолты; секреты (access/secret) — обязательны из env.
+
 ```python
 #!/usr/bin/env python3
 """Залить локальный файл на Beget S3 в произвольный key, напечатать публичный URL в stdout.
 
 Использование: python3 unic_s3_upload.py <local_path> <s3_key> <content_type>
-Зеркало S3-настроек publisher_kernel.upload_artifact_to_s3 (тот же bucket/endpoint/public).
-На любой ошибке — сообщение в stderr и ненулевой exit-код.
+Креды/настройки S3 берутся ИЗ ОКРУЖЕНИЯ (autowarm .env → dotenv → process.env → наследуется
+этим дочерним процессом). Секретов в файле нет. На ошибке — stderr + ненулевой exit.
 """
+import os
 import sys
 
-S3_ENDPOINT = 'https://s3.ru1.storage.beget.cloud'
-S3_BUCKET = '1cabe906ea6e-gengo'
-S3_ACCESS_KEY = 'G0619VHDXGR5FZEDJJOT'
-S3_SECRET_KEY = 'Y1GhKCJxYxBKhIkANSNYa7ytDsvG07ebrkqQWzw1'
-S3_PUBLIC_URL = 'https://save.gengo.io'
+S3_ENDPOINT = os.environ.get('S3_ENDPOINT', 'https://s3.ru1.storage.beget.cloud')
+S3_BUCKET = os.environ.get('S3_BUCKET', '1cabe906ea6e-gengo')
+S3_PUBLIC_URL = os.environ.get('S3_PUBLIC_URL', 'https://save.gengo.io')
+S3_ACCESS_KEY = os.environ.get('S3_ACCESS_KEY')
+S3_SECRET_KEY = os.environ.get('S3_SECRET_KEY')
 
 
 def main():
     if len(sys.argv) != 4:
         print('usage: unic_s3_upload.py <local_path> <s3_key> <content_type>', file=sys.stderr)
         sys.exit(2)
+    if not (S3_ACCESS_KEY and S3_SECRET_KEY):
+        print('S3 credentials missing in env (S3_ACCESS_KEY/S3_SECRET_KEY)', file=sys.stderr)
+        sys.exit(3)
     local_path, s3_key, content_type = sys.argv[1], sys.argv[2], sys.argv[3]
     import boto3
     from botocore.config import Config
@@ -267,7 +274,20 @@ const crypto = require('crypto');
 const unicMap = require('./unic_upload_map');
 ```
 
-- [ ] **Step 3: Добавить эндпоинт** сразу ПОСЛЕ блока `app.delete('/api/unic-content/:id', ...)` (около стр. 3700, перед `app.get('/api/projects-list'...)`):
+- [ ] **Step 2b: Обойти глобальный лимит `express.json()` для upload-пути** (codex P1)
+
+Глобальный парсер `app.use(express.json())` на **стр. 53** имеет дефолтный лимит 100KB и срабатывает РАНЬШЕ роута → любой base64 >100KB получил бы 413 до нашего хендлера. Делаем так, чтобы глобальный json-парсер ПРОПУСКАЛ `/api/unic-content/upload` (его распарсит route-local парсер с поднятым лимитом). Заменить стр. 53 `app.use(express.json());` на:
+```javascript
+const _globalJson = express.json();
+app.use((req, res, next) => {
+  // upload-роут парсится локальным express.json с поднятым лимитом (см. /api/unic-content/upload)
+  if (req.path === '/api/unic-content/upload') return next();
+  return _globalJson(req, res, next);
+});
+```
+(`express.urlencoded` на стр. 54 не трогаем — он не парсит `application/json`, для upload это no-op.)
+
+- [ ] **Step 3: Добавить эндпоинт** сразу ПОСЛЕ блока `app.delete('/api/unic-content/:id', ...)` (около стр. 3700, перед `app.get('/api/projects-list'...)`). Обрати внимание: route-local `express.json({ limit: '200mb' })` в сигнатуре обязателен (глобальный парсер этот путь пропускает — см. Step 2b):
 ```javascript
 // ===== UNIC CONTENT: загрузка файлов в S3 + строки (WP#189) =====
 // Приём через base64-JSON (без multer): отдельный express.json с поднятым лимитом
