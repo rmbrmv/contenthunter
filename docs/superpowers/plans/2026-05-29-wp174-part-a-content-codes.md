@@ -522,21 +522,38 @@ git commit -m "feat(wp174): авто-присвоение code_number в 4 то�
 # Добавить в backend/tests/test_wp174_content_codes.py
 @pytest.mark.asyncio
 async def test_prefix_override_validation_and_unique():
+    # ВАЖНО: тест на живой БД с global UNIQUE(code_prefix) — НЕ хардкодить префиксы.
+    # Префиксы A берём реальные (через сервис), а свободный кандидат ищем сканом.
+    import itertools
+    from string import ascii_uppercase, digits
     from src.routers.projects import update_project, ProjectBody
+    from src.services.prefix_service import ensure_project_prefix
     from fastapi import HTTPException
+
+    async def _free_prefix(db) -> str:
+        chars = ascii_uppercase + digits
+        for combo in itertools.product(chars, repeat=3):
+            cand = "".join(combo)
+            taken = (await db.execute(text(
+                "SELECT 1 FROM validator_projects WHERE code_prefix=:p"), {"p": cand})).first()
+            if not taken:
+                return cand
+        raise RuntimeError("нет свободного префикса для теста")
+
     async with async_session() as db:
         class _U:
             class role: value = "admin"
             project_ids = []
-        # проект A с префиксом TAK
         a = (await db.execute(text(
-            "INSERT INTO validator_projects (id, project, api_name, active, code_prefix) "
-            "VALUES ((SELECT COALESCE(MAX(id),0)+1 FROM validator_projects), 'A WP174', 'a_wp174', true, 'TAK') RETURNING id"))).scalar()
+            "INSERT INTO validator_projects (id, project, api_name, active) "
+            "VALUES ((SELECT COALESCE(MAX(id),0)+1 FROM validator_projects), 'A WP174', 'a_wp174', true) RETURNING id"))).scalar()
         b = (await db.execute(text(
-            "INSERT INTO validator_projects (id, project, api_name, active, code_prefix) "
-            "VALUES ((SELECT COALESCE(MAX(id),0)+1 FROM validator_projects), 'B WP174', 'b_wp174', true, 'BEE') RETURNING id"))).scalar()
+            "INSERT INTO validator_projects (id, project, api_name, active) "
+            "VALUES ((SELECT COALESCE(MAX(id),0)+1 FROM validator_projects), 'B WP174', 'b_wp174', true) RETURNING id"))).scalar()
         await db.commit()
         try:
+            pref_a = await ensure_project_prefix(db, a, "A WP174")  # реальный, гарантированно уникальный
+            await db.commit()
             base = dict(project="B WP174", api_name="b_wp174", active=True, logo_url=None, manager=None)
             # невалидный формат → 400
             with pytest.raises(HTTPException) as e1:
@@ -544,12 +561,13 @@ async def test_prefix_override_validation_and_unique():
             assert e1.value.status_code == 400
             # коллизия с A → 409
             with pytest.raises(HTTPException) as e2:
-                await update_project(b, ProjectBody(**base, prefix="TAK"), db, _U())
+                await update_project(b, ProjectBody(**base, prefix=pref_a), db, _U())
             assert e2.value.status_code == 409
-            # валидный уникальный → ок
-            await update_project(b, ProjectBody(**base, prefix="ZZ9"), db, _U())
-            pref = (await db.execute(text("SELECT code_prefix FROM validator_projects WHERE id=:id"), {"id": b})).scalar()
-            assert pref == "ZZ9"
+            # валидный свободный → ок
+            free = await _free_prefix(db)
+            await update_project(b, ProjectBody(**base, prefix=free), db, _U())
+            pref_b = (await db.execute(text("SELECT code_prefix FROM validator_projects WHERE id=:id"), {"id": b})).scalar()
+            assert pref_b == free
         finally:
             await db.execute(text("DELETE FROM validator_projects WHERE id IN (:a,:b)"), {"a": a, "b": b})
             await db.commit()
@@ -860,9 +878,13 @@ git commit -m "feat(wp174): колонка Код в админских табл
   2. `alembic upgrade head` (схема + ORM-колонка).
   3. Запустить `python -m scripts.backfill_content_codes` один раз (проставит легаси-коды по `created_at ASC` и сдвинет `code_seq`).
   4. **Только теперь** перезапустить приложение валидатора — новые загрузки начнут выдавать номера уже после сдвинутого `code_seq`, легаси-нумерация не ломается.
-  5. Выкатить delivery-ветку (Task 9).
+  5. **Финальный sweep:** повторно запустить `python -m scripts.backfill_content_codes` сразу после рестарта (идемпотентно) — это закрывает «окно»: старый процесс между шагами 2 и 4 мог вставить строки `validator_content` с `code_number=NULL` уже ПОСЛЕ прохода бэкфилла по их проекту. Повторный прогон проставит им коды (следующие после `MAX`), не оставив ни одной NULL-строки.
+  6. Проверить инвариант: `SELECT COUNT(*) FROM validator_content WHERE code_number IS NULL;` → `0`.
+  7. Выкатить delivery-ветку (Task 9).
 
   > Почему так: если перезапустить (шаг 4) до бэкфилла (шаг 3), новая загрузка в существующий проект получит `001` (т.к. `code_seq=0` по дефолту миграции), а бэкфилл затем присвоит легаси `002+` — порядок `created_at` сломается, новый ролик окажется «первым».
+  >
+  > **Окно записи (P1):** в идеале на время шагов 2–4 включить maintenance-gate/drain загрузок валидатора (если позволяет инфра). Если drain недоступен — финальный sweep (шаг 5) гарантирует отсутствие NULL-кодов; ценой того, что несколько роликов из окна получат номера после новых загрузок (незначительное отклонение `created_at`-порядка для единиц строк, без дублей и NULL).
 - [ ] **OpenProject #174** — комментарий о прогрессе Части A; статус оставить «В разработке» до Части B.
 
 ---
