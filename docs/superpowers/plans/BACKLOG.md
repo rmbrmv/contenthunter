@@ -1,5 +1,31 @@
 # Backlog tickets
 
+## 2026-05-29 — WP #161 (iter2): TG-уведомления одобрение/отсутствие контента — фикс бага + 1×09:00
+
+### ✅ SHIPPED+DEPLOYED 2026-05-29 — OpenProject #161 → Тестирование; impl на main `delivery-contenthunter` `e7bf12e`, прод pulled (FF) + PM2 id35 restart
+
+Доработка живой фичи (iter1 SHIPPED 27.05) по комментариям автора (Анастасия/Аня) 28–29.05 + найденный баг. 4 правки:
+
+**(1) Баг блока «контент не загружен» (ложные срабатывания).** SQL флагал клиента при ЛЮБОМ пустом слоте; у проектов 2 слота/день (один обычно пуст) → ложно попадали почти все активные. Аня привела 9 проектов с контентом, числившихся «без контента». Фикс = правило «весь день пуст»: `GROUP BY (project, slot_date) HAVING count(*) FILTER (WHERE content_id IS NOT NULL) = 0`. Проверено на живой БД: из 9 «ложных» остался только AXILOR Private на 31.05 (там реально оба слота пусты).
+
+**(2) Блок «на одобрении» → фильтр `slot_date >= today` (МСК)**, INNER JOIN + `HAVING ... > 0` (бездатные и только-прошлые ролики скрыты). РАЗВОРОТ iter1-решения «stale-даты оставляем по спеке». На проде блок сейчас пуст корректно: все 75 needs_review просрочены (макс. дата 22.05).
+
+**(3) Раздельные абзацы** «Нет контента на завтра (DD.MM)» / «на послезавтра (DD.MM)», каждый — только при наличии клиентов.
+
+**(4) Каденция почасовая 09–18 → 1 раз 09:00 МСК** (`APPROVAL_NOTIFY_TIME_MSK`, `isReportDue`/`mskSendDate` по образцу daily_publish_report). Идемпотентность = **дневной** claim (переиспользована `approval_notify_runs`, миграции НЕТ).
+
+**Качество.** 26 юнит-тестов GREEN, codex review 0 P1, subagent-driven (5 TDD-тасков) + независимое финальное ревью (SPEC_COMPLIANT + QUALITY_APPROVED). Дифф трогает только `approval_notify.js` + тест.
+
+**Деплой.** FF push GenGo2/delivery-contenthunter main `e7bf12e` → прод `/root/.openclaw/workspace-genri/autowarm` `git pull --ff-only` (точечный `sudo chown` 2 root-owned файлов перед pull, т.к. `sudo git` не в NOPASSWD) → `sudo pm2 restart autowarm` (id35), крон `[approval-notify] scheduled daily at 09:00 MSK`. Прод `.env`: `APPROVAL_NOTIFY_*` не заданы → дефолты (токен fallback на `DAILY_REPORT_BOT_TOKEN`).
+
+**Остаток.**
+- Verify первой штатной автоотправки **09:00 МСК 30.05** → «Готово» (catch-up отправка 29.05 17:08 уже прошла: новый формат, оба абзаца, idempotent skip на повторном тике).
+- Kill-switch `APPROVAL_NOTIFY_ENABLED=0` наготове.
+
+Спека/план/evidence: `docs/superpowers/specs|plans/2026-05-29-wp161-iter2-approval-notify-refine*`, `docs/evidence/2026-05-29-wp161-iter2-approval-notify-refine-shipped.md`. Память: `project_wp161_tg_approval_notify`. Откат: `APPROVAL_NOTIFY_ENABLED=0`.
+
+---
+
 ## 2026-05-29 — WP #191: TikTok переключатель тапает «Заблокированные аккаунты» (substring-leak)
 
 ### ✅ SHIPPED+DEPLOYED 2026-05-29 — OpenProject #191 → Тестирование; impl на main `delivery-contenthunter` `55bdbd9` (+doc `b67e088`), прод pulled (FF) + PM2 id35 restart (#29)
