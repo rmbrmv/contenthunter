@@ -531,7 +531,13 @@ async function submitUnicUpload() {
     await loadUnicContent();
     if (errs.length) {
       errBox.classList.remove('hidden');
-      errBox.innerHTML = errs.map(e => `⚠️ ${e.file}: ${e.detail}`).join('<br>');
+      // textContent (не innerHTML) — имя файла/detail может содержать HTML (XSS). codex P2.
+      errBox.innerHTML = '';
+      errs.forEach(e => {
+        const row = document.createElement('div');
+        row.textContent = `⚠️ ${e.file}: ${e.detail}`;
+        errBox.appendChild(row);
+      });
       // очищаем выбор, чтобы повторный сабмит не залил уже загруженные повторно
       filesInput.value = '';
     } else {
