@@ -38,6 +38,7 @@
 
 **Files:**
 - Create: `backend/alembic/versions/008_wp174_content_codes.py`
+- Modify: `backend/src/models/content.py` (ORM-колонка `code_number`)
 
 - [ ] **Step 1: Написать миграцию**
 
@@ -94,12 +95,24 @@ Expected: `Running upgrade 007 -> 008`
 Run: `PGPASSWORD=openclaw123 psql -h localhost -U openclaw -d openclaw -c "\d validator_projects" | grep -E "code_prefix|code_seq"`
 Expected: обе колонки присутствуют; индекс `uq_validator_projects_code_prefix`.
 
-- [ ] **Step 4: Commit**
+- [ ] **Step 4: Добавить ORM-колонку `code_number` в модель (КРИТИЧНО — иначе присваивание не запишется)**
+
+В `backend/src/models/content.py`, в классе `ValidatorContent`, рядом с `content_hash`/`is_duplicate` добавить:
+
+```python
+    code_number = Column(Integer, nullable=True)  # WP#174 — порядковый номер ролика в проекте
+```
+
+(`Column`, `Integer` уже импортированы в этом файле.)
+
+> Без этого `content.code_number = ...` в `upload.py` создаёт лишь transient-атрибут Python и НЕ флашится в БД; чтение `c.code_number` из загруженных ORM-объектов также не отработает. `validator_projects` отдельной ORM-модели не имеет (только raw SQL) — там правок не нужно.
+
+- [ ] **Step 5: Commit**
 
 ```bash
 cd /home/claude-user/validator-contenthunter/backend
-git add alembic/versions/008_wp174_content_codes.py
-git commit -m "feat(wp174): миграция — code_prefix/code_seq/code_number"
+git add alembic/versions/008_wp174_content_codes.py src/models/content.py
+git commit -m "feat(wp174): миграция + ORM-колонка code_number — code_prefix/code_seq/code_number"
 ```
 
 ---
@@ -274,25 +287,36 @@ Expected: FAIL (ImportError: ensure_project_prefix).
 # Добавить в backend/src/services/prefix_service.py
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.exc import IntegrityError
 
 
 async def ensure_project_prefix(db: AsyncSession, project_id: int, project_name: str) -> str:
     """Идемпотентно присваивает проекту свободный префикс. Возвращает его.
-    НЕ коммитит — коммит на вызывающей стороне."""
+    НЕ коммитит — коммит на вызывающей стороне.
+    Retry-safe: при параллельном создании двух проектов с одинаковым кандидатом
+    unique-индекс отклонит второй UPDATE — ловим IntegrityError в SAVEPOINT и
+    пробуем следующий кандидат."""
     existing = (await db.execute(
         text("SELECT code_prefix FROM validator_projects WHERE id=:id"),
         {"id": project_id})).scalar()
     if existing:
         return existing
     for cand in candidate_prefixes(project_name):
+        # быстрый отсев уже занятых (оптимизация; финальная гарантия — unique-индекс)
         taken = (await db.execute(
             text("SELECT 1 FROM validator_projects WHERE code_prefix=:p"),
             {"p": cand})).first()
-        if not taken:
-            await db.execute(
-                text("UPDATE validator_projects SET code_prefix=:p WHERE id=:id"),
-                {"p": cand, "id": project_id})
+        if taken:
+            continue
+        try:
+            async with db.begin_nested():  # SAVEPOINT изолирует возможный unique-конфликт
+                await db.execute(
+                    text("UPDATE validator_projects SET code_prefix=:p WHERE id=:id"),
+                    {"p": cand, "id": project_id})
             return cand
+        except IntegrityError:
+            # параллельная сессия заняла этот префикс между SELECT и UPDATE — берём следующий
+            continue
     raise ValueError(f"Не осталось свободных префиксов для проекта {project_id}; задайте вручную")
 
 
