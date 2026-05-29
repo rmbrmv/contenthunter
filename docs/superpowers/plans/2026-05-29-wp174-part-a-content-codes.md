@@ -16,6 +16,8 @@
 
 **Команда тестов (валидатор):** `cd /home/claude-user/validator-contenthunter/backend && python -m pytest <путь> -v` (тесты ходят в живую БД; `conftest.py` диспоузит engine между тестами).
 
+**psql:** перед командами `psql`/`PGPASSWORD` экспортировать пароль из локального секрета (не хранить в репозитории): `export PGPASSWORD=<openclaw-пароль из локальной конфигурации>`.
+
 ---
 
 ## File Structure
@@ -92,7 +94,7 @@ Expected: `Running upgrade 007 -> 008`
 
 - [ ] **Step 3: Проверить колонки**
 
-Run: `PGPASSWORD=openclaw123 psql -h localhost -U openclaw -d openclaw -c "\d validator_projects" | grep -E "code_prefix|code_seq"`
+Run: `PGPASSWORD="$PGPASSWORD" psql -h localhost -U openclaw -d openclaw -c "\d validator_projects" | grep -E "code_prefix|code_seq"`
 Expected: обе колонки присутствуют; индекс `uq_validator_projects_code_prefix`.
 
 - [ ] **Step 4: Добавить ORM-колонку `code_number` в модель (КРИТИЧНО — иначе присваивание не запишется)**
@@ -773,7 +775,7 @@ Expected: нет строк `+N кодов` (всё уже присвоено) �
 
 Run:
 ```bash
-PGPASSWORD=openclaw123 psql -h localhost -U openclaw -d openclaw -At -c \
+PGPASSWORD="$PGPASSWORD" psql -h localhost -U openclaw -d openclaw -At -c \
 "SELECT COUNT(*) FROM validator_content WHERE code_number IS NULL;"
 ```
 Expected: `0` (весь контент получил код).
