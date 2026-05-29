@@ -9,6 +9,114 @@
 ### Follow-up: `yt_target_not_in_picker_after_scroll` (следующий YT-кандидат)
 
 За 7д (на 29.05) = 23 задачи, **7 уникальных аккаунтов / 7 устройств** — широкий, не account-specific, без открытого WP. За 29.05 — 0 (не попал в дневной триаж, который шёл по «за сегодня»). Если в ближайшие дни рецидивит — отдельная задача: разбор скринкастов + аккаунт-пикер scroll-логики (зеркало TT-truncation WP#163 / picker-структуры YT). Не блокер.
+## 2026-05-29 — WP #161 (iter2): TG-уведомления одобрение/отсутствие контента — фикс бага + 1×09:00
+
+### ✅ SHIPPED+DEPLOYED 2026-05-29 — OpenProject #161 → Тестирование; impl на main `delivery-contenthunter` `e7bf12e`, прод pulled (FF) + PM2 id35 restart
+
+Доработка живой фичи (iter1 SHIPPED 27.05) по комментариям автора (Анастасия/Аня) 28–29.05 + найденный баг. 4 правки:
+
+**(1) Баг блока «контент не загружен» (ложные срабатывания).** SQL флагал клиента при ЛЮБОМ пустом слоте; у проектов 2 слота/день (один обычно пуст) → ложно попадали почти все активные. Аня привела 9 проектов с контентом, числившихся «без контента». Фикс = правило «весь день пуст»: `GROUP BY (project, slot_date) HAVING count(*) FILTER (WHERE content_id IS NOT NULL) = 0`. Проверено на живой БД: из 9 «ложных» остался только AXILOR Private на 31.05 (там реально оба слота пусты).
+
+**(2) Блок «на одобрении» → фильтр `slot_date >= today` (МСК)**, INNER JOIN + `HAVING ... > 0` (бездатные и только-прошлые ролики скрыты). РАЗВОРОТ iter1-решения «stale-даты оставляем по спеке». На проде блок сейчас пуст корректно: все 75 needs_review просрочены (макс. дата 22.05).
+
+**(3) Раздельные абзацы** «Нет контента на завтра (DD.MM)» / «на послезавтра (DD.MM)», каждый — только при наличии клиентов.
+
+**(4) Каденция почасовая 09–18 → 1 раз 09:00 МСК** (`APPROVAL_NOTIFY_TIME_MSK`, `isReportDue`/`mskSendDate` по образцу daily_publish_report). Идемпотентность = **дневной** claim (переиспользована `approval_notify_runs`, миграции НЕТ).
+
+**Качество.** 26 юнит-тестов GREEN, codex review 0 P1, subagent-driven (5 TDD-тасков) + независимое финальное ревью (SPEC_COMPLIANT + QUALITY_APPROVED). Дифф трогает только `approval_notify.js` + тест.
+
+**Деплой.** FF push GenGo2/delivery-contenthunter main `e7bf12e` → прод `/root/.openclaw/workspace-genri/autowarm` `git pull --ff-only` (точечный `sudo chown` 2 root-owned файлов перед pull, т.к. `sudo git` не в NOPASSWD) → `sudo pm2 restart autowarm` (id35), крон `[approval-notify] scheduled daily at 09:00 MSK`. Прод `.env`: `APPROVAL_NOTIFY_*` не заданы → дефолты (токен fallback на `DAILY_REPORT_BOT_TOKEN`).
+
+**Остаток.**
+- Verify первой штатной автоотправки **09:00 МСК 30.05** → «Готово» (catch-up отправка 29.05 17:08 уже прошла: новый формат, оба абзаца, idempotent skip на повторном тике).
+- Kill-switch `APPROVAL_NOTIFY_ENABLED=0` наготове.
+
+Спека/план/evidence: `docs/superpowers/specs|plans/2026-05-29-wp161-iter2-approval-notify-refine*`, `docs/evidence/2026-05-29-wp161-iter2-approval-notify-refine-shipped.md`. Память: `project_wp161_tg_approval_notify`. Откат: `APPROVAL_NOTIFY_ENABLED=0`.
+
+---
+
+## 2026-05-29 — WP #191: TikTok переключатель тапает «Заблокированные аккаунты» (substring-leak)
+
+### ✅ SHIPPED+DEPLOYED 2026-05-29 — OpenProject #191 → Тестирование; impl на main `delivery-contenthunter` `55bdbd9` (+doc `b67e088`), прод pulled (FF) + PM2 id35 restart (#29)
+
+Триаж падений TikTok за 29.05 (`publish_tasks`, 22 failed): **топ-1 причина `tt_drawer_tap_did_not_open_sheet` = 5/22 (≈23%)**, все clickpay-аккаунты (tasks 11919/11944/12019/12025/12038, 3 устройства). Кластер «переключение аккаунтов» в целом = 16/22 ≈ 73%.
+
+**Root cause (сошлись 4 источника).** В settings-фолбэке свитчера (`account_switcher.py::_run_tt_phase2_menu_path`) матчер `_find_tt_account_switcher_anchor_in_drawer` ищет точку входа **подстрокой** (`trigger in label.lower()`, строки 4975/4985). Триггер `'аккаунты'` (`TT_DRAWER_ACCOUNT_TRIGGERS`) ⊂ «заблокированные аккаунты» → на скролле страницы «Настройки и конфиденциальность» строка «Заблокированные аккаунты» (раздел Приватность) ошибочно опознаётся как переключатель и тапается → dead-end → шит не открывается. Доказано: UI-дампы шага `tt_3_open_list_sheet` у всех 5 = читаемая страница «Заблокированные аккаунты» (usable=False 8312b) + скринкаст 12038 висит на ней + предыдущие шаги usable=True + `sheet_open_signal=false`/`drawer_anchor_label=''` (Pass 2). Word-boundary НЕ помогает — «аккаунты» там целое слово.
+
+**Решение.** Blocklist `TT_DRAWER_DEADEND_SUBSTRINGS` (`заблокированные аккаунт`, `blocked account`) + `_tt_label_is_account_deadend` + skip в обоих pass-ах матчера. Kill-switch `TT_DRAWER_DEADEND_SKIP_ENABLED` (default ON; OFF = legacy). TDD: 7 unit-тестов (оба pass-а RU/EN, позитив «Сменить аккаунт»/«Управление аккаунтами», kill-switch). Регресс: 427 switcher/TT unit зелёных, 0 регрессий. Codex review: 0 P1.
+
+**Деплой.** Прод-autowarm `/root/.openclaw/workspace-genri/autowarm` (PM2 id35) FF к origin/main `b67e088`; флаг ON; PM2 id35 restart (#29, account_switcher импортируется воркером). Прод-HEAD сверен, import-smoke OK.
+
+**Остаток.**
+- Verify 24-48ч: 0 `tt_drawer_tap_did_not_open_sheet` с переходом на «Заблокированные аккаунты» на clickpay.
+- Остальной TT-кластер падений (не в scope #191): `tt_upload_confirmation_timeout` (3), `tt_account_not_in_list` (3, см. WP#163 truncation), `tt_account_sheet_closed_before_parse` (3, WP#182 на тестировании), `tt_fg_drift_unrecoverable` (2), `tt_switch_blocked` (2 = аккаунт забанен, не код). Наблюдать; отдельные WP при рецидиве.
+
+Evidence: `docs/evidence/2026-05-29-tt-publish-fails-triage.md` (+ `evidence/publish-triage/tt_blocked_accounts_substring-20260529.md` в autowarm). Память: `project_wp191_tt_blocked_accounts_substring`. Откат: `TT_DRAWER_DEADEND_SKIP_ENABLED=0`.
+
+---
+
+## 2026-05-29 — WP #44 (iter2): TikTok публикуется БЕЗ описания — честный focus-gate
+
+### ✅ SHIPPED+DEPLOYED 2026-05-29 — OpenProject #44 → Тестирование; impl на main `delivery-contenthunter` `b1ee6d2`, прод pulled (FF, без PM2-restart)
+
+Пришло от Анастасии (комментарии в OP#44): по TikTok массово с 26.05 выкладка без описания (и без хэштегов — они вшиты в текст), 29.05 «все сегодняшние в ТикТок без описаний» (тел. 162/163/165, Кликпей, Юлия Сваровски 74/75, Lexis Voice 16/17, PANDAFiT 73, Комильфо 37/39, аквабрайт 81/82). iter1 (`hashtag_enrich.js` добивка тегов) — отдельная рабочая фича, ни при чём.
+
+**Root cause (по проду).** `publish_tasks.caption` корректный (29.05 — 59/59 непустых) → серверная сборка ОК, проблема device-side. Поле описания TikTok рендерится через Canvas/обфусцированные классы (`X.12py`, `X.10UB`) — в UI-дампах НЕТ `EditText`/`focused`/читаемого текста. `publisher_tiktok.py` (старый Шаг-4 ~1872-1928): `tap_element` не находит поле → fallback по фикс-координатам `(540,250..400)` → **`adb_text` вызывался ВСЕГДА**, даже когда клавиатура не открылась (поле не сфокусировано), и логировал ложный «✅ caption введён». Текст уходил «в никуда». Доля слепого fallback росла: 28.05=69%, 29.05=64%. Зеркало надёжного IG-механизма (`_extract_caption_input_state` + verify + `ig_caption_screen_not_reached`), которого в TT не было.
+
+**Решение.** Новые методы `_tiktok_caption_field_focused` (фокус по IME `dumpsys input_method mInputShown` — единственный Canvas-независимый сигнал; парсит конкретный флаг, не «любой =true») + `_fill_tiktok_caption`: печать только при `desc_found AND focused`; иначе честный `log_event('error', meta.category='tt_caption_field_not_focused')` + `return False` → `publish_tiktok` прерывает публикацию ДО share → задача в ручную очередь (класс `ui_changed`/manual). Kill-switch `TT_CAPTION_FOCUS_GATE_ENABLED` (default ON; OFF = legacy слепая печать). Миграция `tt_caption_field_not_focused` в `publish_error_codes`.
+
+**Процесс (Superpowers).** Брейншторм → спека → план (codex 0 P1, 2 раунда: поймал mInputShown-парсинг + требование desc_found) → subagent-driven impl (Task1 миграция, Tasks2-4 helpers+врезка+тесты; spec-review ✅ + quality Approved + 2 code-review minor подчищены) → локальный merge → деплой. 10/10 unit-тестов, соседние сьюты 0 регрессий (1 краснота `test_publish_guard.py` pre-existing на origin/main). codex 0 P1 на спеке/плане/коде.
+
+**Деплой.** Прод-autowarm `/root/.openclaw/workspace-genri/autowarm` (PM2 id35) FF к origin/main `b1ee6d2`; миграция в живой БД; флаг ON; PM2-restart НЕ нужен (server.js не менялся, publisher per-task spawn). Прод-HEAD сверен с origin/main.
+
+**Инцидент в процессе.** Параллельная сессия (WP#180 iter2) переключила общий `autowarm-testbench` чекаут на `feat/wp180` МЕЖДУ моими git-командами → мой merge лёг на чужую ветку. Откатил (`reset --hard e08316b` = origin, дерево чистое, ничего не потеряно; их работа даже включила мой WP44 в основу), деплой доделал через изолированный worktree. Урок: для merge/push в shared-чекаут — ВСЕГДА worktree, разовой `branch --show-current` не доверять.
+
+**Остаток / out-of-scope.**
+- **iter3 (если honest_fail зафлудит ручную очередь):** точнее наводиться на Canvas-поле — тап по центру bounds узла-маркера вместо фикс-координат; возможно tap по нескольким Y с проверкой фокуса до перебора координат. Снизит долю ухода в ручную. Постов без описания уже не будет в любом случае.
+- IG/YT — вне scope (IG надёжен, YT отдельное поле описания; симптом только TT).
+
+Evidence: spec `docs/superpowers/specs/2026-05-29-wp44-tt-caption-honest-fill-design.md`; plan `docs/superpowers/plans/2026-05-29-wp44-tt-caption-honest-fill.md`. Память: `project_wp44_tt_caption_honest_fill`. Verify: утренняя пачка — нет TT-постов без описания + доля честных `tt_caption_field_not_focused`. Откат: `TT_CAPTION_FOCUS_GATE_ENABLED=0`.
+
+---
+
+## 2026-05-28 — WP #179+#185: unic-worker mobile-safe transcode для ручной выкладки IG
+
+### ✅ ГОТОВО 2026-05-28 — OpenProject #179 + #185 → Готово; impl на main `delivery-contenthunter` 98d0f67 → прод pulled + pm2 restart unic-worker; verified Данилом на 19/SM-A175F (плеер + IG-редактор OK)
+
+Пришло как баг-репорт (`sources/bugs/inbox/2026-05-28T085657Z-Danil_Pavlov_123-ни-она-инста-не-груз.md` + парный `…T090243Z-…фвыафыв.md` + видео-доказательство https://disk.yandex.ru/i/rh1chvMsDXmWrw). Симптом: ручная выкладка через мобильный Instagram → «+ Reels → выбрать видео из галереи». Чёрные миниатюры у новых файлов, IG не реагирует на тап выбора, «Не поддерживается видеокодек» в системном плеере, файла НЕТ в IG-галерее «Недавние». Старые опубликованные выбираются нормально.
+
+**Root cause в два слоя.**
+
+**Слой 1 (WP #179, faststart):** `unic-worker/worker.py:322` финальный concat без `-movflags +faststart` → `moov atom` уходил в хвост mp4 → мобильная галерея читает первые 1-2MB при построении миниатюры → не находит moov → чёрный thumb + не выбирается. Авто-публикатор не страдал — `publisher_base.py:2789 _remux_mp4_if_available` уже делал faststart-remux перед загрузкой в IG-аппликуху. Ручная выкладка отдавала прямую CDN-ссылку → сырой файл.
+
+**Слой 2 (WP #185, mobile HW-decoder):** Verified Данилом — faststart-only оказался недостаточен. Файл с moov в head всё равно «не поддерживался видеокодек» и не виден в IG-галерее. Сравнение со старым работающим (1560×2680, H.264 High Level 5.0, 6 Mbps) показало почти идентичные параметры с broken (1570×2690, та же Level 5.0, 8 Mbps) — разница лишь в схеме уникализации: схема #4 агрессивная (rotate=-2.15°, speed=1.20×, scale_add=230, crop_reduce=430) vs working схема #30 мягкая (rotate=+1.10°, speed=1.07×, scale_add=140, crop_reduce=260). HW-decoder Samsung A17 фейлит на специфике bitstream агрессивных схем, даже когда параметры контейнера формально валидны.
+
+**Решение (WP #185).** Финальный safety-transcode в `worker.py:322`: replaced `-c copy +faststart` на полноценный lossy `ffmpeg -c:v libx264 -profile:v main -level 4.1 -pix_fmt yuv420p -preset medium -crf 23 -c:a aac -b:a 128k -movflags +faststart` с `-vf scale=1080:1920:force_original_aspect_ratio=decrease,pad=1080:1920:(ow-iw)/2:(oh-ih)/2:color=black,fps=30`. Размер строго 1080×1920 теряет нестандартный uniqueness `scale_add`/`pad_add`, но content-level (rotate/speed/crop_offset/overlays/color) остаётся — согласовано с Данилом, соц-сети всё равно нормализуют при upload.
+
+**Observability.** `unic.final.transcode_ok` / `transcode_DEVIANT` с **fail-closed** `RuntimeError` на deviant (требует ffprobe-проверки width=1080+height=1920+profile=Main+level=41+pix_fmt=yuv420p+audio=aac+faststart). Это проктовый regression-сигнал для любой будущей правки worker.
+
+**Backfill.** `scripts/backfill_faststart.py` расширен флагами `--queue-only` (JOIN с `validator_manual_publish_queue` published_at IS NULL AND cancelled_at IS NULL) и `--transcode` (full transcode vs faststart-only). `is_already_mobile_safe` для idempotency (fast-path tag `wp185_transcoded=1`, slow-path ffprobe head 256KB). `_local_is_mobile_safe` post-transcode validation. `.pretranscode.mp4` бэкап + tagging. `cleanup_preremux.py` для T+24ч очистки (двойной фильтр: суффикс + тег + LastModified).
+
+**Деплой и волны бэкфилла.**
+- WP #179 (faststart-only): clickpay 26.05 (--project-id 85 --since 2026-05-26) 32/32 + queue-only 154/154 + превентивный --since 2026-05-21 1133/1239 (упал на S3 transient — остаток переписан через WP #185 transcode-pass).
+- WP #185 (full transcode): queue-only --transcode 141/141 (~45мин, 0 failed); превентивный --since 2026-05-21 --transcode 1135 файлов (~9-10ч, pid 4009575, отвязан от сессии через nohup, лог `/tmp/backfill_transcode_week.log`).
+
+**TDD-цепочка (subagent-driven).** WP #179: 4 task'a (failing test → +faststart → observability → backfill+cleanup+tests) + 3 hotfix-итерации (Beget S3 config / SQL escape / put_object / checksum_validation=when_required). WP #185: 4 task'a + 8 раундов codex (0 P1, 6 P2 закрыто: pix_fmt, full skip-check, atom-window 256KB, audio_ok, try-around-IO, fail-closed на DEVIANT). 20/20 unit-тестов GREEN.
+
+**PR'ы.** GenGo2/delivery-contenthunter: #114 (WP#179 фикс+бэкфилл), #115 (Beget S3 config), #116 (put_object), #117 (checksum_validation), #118 (--queue-only), #121 (WP#185 transcode+backfill). rmbrmv/contenthunter: #18 (WP#179 spec+plan), #22 (WP#185 spec+plan).
+
+**Остаток / out-of-scope.**
+- Hardware-accel transcode (h264_nvenc / VAAPI) если CPU станет bottleneck (сейчас ~30с/файл OK на нашем объёме).
+- Silent-source synthesis в worker.py concat (теоретический edge case, в pipeline невозможен — `generate_ffmpeg` всегда даёт AAC).
+- Audit «достаточно ли Level 4.1» на iOS 11+ устройствах.
+- T+24ч cleanup `.preremux.mp4` + `.pretranscode.mp4` бэкапов: `cd /root/.openclaw/workspace-genri/autowarm/unic-worker && python3 -m scripts.cleanup_preremux --older-than-hours 24` (вручную после 29.05 утром).
+
+Evidence: spec `docs/superpowers/specs/2026-05-27-wp179-unic-worker-faststart-design.md` + `2026-05-28-wp185-unic-final-transcode-design.md`; plan `docs/superpowers/plans/2026-05-27-wp179-unic-worker-faststart.md` + `2026-05-28-wp185-unic-final-transcode.md`. Память: `project_wp179_wp185_unic_mobile_safe_transcode`, `feedback_faststart_vs_transcode_hw_decoder`. Урок: для mobile-decoder compat одного faststart недостаточно при aggressive uniqueness; не обозначай разрешение/level как «вторичные» в Phase 1, тестируй на устройстве сразу.
+
+**Параллельные бэклог-итемы** (не связаны напрямую):
+- `contenthunter_bugs_bot` (`bot.py:135 download_media`): ловить `TelegramBadRequest: file is too big` (TG Bot API лимит 20MB), отвечать «пришли Yandex Disk ссылку», вписывать `media: failed (too big)` в md-репорт. Видео Данила первый раз не дошло — пришлось ему вручную делать download-link.
+
+---
 
 ## 2026-05-28 — WP #181: IG `ig_share_tap_no_progress` (#1 топ-IG-фейл 99/7д) — post-mortem success probe
 
