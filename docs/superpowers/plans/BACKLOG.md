@@ -1,5 +1,25 @@
 # Backlog tickets
 
+## 2026-05-29 — WP #174: Коды роликов (RLM-014) + Lifecycle View «Лог событий»
+
+### ⏳ SHIPPED to origin/main (обе части), прод-restart PENDING — OpenProject #174 → Тестирование
+
+ТЗ Анастасии из двух частей. Реализованы обе через Superpowers-цикл (брейншторм → 2 спеки → 2 плана (codex 0 P1) → subagent-driven impl со spec+quality ревью → локальный merge → push).
+
+**Часть A — Коды роликов** (репо `validator-contenthunter`, origin/main `20564fc`). Идентификатор контента `PREFIX-NNN` (RLM-014). Миграция `009` (`validator_projects.code_prefix` UNIQUE + `code_seq`; `validator_content.code_number`) + ORM-колонка. `prefix_service.py`: детерминированная генерация префикса из транслита (`_transliterate` из clients.py) + ручной override (PUT /api/projects/{id}, валидация `[A-Z0-9]{2,4}`, 409 на гонке), race-safe sequence (`UPDATE code_seq RETURNING`). Авто-присвоение в 4 точках `upload.py` (присваивать ПОСЛЕ `db.refresh` — codex P1). Fail-closed `include_code` в `_content_to_dict_with_publish` (код admin-only). Идемпотентный бэкфилл `scripts/backfill_content_codes.py` (атомарный seq; сироты project_id∉validator_projects пропускаются с warning). delivery: колонка «Код» в «Запланировано»/«Опубликовано». 11 тестов GREEN.
+
+**Часть B — Lifecycle View «Лог событий»** (репо `delivery-contenthunter`, origin/main `137b70d`). Read-model поверх существующих таблиц (БЕЗ новой writer-таблицы). `lifecycle.js`: rollup SQL (per-content, 7 этапов + 8-й бакет «⛔ Не выложен»; терминальный статус выше manual_handoff — codex P2), `deriveWorstState`/`deriveRibbon`, `applyClientSideFilters` (code/platform/status/total/planned_date — planned_date НЕ created_at, codex P2), `accountsSql`, `timelineSql`/`buildTimeline`. 3 эндпоинта: `/api/lifecycle` (список фильтры/сортировка/пагинация), `/:id/accounts` (expand), `/account/:pqId/timeline` (модалка). `public/index.html`: раздел «Лог событий» во вкладке «Аналитика» — таблица (1 строка=1 ролик), лента этапов, worst-state бейдж, встроенные фильтры, expand 6-колоночный, таймлайн-модалка, настройка порога. Порог N — в `autowarm_settings` (key `lifecycle_stuck_days`, дефолт 2; БЕЗ новой миграции). URL-параметры (`?stage=&blind_zone=&client=&code=&platform=`) приём заложен. 12 pure + 2 live (gated `RUN_LIVE_DB`) тестов GREEN. By-design: uniq-stuck включает этап «Запланирован» (спека B3).
+
+**Прод-БД:** миграция 009 + бэкфилл уже применены к живой openclaw (localhost:5432). **Остаток деплоя (за Данилом — /root прод-чекауты, нет passwordless git):**
+- delivery (PM2 id35 `/root/.openclaw/workspace-genri/autowarm`): `git pull` (FF→137b70d) + `sudo pm2 restart 35` (server.js менялся).
+- validator (PM2 id24 `/root/.openclaw/workspace-genri/validator`): `git pull` (FF→20564fc) + `sudo pm2 restart 24`.
+
+**Drill-down из воронки дашборда** — отдельной задачей (URL-параметры уже принимаются).
+
+Спеки/планы: `docs/superpowers/specs/2026-05-29-wp174-part-{a,b}-*.md`, `docs/superpowers/plans/2026-05-29-wp174-part-{a,b}-*.md`. Память: `project_wp174_content_codes_lifecycle`.
+
+---
+
 ## 2026-05-29 — WP #44 (iter2): TikTok публикуется БЕЗ описания — честный focus-gate
 
 ### ✅ SHIPPED+DEPLOYED 2026-05-29 — OpenProject #44 → Тестирование; impl на main `delivery-contenthunter` `b1ee6d2`, прод pulled (FF, без PM2-restart)
