@@ -172,6 +172,7 @@ function rollupSql() {
 WITH pq_rows AS (
   SELECT
     ut.content_id AS content_id,
+    LOWER(pq.platform) AS platform,
     CASE
       WHEN pq.status='done' OR mq.operator_status='published' OR s.matched_post_url IS NOT NULL THEN 7
       WHEN mq.operator_status='in_progress' THEN 6
@@ -215,7 +216,8 @@ rollup AS (
     COUNT(*) FILTER (WHERE stage=8)::int AS s_notpublished,
     MAX(EXTRACT(EPOCH FROM (now()-stage_since))/86400.0) FILTER (WHERE stage NOT IN (7,8)) AS max_stage_days,
     MAX(EXTRACT(EPOCH FROM (now()-stage_since))/86400.0) FILTER (WHERE stage IN (5,6))     AS max_manual_days,
-    MAX(EXTRACT(EPOCH FROM (now()-stage_since))/86400.0) FILTER (WHERE stage IN (1,2))     AS max_uniq_days
+    MAX(EXTRACT(EPOCH FROM (now()-stage_since))/86400.0) FILTER (WHERE stage IN (1,2))     AS max_uniq_days,
+    array_agg(DISTINCT platform) AS platforms
   FROM pq_rows GROUP BY content_id
 )
 SELECT
@@ -289,6 +291,16 @@ test('applyClientSideFilters: фильтр по worst-state + total-range + sort
   assert.equal(out.length, 1);
   assert.equal(out[0].content_id, 3);
 });
+test('applyClientSideFilters: code (точный + PREFIX-*) и platform', () => {
+  const rows = [
+    { content_id:1, total_accounts:2, code:'RLM-001', platforms:['tiktok','instagram'] },
+    { content_id:2, total_accounts:2, code:'RLM-014', platforms:['youtube'] },
+    { content_id:3, total_accounts:2, code:'ART-007', platforms:['tiktok'] },
+  ];
+  assert.deepEqual(applyClientSideFilters(rows, { code:'RLM-014' }, 2).map(r=>r.content_id), [2]);
+  assert.deepEqual(applyClientSideFilters(rows, { code:'RLM-*' }, 2).map(r=>r.content_id).sort(), [1,2]);
+  assert.deepEqual(applyClientSideFilters(rows, { platform:'tiktok' }, 2).map(r=>r.content_id).sort(), [1,3]);
+});
 ```
 - [ ] **Step 2:** run → FAIL (no `applyClientSideFilters`).
 - [ ] **Step 3a:** add to `lifecycle.js` (and export):
@@ -299,6 +311,15 @@ function applyClientSideFilters(rows, f, N) {
   if (f.status && f.status.length) out = out.filter(r => f.status.includes(r._worst.code));
   if (f.total_min != null) out = out.filter(r => Number(r.total_accounts) >= f.total_min);
   if (f.total_max != null) out = out.filter(r => Number(r.total_accounts) <= f.total_max);
+  if (f.code) {
+    const c = String(f.code).trim().toUpperCase();
+    if (c.endsWith('-*')) { const pref = c.slice(0,-2); out = out.filter(r => String(r.code||'').startsWith(pref+'-')); }
+    else out = out.filter(r => String(r.code||'').toUpperCase() === c);
+  }
+  if (f.platform) {
+    const p = String(f.platform).toLowerCase();
+    out = out.filter(r => Array.isArray(r.platforms) && r.platforms.includes(p));
+  }
   const sortKey = f.sort || 'stuck';
   const dir = (f.order === 'asc') ? 1 : -1;
   const cmp = {
@@ -323,15 +344,10 @@ app.get('/api/lifecycle', requireAuth, async (req, res) => {
     const settings = {}; sres.rows.forEach(r => settings[r.key] = r.value);
     const N = lifecycle.stuckDaysFromSettings(settings);
 
-    // SQL-фильтры по контенту (дешёвые)
+    // Дешёвые SQL-фильтры по атрибутам контента (клиент/заголовок/дата).
+    // code/platform/status/total — в JS (code и platforms уже в rollup; объём ~сотни строк).
     const conds = []; const params = [];
     const push = (sql, val) => { params.push(val); conds.push(sql.replace('$?', '$'+params.length)); };
-    if (req.query.code) {
-      const c = String(req.query.code).trim().toUpperCase();
-      if (c.endsWith('-*')) push("vp.code_prefix = $?", c.slice(0,-2));
-      else push("(vp.code_prefix||'-'||lpad(vc.code_number::text,3,'0')) = $? OR (vp.code_prefix||'-'||vc.code_number::text) = $?".replace('$?','$'+(params.length+1)).replace('$?','$'+(params.length+2)), c);
-      // упрощение: если двойной bind неудобен — реализовать поиск кода через ILIKE по вычисленному code в обёртке
-    }
     if (req.query.client) push("vp.project = ANY($?)", String(req.query.client).split(',').filter(Boolean));
     if (req.query.title) push("vc.title ILIKE $?", '%'+String(req.query.title)+'%');
     if (req.query.date_from) push("vc.created_at >= $?", String(req.query.date_from));
@@ -340,10 +356,11 @@ app.get('/api/lifecycle', requireAuth, async (req, res) => {
 
     const { rows } = await pool.query(lifecycle.rollupSql() + where, params);
 
-    // platform-фильтр (есть хоть один аккаунт платформы) — отдельным under-query при необходимости; в v1 опускаем серверно
     const status = req.query.status ? String(req.query.status).split(',').filter(Boolean) : null;
     const filtered = lifecycle.applyClientSideFilters(rows, {
       status,
+      code: req.query.code || null,
+      platform: req.query.platform || null,
       total_min: req.query.total_min ? +req.query.total_min : null,
       total_max: req.query.total_max ? +req.query.total_max : null,
       sort: req.query.sort, order: req.query.order,
@@ -365,7 +382,7 @@ app.get('/api/lifecycle', requireAuth, async (req, res) => {
   }
 });
 ```
-> Реализатору: упростить code-фильтр до одного выражения — например в SQL добавить вычисляемый `code` (как в Part A) и фильтровать `code ILIKE`/`= ` через обёрточный CTE, либо фильтровать код в JS внутри `applyClientSideFilters` (добавить параметр). Выбрать чище; покрыть тестом точный код и префикс `RLM-*`.
+> `code` (точный + `PREFIX-*`) и `platform` фильтруются в JS (`applyClientSideFilters`), т.к. `code` и `platforms` уже в результате `rollupSql`. Покрыть тестом точный код, префикс `RLM-*` и платформу.
 - [ ] **Step 4: Verify** via psql (rollup returns) + run pure/live tests. Optionally smoke the endpoint on a non-prod port (`PORT=3999 node server.js &` then `curl 'localhost:3999/api/lifecycle?page_size=3'` with a session — or verify SQL directly). Report method.
 - [ ] **Step 5: Commit:**
 ```bash
@@ -670,4 +687,4 @@ async function lcSaveStuckDays(v) {
 - **Покрытие spec B0–B12:** B0 архитектура→read-model lifecycle.js; B1 гранулярность→rollupSql (content_id); B2 derivation 7+⛔→CASE в rollupSql/accountsSql; B3 worst-state→deriveWorstState (Task 2); B4 таблица→Task 6; B5 лента→deriveRibbon/lcRibbon; B6 expand→Task 4+7; B7 timeline→Task 5+7; B8 sort/фильтры→applyClientSideFilters+Task 6; B9 порог N→Task 1+7 (autowarm_settings); B10 URL-параметры→Task 6 Step 6; B11 производительность→rollup на лету (~сотни строк); B12 тесты→встроены.
 - **Плейсхолдеры:** SQL и pure-JS приведены полностью; фронт-задачи дают конкретный код + точки вставки (UI по природе менее TDD-able — отмечено).
 - **Консистентность:** `deriveWorstState/deriveRibbon/rollupSql/accountsSql/timelineSql/buildTimeline/applyClientSideFilters/stuckDaysFromSettings/STAGES` — единый модуль `lifecycle.js`; имена этапов/коды бейджа едины между бэком и фронтом.
-- **Открытый момент для реализатора:** источник `planned_date` (validator_schedule_slots.content_id) — проверить по факту схемы; code-фильтр упростить (один из двух путей). Помечено в тасках.
+- **Проверено по схеме:** `validator_schedule_slots(content_id, slot_date)` и `unic_tasks(content_id, slot_date)` существуют → `planned_date`-подзапрос валиден. `code`/`platform`-фильтры — в JS (`code` и `platforms` приходят из `rollupSql`).
