@@ -1,5 +1,29 @@
 # Backlog tickets
 
+## 2026-05-29 — WP #44 (iter2): TikTok публикуется БЕЗ описания — честный focus-gate
+
+### ✅ SHIPPED+DEPLOYED 2026-05-29 — OpenProject #44 → Тестирование; impl на main `delivery-contenthunter` `b1ee6d2`, прод pulled (FF, без PM2-restart)
+
+Пришло от Анастасии (комментарии в OP#44): по TikTok массово с 26.05 выкладка без описания (и без хэштегов — они вшиты в текст), 29.05 «все сегодняшние в ТикТок без описаний» (тел. 162/163/165, Кликпей, Юлия Сваровски 74/75, Lexis Voice 16/17, PANDAFiT 73, Комильфо 37/39, аквабрайт 81/82). iter1 (`hashtag_enrich.js` добивка тегов) — отдельная рабочая фича, ни при чём.
+
+**Root cause (по проду).** `publish_tasks.caption` корректный (29.05 — 59/59 непустых) → серверная сборка ОК, проблема device-side. Поле описания TikTok рендерится через Canvas/обфусцированные классы (`X.12py`, `X.10UB`) — в UI-дампах НЕТ `EditText`/`focused`/читаемого текста. `publisher_tiktok.py` (старый Шаг-4 ~1872-1928): `tap_element` не находит поле → fallback по фикс-координатам `(540,250..400)` → **`adb_text` вызывался ВСЕГДА**, даже когда клавиатура не открылась (поле не сфокусировано), и логировал ложный «✅ caption введён». Текст уходил «в никуда». Доля слепого fallback росла: 28.05=69%, 29.05=64%. Зеркало надёжного IG-механизма (`_extract_caption_input_state` + verify + `ig_caption_screen_not_reached`), которого в TT не было.
+
+**Решение.** Новые методы `_tiktok_caption_field_focused` (фокус по IME `dumpsys input_method mInputShown` — единственный Canvas-независимый сигнал; парсит конкретный флаг, не «любой =true») + `_fill_tiktok_caption`: печать только при `desc_found AND focused`; иначе честный `log_event('error', meta.category='tt_caption_field_not_focused')` + `return False` → `publish_tiktok` прерывает публикацию ДО share → задача в ручную очередь (класс `ui_changed`/manual). Kill-switch `TT_CAPTION_FOCUS_GATE_ENABLED` (default ON; OFF = legacy слепая печать). Миграция `tt_caption_field_not_focused` в `publish_error_codes`.
+
+**Процесс (Superpowers).** Брейншторм → спека → план (codex 0 P1, 2 раунда: поймал mInputShown-парсинг + требование desc_found) → subagent-driven impl (Task1 миграция, Tasks2-4 helpers+врезка+тесты; spec-review ✅ + quality Approved + 2 code-review minor подчищены) → локальный merge → деплой. 10/10 unit-тестов, соседние сьюты 0 регрессий (1 краснота `test_publish_guard.py` pre-existing на origin/main). codex 0 P1 на спеке/плане/коде.
+
+**Деплой.** Прод-autowarm `/root/.openclaw/workspace-genri/autowarm` (PM2 id35) FF к origin/main `b1ee6d2`; миграция в живой БД; флаг ON; PM2-restart НЕ нужен (server.js не менялся, publisher per-task spawn). Прод-HEAD сверен с origin/main.
+
+**Инцидент в процессе.** Параллельная сессия (WP#180 iter2) переключила общий `autowarm-testbench` чекаут на `feat/wp180` МЕЖДУ моими git-командами → мой merge лёг на чужую ветку. Откатил (`reset --hard e08316b` = origin, дерево чистое, ничего не потеряно; их работа даже включила мой WP44 в основу), деплой доделал через изолированный worktree. Урок: для merge/push в shared-чекаут — ВСЕГДА worktree, разовой `branch --show-current` не доверять.
+
+**Остаток / out-of-scope.**
+- **iter3 (если honest_fail зафлудит ручную очередь):** точнее наводиться на Canvas-поле — тап по центру bounds узла-маркера вместо фикс-координат; возможно tap по нескольким Y с проверкой фокуса до перебора координат. Снизит долю ухода в ручную. Постов без описания уже не будет в любом случае.
+- IG/YT — вне scope (IG надёжен, YT отдельное поле описания; симптом только TT).
+
+Evidence: spec `docs/superpowers/specs/2026-05-29-wp44-tt-caption-honest-fill-design.md`; plan `docs/superpowers/plans/2026-05-29-wp44-tt-caption-honest-fill.md`. Память: `project_wp44_tt_caption_honest_fill`. Verify: утренняя пачка — нет TT-постов без описания + доля честных `tt_caption_field_not_focused`. Откат: `TT_CAPTION_FOCUS_GATE_ENABLED=0`.
+
+---
+
 ## 2026-05-28 — WP #179+#185: unic-worker mobile-safe transcode для ручной выкладки IG
 
 ### ✅ ГОТОВО 2026-05-28 — OpenProject #179 + #185 → Готово; impl на main `delivery-contenthunter` 98d0f67 → прод pulled + pm2 restart unic-worker; verified Данилом на 19/SM-A175F (плеер + IG-редактор OK)
