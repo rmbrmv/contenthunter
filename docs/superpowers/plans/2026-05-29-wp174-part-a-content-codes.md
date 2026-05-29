@@ -607,18 +607,24 @@ Expected: FAIL (ProjectBody без `prefix` / нет валидации).
 ```python
     # WP#174 — override кода-префикса (только admin задаёт; manager не трогает)
     import re as _re
+    from sqlalchemy.exc import IntegrityError
     if body.prefix is not None and current_user.role.value == "admin":
         pref = body.prefix.strip().upper()
         if not _re.fullmatch(r"[A-Z0-9]{2,4}", pref):
             raise HTTPException(status_code=400, detail="Префикс: 2–4 символа [A-Z0-9]")
+        # быстрый отсев (UX); финальная гарантия — UNIQUE-индекс + перехват гонки ниже
         clash = (await db.execute(text(
             "SELECT 1 FROM validator_projects WHERE code_prefix=:p AND id<>:id"),
             {"p": pref, "id": project_id})).first()
         if clash:
             raise HTTPException(status_code=409, detail=f"Префикс {pref} уже занят")
-        await db.execute(text(
-            "UPDATE validator_projects SET code_prefix=:p WHERE id=:id"),
-            {"p": pref, "id": project_id})
+        try:
+            async with db.begin_nested():  # SAVEPOINT — гонка двух override на один префикс
+                await db.execute(text(
+                    "UPDATE validator_projects SET code_prefix=:p WHERE id=:id"),
+                    {"p": pref, "id": project_id})
+        except IntegrityError:
+            raise HTTPException(status_code=409, detail=f"Префикс {pref} уже занят")
 ```
 
 - [ ] **Step 4: Запустить тест**
@@ -750,7 +756,7 @@ git commit -m "feat(wp174): code в сериализации контента + 
 import asyncio
 from sqlalchemy import text
 from src.database import async_session
-from src.services.prefix_service import ensure_project_prefix
+from src.services.prefix_service import ensure_project_prefix, assign_content_code
 
 
 async def main():
@@ -760,27 +766,24 @@ async def main():
         for p in projects:
             pid, name = p["id"], p["project"]
             await ensure_project_prefix(db, pid, name or f"project{pid}")
-            # текущий максимум номера в проекте
-            cur_max = (await db.execute(text(
-                "SELECT COALESCE(MAX(code_number),0) FROM validator_content WHERE project_id=:id"),
-                {"id": pid})).scalar()
+            await db.commit()
             # контент без номера — по порядку создания
             rows = (await db.execute(text(
                 "SELECT id FROM validator_content WHERE project_id=:id AND code_number IS NULL "
                 "ORDER BY created_at ASC, id ASC"), {"id": pid})).scalars().all()
-            n = cur_max
+            # Номера выдаём через ТУ ЖЕ атомарную последовательность, что и загрузки
+            # (assign_content_code = UPDATE code_seq RETURNING) — иначе конкурентная
+            # загрузка во время sweep может получить тот же номер → дубль.
+            cnt = 0
             for cid in rows:
-                n += 1
+                n = await assign_content_code(db, pid)  # атомарный инкремент code_seq
                 await db.execute(text(
-                    "UPDATE validator_content SET code_number=:n WHERE id=:cid"),
+                    "UPDATE validator_content SET code_number=:n WHERE id=:cid AND code_number IS NULL"),
                     {"n": n, "cid": cid})
-            # синхронизировать счётчик проекта
-            await db.execute(text(
-                "UPDATE validator_projects SET code_seq=GREATEST(code_seq, :n) WHERE id=:id"),
-                {"n": n, "id": pid})
-            await db.commit()
-            if rows:
-                print(f"project {pid} ({name}): +{len(rows)} кодов, code_seq→{n}")
+                await db.commit()
+                cnt += 1
+            if cnt:
+                print(f"project {pid} ({name}): +{cnt} кодов")
     print("backfill done")
 
 
