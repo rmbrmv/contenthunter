@@ -36,6 +36,15 @@ busy = **только `operator_status = 'in_progress'`** в обеих функ
 - Прод-чекаут `/root/.openclaw/workspace-genri/autowarm`: `git pull --ff-only origin main` → HEAD `87387a8`.
 - `sudo pm2 restart 35` (restarts 34, 18:48 UTC). После рестарта: `[dispatch-queue] 50 задач к запуску`, троттлинг только по легитимному per-Pi concurrency 3/3, queued-блокировки нет.
 
+## ⚠️ Второй слой (обнаружен при verify деплоя) — зомби-диспетчер
+После рестарта прод id35 (с фиксом) диспатч ВСЁ РАВНО не шёл: 20 минут «`[dispatch-queue] 50 задач к запуску`» → полная тишина, 0 `✅`/`❌`, слоты клеймились в `running` без `publish_task_id`.
+
+**Причина:** осиротевший зомби-процесс `node --test test_dispatch_manual_guard.test.js` (pid 837270, ppid=1, работал 25ч, cwd = удалённый worktree `…autowarm-testbench-feat-wp187-published-auto-20260529 (deleted)`). Тест импортирует `server.js`, который поднимает СВОЙ фоновый `dispatchPublishQueue`-loop по боевой БД. Зомби перехватывал D4-advisory-lock claim'ы (`pending→running`), а прод id35 получал в guard `{claimed:false, race:true}` → **тихий `continue` без лога** (server.js:6399-6402). Отсюда «50 задач→тишина».
+
+**Лечение:** `kill -9 837270` (19:06) + сброс застрявших `running`-без-task слотов → `pending`. **Следующий же цикл (19:08:41) раздиспатчил 46 задач** на ранее-заблокированные устройства (RFGYC31P26P, RF8Y80ZTVFZ, RFGYA19DNGZ, RFGYB07Y5TJ…). ОЖИВЛЕНО ПОДТВЕРЖДЕНО 30.05 19:10: pending 319→266 дренажирует, 11 живых `publisher.py`, 0 застрявших.
+
+**Follow-up (бэклог):** `downloadMedia` (server.js:6772) — `proto.get` БЕЗ socket-timeout. Висящий медиа-хост заморозил бы весь dispatch-loop (try/catch на строке 7062 ловит reject, но НЕ ханг). Сегодня хост работал (HEAD 200/3.2с), но добавить timeout+abort обязательно. Также: stale `node --test`, импортирующие `server.js`, = конкурирующие dispatch-loop'ы по проду → не оставлять зомби (см. `feedback_stale_node_test_processes`).
+
 ## Остаток
 - 3 `in_progress`, один с 21.05 — брошен оператором, держит 1 телефон занятым; почистить одним UPDATE (не блокер).
 - 161 `queued` теперь безвредны (не блокируют). Опциональная гигиена — отдельный expiry/cleanup для брошенных `queued` (зеркало WP#155).

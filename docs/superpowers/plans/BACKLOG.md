@@ -12,7 +12,9 @@
 
 **Качество:** TDD (3 iter2-теста развёрнуты red→green), **11/11 GREEN**, `codex review` 0 P1. Живое подтверждение: прогон теста (импортирует `../server` → реальный dispatch-loop) раздиспатчил 14 слотов на освобождённые телефоны. Evidence: `docs/evidence/2026-05-30-dispatch-busy-inprogress-only-fix.md`. Обновлена память `project_busy_inprogress_only_dispatch_fix` + пометка iter2-отката в `project_wp183_…`.
 
-**Остаток (не блокеры):** (1) 3 `in_progress`, один с 21.05 брошен — держит 1 телефон, почистить UPDATE-ом; (2) опциональный expiry/cleanup брошенных `queued` (зеркало WP#155). **Урок:** «зарезервировано» ≠ «ресурс занят»; busy-гард опирать на реальную активность, сверять с оперским UI.
+**⚠️ Второй слой (verify деплоя):** после рестарта прод id35 диспатч ВСЁ РАВНО стоял (0 ✅ за 20 мин, «50 задач»→тишина, слоты клеймились `running` без task). Причина — осиротевший зомби `node --test test_dispatch_manual_guard.test.js` (pid 837270, ppid=1, 25ч, cwd=удалённый worktree wp187-…-20260529): импортирует `server.js` → СВОЙ dispatch-loop по боевой БД, перехватывал D4-advisory claim'ы (прод → `!claimed`, тихий continue). `kill -9` + сброс застрявших `running`-без-task → pending → **след. цикл (19:08) раздиспатчил 46 задач**, оживление подтверждено 19:10 (pending 319→266, 11 publisher.py, 0 застрявших).
+
+**Follow-up (бэклог):** (a) `downloadMedia` (server.js:6772) без socket-timeout → висящий медиа-хост заморозит весь dispatch-loop (try/catch ловит reject, не ханг) — добавить timeout+abort; (b) 3 `in_progress`, один с 21.05 брошен — почистить UPDATE-ом; (c) опц. expiry/cleanup брошенных `queued` (зеркало WP#155); (d) не оставлять stale `node --test`, импортирующие `server.js` = конкурирующие dispatch-loop'ы по проду (см. `feedback_stale_node_test_processes`). **Урок:** «зарезервировано» ≠ «занят»; busy-гард опирать на реальную активность, сверять с оперским UI.
 
 ## 2026-05-29 — WP #187: кнопка «Выложено авто» + «Отменить» для ручной выкладки
 
