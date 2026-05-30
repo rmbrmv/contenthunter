@@ -1,5 +1,19 @@
 # Backlog tickets
 
+## 2026-05-30 — Авто-выкладка встала: queued-брони душили диспатч → busy = in_progress only (откат WP#183 iter2)
+
+### ✅ SHIPPED+DEPLOYED 2026-05-30 — impl на main `delivery-contenthunter` `87387a8`, прод pull (FF) + PM2 id35 restart
+
+Авто-выкладка за 30.05 почти встала: **4 publish-задачи против ~220/день** (28.05=326, 29.05=224). В логах id35 на каждый слот `[dispatch-queue] device=… занят, откладываем`. Данил заметил расхождение: UI «Статусы телефонов» показывал занятыми **только 3 телефона**.
+
+**Root cause:** `fetchBusyDevices`/`insertPublishTaskRaceSafe` (`server.js`) считали устройство занятым по `operator_status IN ('queued','in_progress')` (WP#183 iter2). Активных на 30.05: **161 `queued`/24 устройства + 3 `in_progress`**, и **все с `planned_date` в прошлом** — брошенные ручные брони (оператор не выложил), копились с 21–26.05 и помечали телефоны занятыми навечно. Из 48 устройств с pending-слотами 22 заблокированы прошлыми `queued`, 0 — живыми. UI (`phone_status.js`) считает busy только `in_progress` → был прав (3). **Триггер:** рестарт прода `--update-env` 29.05 20:42 UTC активировал `queued`-блокировку (28–29.05 диспатч шёл на эти же устройства: 242/326 и 110/224 задач).
+
+**Фикс (iter3, решение Данила = Вариант 3):** busy = **только `operator_status = 'in_progress'`** в обеих функциях; `queued` больше не блокирует (совпадает с UI). Kill-switch `MANUAL_INPROGRESS_BLOCKS_AUTO_DISPATCH_ENABLED` без изменений.
+
+**Качество:** TDD (3 iter2-теста развёрнуты red→green), **11/11 GREEN**, `codex review` 0 P1. Живое подтверждение: прогон теста (импортирует `../server` → реальный dispatch-loop) раздиспатчил 14 слотов на освобождённые телефоны. Evidence: `docs/evidence/2026-05-30-dispatch-busy-inprogress-only-fix.md`. Обновлена память `project_busy_inprogress_only_dispatch_fix` + пометка iter2-отката в `project_wp183_…`.
+
+**Остаток (не блокеры):** (1) 3 `in_progress`, один с 21.05 брошен — держит 1 телефон, почистить UPDATE-ом; (2) опциональный expiry/cleanup брошенных `queued` (зеркало WP#155). **Урок:** «зарезервировано» ≠ «ресурс занят»; busy-гард опирать на реальную активность, сверять с оперским UI.
+
 ## 2026-05-29 — WP #187: кнопка «Выложено авто» + «Отменить» для ручной выкладки
 
 ### ✅ SHIPPED+DEPLOYED+VERIFIED 2026-05-29 — OpenProject #187 → Готово; impl на main `delivery-contenthunter` `f38bf15`, прод pulled (FF) + PM2 id35 restart
