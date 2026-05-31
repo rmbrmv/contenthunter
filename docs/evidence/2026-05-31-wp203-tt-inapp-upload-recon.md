@@ -66,3 +66,20 @@ disable не применился/слетел после OTA.
 
 Временные дампы/скрины `/sdcard/wp203_*` удалены с устройства; публикация не выполнялась; девайс
 возвращён на лаунчер.
+
+---
+
+## РАЗВОРОТ ДИАГНОСТИКИ + РЕРАЙТ (31.05, по смок-эвиденсу)
+
+Смок in-app-кода (#12812) + прод-данные развернули premise WP#203:
+
+- **#1 драйвер обвала TT** (done 68→2/день с 30.05, `tt_caption_field_not_focused` 141/7д, растёт) = **story-derail**: TikTok 44.4.3 САМ уводит флоу в Stories («Добавить в историю» `SocialMediaPickerActivity` → «Ваша история» редактор), где caption-тап кода промахивается. Focus-gate (29.05) честно фейлит это → обвал стал виден.
+- **storyservice ОПРОВЕРГНУТ**: `com.samsung.storyservice` отключён на №19 (`pm list -d` подтверждает), «Добавить в историю» всё равно есть → derail внутри TikTok, ops-disable НЕ лечит.
+- **Поле НЕ сломано**: на обычном пути caption = реальный `android.widget.EditText` (центр ~344,461), тап → `mInputShown=true`. Обычный путь доходит до фокусируемого поля и «Опубликовать».
+- **SEND-intent роутит в story-лист** «Поделиться в TikTok» → derail (прод #12794 скринкаст).
+
+**Финальный фикс (рерайт оркестратора):** стейт-машина (caption/editor/regular-gallery/story-derail/camera/feed) + escape story-derail (`KEYCODE_BACK`, cap=4 → честный `tt_story_derail_unrecoverable`) + ре-вход «+» из ленты + точный тап EditText-ноды + **удаление SEND-intent** + верификация видео по длительности. Kill-switch `TT_INAPP_UPLOAD_VIA_CAMERA_ENABLED`. 112 unit-тестов, holistic+codex Ready-to-merge.
+
+**Смок #12813 на №19 (RF8YA0W57EP) = РЕАЛЬНАЯ ПУБЛИКАЦИЯ:** account_switch ok → story-derail escape (#1 BACK) → видео по длительности (56.3→56) → настоящий caption с подтверждённым фокусом (32 симв.) → «Опубликовать» → новый пост на профиле @user70415121188138 (▶19). (TT /video/ URL не получен — пре-егзистинг URL-capture флаки, cron-ретрай; не WP#203.)
+
+**Статус:** влито в локальный main autowarm-testbench (ec44cf8, ff). Остаток (за Данилом): push origin/main + прод pull + `pm2 restart` + применить миграцию `migrations/20260531_wp203_tt_inapp_upload_codes.sql` (5 кодов) на прод-БД.

@@ -1,5 +1,7 @@
 # WP#203 — Детерминированный in-app upload для TikTok
 
+> ⚠️ **ОБНОВЛЕНО 31.05:** premise развернулась по смок-эвиденсу — реальный root cause = TikTok story-derail (не SEND-intent-флаки/Samsung storyservice). Финальный дизайн = стейт-машина + escape story-derail; SEND-intent УДАЛЁН. См. секцию «РАЗВОРОТ ДИАГНОСТИКИ + РЕРАЙТ» в evidence-доке.
+
 **Дата:** 2026-05-31
 **Тип:** Ошибка (follow-up WP#44 iter3, deploy 31.05 prod 71f4aa4)
 **OpenProject:** #203, статус «В разработке», assignee Данил
