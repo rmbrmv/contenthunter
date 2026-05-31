@@ -44,6 +44,24 @@
    тайл = не видео). После фильтра первый тайл = новейшее видео. Опционально — верификация по
    оверлею `MM:SS` против длительности `remote_media_path`.
 
+## Ops: отключение com.samsung.storyservice на флоте (FM-B, слой 1)
+
+In-app upload уводит флоу от системного share (где всплывает оверлей), а foreground-дисмисс
+(`_tt_recover_from_storyservice_fg`) — страховка. Но самый чистый способ убрать FM-B на корню —
+отключить пакет на флоте (исполняет Данил):
+
+```
+# на каждое устройство (обратимо):
+adb -s <serial> shell pm disable-user --user 0 com.samsung.storyservice
+# откат:
+adb -s <serial> shell pm enable com.samsung.storyservice
+# проверка персистентности после reboot/OTA:
+adb -s <serial> shell pm list packages -d | grep storyservice   # должен быть в disabled
+```
+
+На RF8YA0W57EP (№19) уже отключён. Код-дисмисс по foreground-пакету покрывает устройства, где
+disable не применился/слетел после OTA.
+
 ## Гигиена
 
 Временные дампы/скрины `/sdcard/wp203_*` удалены с устройства; публикация не выполнялась; девайс
