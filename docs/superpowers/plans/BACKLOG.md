@@ -1,5 +1,25 @@
 # Backlog tickets
 
+## 2026-05-31 — IG-фокус-раунд: 4 субагента (WP #197 / #193 iter2 / #196 / switch_failed)
+
+### ✅ SHIPPED+DEPLOYED 2026-05-31 — прод autowarm `/root/.openclaw/workspace-genri/autowarm` (PM2 id35) FF → main `1a3db8a`; PM2-restart не нужен (Python-publisher per-task spawn, kill-switch default-ON)
+
+IG-фокус-сессия: разведка прода (3 дня после фиксов 28-29.05) показала, что открытые IG-тикеты почти пусты (#193/#119/#181/#105 = Готово), а живая боль — без тикетов. Группировка фейлов по последнему `meta.category` (не по `error_code` — он врёт, пишет ПЕРВУЮ ошибку). 4 независимых домена → 4 субагента (worktree от origin/main, скринкаст-first, Spec→codex→Plan→codex→TDD→codex→PR, kill-switch).
+
+**WP #197 (НОВЫЙ) — `ig_account_switcher_wrong_foreground` (топ живой IG-фейл, 118/7д, активен 31.05).** Root по 6 скринкастам: НОВЫЙ путь утечки foreground — слепые тапы `_tap_profile_header` (username-зона / fallback 540,180) происходят ВНУТРИ цикла sheet-reguard, где fg НЕ перепроверяется. Гард #119 (`_reliable_foreground_pkg` + 2-sample) проверяет fg только на ВХОДЕ в `_ig_guard_picker_foreground`. Слепой тап по чужому профилю/модалке/Reels либо не открывает sheet, либо свайпами уводит телефон в Recents→Камеру (`com.sec.android.app.camera`)/TikTok (`com.zhiliaoapp.musically`). НЕ регрессия #119, НЕ stale-dump #131 (все дампы usable=True). В 4/6 финальный fg = IG (код врал, sheet просто не открылся). Фикс в `account_switcher.py` (+128): A) дисмисс модалки «Сохранить данные для входа?» + re-check sheet; B) re-confirm fg в цикле, при дрейфе ≠ IG → re-ground вместо слепого тапа; C) `final_foreground_pkg` в meta + post-loop re-read. Kill-switch `IG_PICKER_REGUARD_HARDEN_ENABLED` (default ON, `=0`→legacy). 11 новых + 134 регресс зелёные, codex 0 P1/P2/P3. PR #128 merged. WP#197 → Тестирование.
+
+**WP #193 (ПЕРЕОТКРЫТ Готово→В разработке→Тестирование) — `ig_caption_screen_not_reached` РЕЦИДИВ (7/3д до 30.05, ПОСЛЕ фикса 29.05).** Root по кадрам task 12305 (@procontent_lab, 30.05 22:10) = НОВЫЙ паттерн (не промо «новой кнопкой камеры»/«Edits» из триажа 29.05): coach-mark **«Проведите по экрану вверх или вниз, чтобы установить размер для режима предпросмотра» + кнопка «Понятно»**, висящий >30с на экране ВИДЕОРЕДАКТОРА Reels (timeline: Редактировать/Аудио/Текст/Стикеры/Субтитры) и перехватывающий focus-tap; `caption_input_text_view` отсутствует, т.к. это editor-page (на caption — по синей стрелке вверху справа). abort-meta подтвердил `preview_coachmark_at_abort: true`. iter1 (`_dismiss_ig_editor_interstitials`, Rung 3) ошибочно полагал, что coach-mark снимется recovery-focus'ом — только логировал. Фикс iter2 в `publisher_instagram.py`: Rung 3 тапает «Понятно»/«Got it» (`_IG_PREVIEW_COACHMARK_DISMISS`), re-dump, событие `ig_preview_coachmark_dismissed`; generic «OK» намеренно исключён (риск мис-тапа на editor-page). Существующий kill-switch `IG_CAPTION_INTERSTITIAL_DISMISS_ENABLED`. 16/16 + 20/20 тестов, codex 0 P1. PR #127 merged. WP#193 → Тестирование.
+
+**#196 `adb_push_chunked_failed` — verify-and-close → ГОТОВО.** Премиса тикета «новые фейлы 0→5 после 29.05» НЕВЕРНА: спайки были 21.04 (5) и 04.05 (3), один direct-adb-хост 82.115.54.26 (транзиент сети VPS↔proxy), после 23.05 = 0 за 8 дней при ~79-88 IG-задач/день. chunked-push+retry уже есть (WP #98). Кода не трогали, PR не нужен.
+
+**`switch_failed_unspecified` (14/3д, все = `expert_contentlab_0`) — ops, НЕ системный код.** Root = устройство **RF8YA0V7LEH в USB `unauthorized` с 30.05 20:57 МСК** (86 задач IG/TT/YT гибнут на preflight; реальная категория `adb_device_not_ready`, замаскирована catch-all). Это ТОТ ЖЕ device, что #99. Сведено: #99 эскалирован комментарием, дубль-WP #198 → отклонено, **WP #199** = follow-up к #140/#166 (маппить preflight `adb_device_not_ready` напрямую, не в catch-all `switch_failed_unspecified`, в `triage_classifier.py`). Действие за Данилом: переподключить USB / разрешить отладку на экране RF8YA0V7LEH.
+
+**Инсайты.** (1) `error_code` систематически врёт — группируй по последнему `meta.category`. (2) Открытые IG-тикеты ≠ живая боль: единственный открытый #196 потух, доминанта #197 была без тикета. (3) Контеншн shared-чекаута `autowarm-testbench`: параллельная YT-сессия (#180 iter3/#200/#201) делала `git reset`/`stash` в общем чекауте → стирала незакоммиченные правки обоих IG-агентов; оба восстановились, PR'ы содержат ровно свои файлы. Подтверждает правило: worktree обязателен, `git stash` в общем чекауте запрещён.
+
+**Остаток.** Verify утренней пачкой 01.06: 0 новых `ig_account_switcher_wrong_foreground` + `final_foreground_pkg` в meta; 0 caption-фейлов с coach-mark + `ig_preview_coachmark_dismissed` в логах. ops RF8YA0V7LEH (#99). Откат: `IG_PICKER_REGUARD_HARDEN_ENABLED=0` / `IG_CAPTION_INTERSTITIAL_DISMISS_ENABLED=0`. Память: `project_ig_focus_round_2026_05_31`.
+
+---
+
 ## 2026-05-30 — Авто-выкладка встала: queued-брони душили диспатч → busy = in_progress only (откат WP#183 iter2)
 
 ### ✅ SHIPPED+DEPLOYED 2026-05-30 — impl на main `delivery-contenthunter` `87387a8`, прод pull (FF) + PM2 id35 restart
