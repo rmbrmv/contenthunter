@@ -1,5 +1,28 @@
 # Backlog tickets
 
+## 2026-05-31 — YT-фокус-раунд: #200 «Канал удалён» (SHIPPED+DEPLOYED) + триаж всех YT-кодов
+
+### ✅ SHIPPED+DEPLOYED 2026-05-31 — прод autowarm `/root/.openclaw/workspace-genri/autowarm` (PM2 id35) FF → main `d109dd3`; PM2-restart НЕ нужен (Python-publisher per-task spawn, kill-switch default-ON); OpenProject #200 → Тестирование
+
+Фокус — только YouTube. Открытых YT-тикетов по сути один (#180, «Тестирование», но verify показал рецидив). Группировка фейлов по device-концентрации + последнему `meta.category` (не по `error_code` — врёт, пишет ПЕРВУЮ ошибку).
+
+**WP #200 (НОВЫЙ, дочерний #180) — `yt_accounts_btn_missing_postmortem` доминанта (180/311 YT-фейлов 7д; 60 к 10:00 31.05).** Root по скринкастам (tasks 12724 `global.cards_pay`, 12636 `payanywhere_now`): НЕ stale-uiautomator (ошибочная гипотеза #180), а **забаненные/удалённые YouTube-каналы** — интерстишал «Канал удалён с YouTube» (нарушения: спам/обман/мошенничество) + диалог апелляции «Вы действительно хотите выйти?». Кнопки «Аккаунты» нет → свитчер `_switch_youtube` (yt_3_open_accounts) жжёт retap+alt-avatar+postmortem → ложный код. Ни один WP#180-гард это не ловил. Фикс в `account_switcher.py` (+181): `_yt_detect_channel_deleted` (переиспользует `yt_gmail_probe.DELETED_LABEL_RE`, ё/е+EN) + `_maybe_handle_yt_channel_deleted` сразу после fg-guard ДО прожига проб → честный `yt_channel_deleted` + `account_blocks(yt, channel_deleted)` (паттерн WP#160). **Codex P2 catch:** баннер принадлежит АКТИВНОМУ каналу, который на multi-account девайсе ≠ target → блок target только при совпадении имени удалённого канала ИЛИ single-account; иначе честный fail без блока (не морозит здоровый аккаунт). Kill-switch `YT_CHANNEL_DELETED_GUARD_ENABLED` (default ON). 18 новых + 197 регресс зелёные (в проде 18/18 verified post-deploy), codex 0 P1/P2 на спеке/плане/коде. PR #129 merged → main `d109dd3`, прод FF.
+
+**WP #201 (НОВЫЙ, ops, дочерний #180) — 8 забаненных каналов** на 5 устройствах (payanywhere_now/estate-z5i/easy.virtualpay/wellfreshcare/pay_abroadeasy/globalcardspay/maksim_estate-o6x/global.pay.access-s6u; почти все 0 успехов). Действие за Данилом: подтвердить баны, пересоздать/заменить, снять `account_blocks(yt)` для восстановленных.
+
+**Триаж остальных YT-кодов — ни один не требует код-фикса:**
+- **`yt_picker_target_absent` (11/7д)** — НЕ баг матчера. На устройстве **RFGYA19DB8K сменились Google-аккаунты**: БД (`factory_inst_accounts`) ждёт `valeronchiks007@`(virtualcardpro)/`avdotya387@`(payworldcards), а в picker'е чужие `card.virtual.pro@`/`world.cards.pay@` (нет в нашей БД). gmail-hint (`publisher_base.py:2017`) передаётся верно, искомого gmail на устройстве нет → честный target-absent. Публиковались ОК до 28.05. ops-WP **#202** (за Данилом), связано с #178.
+- **`switch_failed_unspecified` (19/7д)** — маскировка: реально 16× `adb_device_not_ready` (=WP#195, инфра) + 3 generic. Не YT-баг.
+- **`yt_editor_upload_timeout` (9/7д)** — разбросан по 1 на устройство (9/9) → транзиент upload/сеть. Длиннохвост (возможный бэклог retry/backoff).
+- **`yt_picker_dismissed` (18/7д)** — дормант с 27.05 (Mystic_Aroma на RF8Y90LBGZJ). Неактуален.
+- **`yt_create_menu_not_reached` (7/7д)** — разбросан, стоп 28.05, территория закрытого WP#134. Длиннохвост.
+
+**Инсайт.** Кучка одного error_code на 1-2 телефонах с ~0 успехов → почти всегда account/device-side (бан канала / смена аккаунтов / adb), а не баг UI-логики — проверяй по скринкасту ДО починки кода.
+
+**Остаток.** Verify утренней пачкой 01.06: 0 ложных `yt_accounts_btn_missing_postmortem` + появление честных `yt_channel_deleted`/`account_blocks(yt)`. ops #201 (баны) + #202 (RFGYA19DB8K). Откат: `YT_CHANNEL_DELETED_GUARD_ENABLED=0`. Память: `project_wp180_yt_channel_deleted_31_05`, `project_yt_codes_triage_31_05`.
+
+---
+
 ## 2026-05-31 — IG-фокус-раунд: 4 субагента (WP #197 / #193 iter2 / #196 / switch_failed)
 
 ### ✅ SHIPPED+DEPLOYED 2026-05-31 — прод autowarm `/root/.openclaw/workspace-genri/autowarm` (PM2 id35) FF → main `1a3db8a`; PM2-restart не нужен (Python-publisher per-task spawn, kill-switch default-ON)
