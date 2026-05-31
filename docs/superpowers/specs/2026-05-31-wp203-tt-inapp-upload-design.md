@@ -61,7 +61,26 @@ switch + «+»  →  читаем topResumedActivity (fg_pkg) + dump_ui
 | `_tt_detect_camera_screen` | `(ui_xml, fg_pkg) -> bool` | камера? fg содержит `SAASceneWrapperActivity` **или** UI содержит ≥2 вкладок из {ФОТО, ТЕКСТ, ЭФИР, ПУБЛИКАЦИЯ} | bool |
 | `_tt_enter_upload_from_camera` | `(ui_xml) -> bool` | тап **тайла-миниатюры галереи внизу-слева** (clickable `id/zne`, НЕ текста «ПУБЛИКАЦИЯ» — это уже выбранный режим) → ждёт галерею | True если галерея появилась |
 | `_tt_in_gallery_picker` | `(ui_xml) -> bool` | детект галереи по UI-маркерам (вкладки Все/Видео/Фото + «Далее») — foreground НЕ меняется (та же SAAScene) | bool |
-| `_tt_select_newest_gallery_video` | `(ui_xml, expected_dur=None) -> bool` | tap вкладку «Видео» → первый тайл (верх-лево, новейший); опц. верификация по оверлею длительности `MM:SS` | True если тайл тапнут |
+| `_probe_duration_s` | `(path) -> float\|None` | длительность видео через ffprobe (переиспользует паттерн `_probe_mp4`); `None` если path=URL/недоступен/ошибка | сек |
+| `_tt_select_newest_gallery_video` | `(ui_xml, expected_dur) -> str` | tap «Видео» → выбрать тайл с **верификацией по длительности** (см. ниже) | `'tapped'`/`'no_match'`/`'no_tiles'` |
+
+### Верификация выбора видео по длительности (обязательная)
+
+Первый тайл (новейший) почти наверняка наш — пуш идёт прямо перед публикацией. Длительность —
+**вторичный гард** против редкого «новейший ≠ наш» (лаг пуша, кэш галереи). Никогда не публикуем
+чужое видео.
+
+1. `expected_dur = _probe_duration_s(self.media_path)` (локальный файл-источник, до пуша).
+2. Из дампа «Видео»-сетки: тайлы (grid-bounds, clickable) + оверлеи `MM:SS`; каждому тайлу
+   сопоставляем длительность по оверлею, чей центр лежит в bounds тайла.
+3. Политика выбора:
+   - `expected_dur` известна → совпадение `|tile − expected| ≤ 1с` (учёт floor/round TikTok).
+     Среди совпавших — **первый (новейший, верх-лево)** → tap, `'tapped'`.
+   - известна, но **ни один тайл не совпал** → `'no_match'` → честный фейл
+     `tt_gallery_video_match_failed` → ручная (не тапаем наугад).
+   - `expected_dur is None` (ffprobe не смог / `media_path`=URL) → первый тайл + `log warning`
+     `tt_gallery_duration_unverified` → `'tapped'` (деградация, как раньше «новейший»).
+   - тайлов нет вовсе → `'no_tiles'` → честный фейл.
 | `_tt_recover_from_storyservice_fg` | `(fg_pkg, wait) -> str` | fg==`com.samsung.storyservice`/лаунчер в TT-фазе → escalating BACK с cap | `'handled'`/`'stuck'`/`'clean'` |
 
 Оркестратор `_tt_inapp_upload_from_camera(content)`: enter→gallery→select→ждать editor-маркеры
@@ -84,8 +103,10 @@ switch + «+»  →  читаем topResumedActivity (fg_pkg) + dump_ui
 - При недостижении редактора за cap — новый честный код `tt_inapp_upload_unreached`
   (+ под-степ для камеры/галереи/fg-stuck в телеметрии) → задача в ручную. Вслепую не печатаем.
 - Существующий focus-gate (`_fill_tiktok_caption`) сохраняется как последний рубеж.
-- Новый код `tt_inapp_upload_unreached` регистрируется в каталоге `publish_error_codes`
-  (WP#140) и классифицируется как UI-код → `ui_changed` → ручная очередь.
+- Новые коды `tt_inapp_upload_unreached` и `tt_gallery_video_match_failed` регистрируются в
+  каталоге `publish_error_codes` (WP#140) и классифицируются как UI-коды → `ui_changed` → ручная
+  очередь. `tt_gallery_duration_unverified` — warning-событие (не терминальный код), для мониторинга
+  деградации ffprobe.
 
 ## Error handling / edge cases
 
@@ -98,9 +119,12 @@ switch + «+»  →  читаем topResumedActivity (fg_pkg) + dump_ui
 
 ## Тестирование
 
-- **TDD**: unit на каждый чистый юнит — детект камеры (fg и UI-варианты), выбор тайла,
-  fg-recover cap→stuck, оркестратор happy-path и fail-path. Моки `dump_ui`/`adb`/`_tt_foreground_pkg`
-  как в `tests/test_publisher_tt_*`.
+- **TDD**: unit на каждый чистый юнит — детект камеры (fg и UI-варианты), `_tt_in_gallery_picker`,
+  **верификация по длительности** (совпадение в пределах ±1с; floor vs round; no_match→честный фейл;
+  expected=None→первый тайл+warning; сопоставление оверлея `MM:SS` ↔ bounds тайла), fg-recover
+  cap→stuck, оркестратор happy-path и fail-path. Моки `dump_ui`/`adb`/`_tt_foreground_pkg`/
+  `_probe_duration_s` как в `tests/test_publisher_tt_*`. Фикстуры XML — из реальных дампов №19
+  (`docs/evidence/2026-05-31-wp203-tt-inapp-upload-recon.md`).
 - **testbench-смок** на RF8YA0W57EP (storyservice там disabled) — валидация чистого success
   по in-app пути end-to-end.
 - **`codex review`** спеки/плана и кода (конвенция).
