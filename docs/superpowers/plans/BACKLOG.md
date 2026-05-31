@@ -1,5 +1,17 @@
 # Backlog tickets
 
+## 2026-05-31 — WP #195: adb_device_not_ready спайк = 1 unauthorized девайс → scheduler device-health gate
+
+### ✅ SHIPPED+DEPLOYED 2026-05-31 — OpenProject #195 → Тестирование; autowarm prod main `92cef97`, pm2#35 restart (verified)
+
+**Что было не так.** Спайк `adb_device_not_ready` 5→59 (28% обвала TT success-rate) = **ОДНО устройство `RF8YA0V7LEH`** (порт 15048/Pi#5) в adb state `unauthorized` (USB-авторизация слетела). Кросс-платформенно (TT 59/IG 14/YT 13) → device-level, не TikTok-баг. Диспатчер слал десятки публикаций → каждая падала на `_preflight_adb_device` + жгла прогон + засоряла fail-статистику.
+
+**Что сделано.** Device-health гейт в `scheduler.js launchTask`: перед спавном publish — `adb devices -l`, если serial `unauthorized`/`offline` → не спавним, задача остаётся `pending` (запуск при восстановлении). probe-fail не гасит. In-memory cooldown 5мин. Kill-switch `SCHEDULER_DEVICE_HEALTH_GATE_ENABLED`. 11 node:test, codex 0 P1. Verified: после рестарта здоровая публикация прошла, 0 ошибок.
+
+**Зоны (без дублей):** #99 = физ.re-auth (ops), #199 = метка error_code, #195 = превентив. Evidence: `docs/evidence/2026-05-31-wp195-adb-device-health-gate.md`. Память: `project_wp195_adb_device_health_gate`.
+
+**Что осталось.** (1) WP#99 — физ.re-auth RF8YA0V7LEH (на нём 36 будущих слотов 01–11.06, гейт их пропускает до re-auth); (2) codex P2 — candidate-window occupancy при накоплении многих мёртвых pending → follow-up DB-backoff в наполнителе.
+
 ## 2026-05-31 — WP #174: верификация + UI-доводка «Лог событий» (Lifecycle View)
 
 ### ✅ SHIPPED+DEPLOYED 2026-05-31 — OpenProject #174 → Готово; прод delivery `main` (autowarm `/root/.openclaw/workspace-genri/autowarm`, :3848) коммиты `a70fafa` + `fa6f0df`, auto-push hook → origin/main, рестарт не нужен (index.html = express.static)
