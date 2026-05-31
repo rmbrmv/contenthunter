@@ -1,5 +1,31 @@
 # Backlog tickets
 
+## 2026-05-31 — WP #174: верификация + UI-доводка «Лог событий» (Lifecycle View)
+
+### ✅ SHIPPED+DEPLOYED 2026-05-31 — OpenProject #174 → Готово; прод delivery `main` (autowarm `/root/.openclaw/workspace-genri/autowarm`, :3848) коммиты `a70fafa` + `fa6f0df`, auto-push hook → origin/main, рестарт не нужен (index.html = express.static)
+
+Пришло от Данила в ходе верификации задач «Тестирование»: «Лог событий нигде не вижу, дай конкретную ссылку».
+
+**Сначала — верификация (опровергла собственный прошлый вывод).** В прошлой сессии я ошибочно решил «фича выключена / event log disabled» — бил по несуществующему `/api/analytics/event-log`, который проваливался в SPA-заглушку. По факту фича **полностью в проде**: 3 эндпоинта `/api/lifecycle`(+`/timeline`,`/accounts`), прогон деплойнутого `lifecycle.rollupSql()` на живой БД = **435 роликов, все 435 с кодами** (часть A: RLM-014 и т.д.), 431 с planned_date. БД одна (`localhost:5432` == Docker `172.17.0.3`, publish_tasks идентичны); `content_id` приходит через join `unic_tasks` (не на `publish_queue` — поэтому прямой psql падал). Auth = express-сессия (pgSession), не токен.
+
+**Корень жалобы:** UI был **закопан** — «Лог событий» существовал только как 2-й центральный таб ВНУТРИ раздела «Аналитика» (по умолчанию открыт таб «Метрики»), отдельного пункта в сайдбаре не было.
+
+**Сделано (3 правки по ТЗ Данила, `public/index.html`):**
+1. Подраздел сайдбара «Аналитика» переименован в **«Метрики»** (`nav-analytics` → экран метрик); центральные табы Метрики/Лог событий убраны.
+2. Добавлен **отдельный пункт сайдбара «📜 Лог событий»** (`nav-lifecycle` → `navLifecycle()` → `nav('analytics')` + `lcShowSub('lifecycle')`); заголовок секции динамический (`#analytics-title`). `nav('analytics')` по умолчанию показывает «Метрики».
+3. **Sticky при скролле** в таблице лога: контейнер `max-height: calc(100vh-200px)` + `overflow-auto`, `thead` → `sticky top-0 z-20`, строка фильтров → `sticky top-8 z-10` (через `const fc` в `lcFilterRow`, table `border-separate`).
+
+**Путь в проде:** `delivery.contenthunter.ru` → сайдбар **«Аналитика»** → пункты **«📊 Метрики»** и **«📜 Лог событий»**.
+
+**Гочи (уроки).**
+- `Edit replace_all` по `<td class="px-2 py-1">` зацепил 46 ЧУЖИХ ячеек (фильтры YT/IG) → откатил из backup, переделал точечно через переменную `fc`. **Всегда проверять уникальность строки перед `replace_all`; делать backup `index.html` перед правкой.**
+- Прод-чекаут autowarm = git-репо (main, remote GenGo2/delivery-contenthunter, `.git/hooks/post-commit` auto-push, `.git` писабельна `claude-user`); есть pre-commit-валидатор JS (4 script-блока) — он же подтвердил синтаксис.
+- В прошлой сессии каст `ANY($?::text[])` для client-фильтра `/api/lifecycle` уехал в `a70fafa` (сейчас на main).
+
+Память: `project_verify_round_2026_05_31`, `project_wp174_content_codes_lifecycle`. Остаток: визуальная приёмка Данилом после hard-reload (stale chunk-loader).
+
+---
+
 ## 2026-05-31 — YT-фокус-раунд: #200 «Канал удалён» (SHIPPED+DEPLOYED) + триаж всех YT-кодов
 
 ### ✅ SHIPPED+DEPLOYED 2026-05-31 — прод autowarm `/root/.openclaw/workspace-genri/autowarm` (PM2 id35) FF → main `d109dd3`; PM2-restart НЕ нужен (Python-publisher per-task spawn, kill-switch default-ON); OpenProject #200 → Тестирование
