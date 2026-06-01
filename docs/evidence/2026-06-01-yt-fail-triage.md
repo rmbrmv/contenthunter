@@ -80,12 +80,21 @@ events: error "ADB preflight failed: adb_devices_unreachable"
 → requeue. Авто-ретрай сохраняется, меняется только корректность наблюдаемости. Колонка
 `retry_strategy=manual` каталога живым контроллером не используется (только diagnose/auto-rollback).
 
-## Реализация (фикс)
-PR **GenGo2/delivery-contenthunter#138**, ветка `fix/wp207-preflight-error-code-ordering`.
+## Реализация (фикс) — SHIPPED+DEPLOYED 01.06
+PR **GenGo2/delivery-contenthunter#138** (merge `5a745ac`), ветка `fix/wp207-preflight-error-code-ordering`.
 Helper `_fail_with_preflight_error(category, adb_err)` в `publisher_base.py`: `log_event('error', ...)`
 ДО `update_status('failed', ...)`. TDD — 2 real-DB теста (`tests/test_preflight_error_code_ordering.py`).
 Регресс-срез: 283 passed (единственный фейл `test_publisher_ig_camera_recovery` — pre-existing на
 origin/main). Platform-agnostic — закрывает WP#208 (YT) и WP#207 (TT, заведён параллельной сессией).
+
+**Деплой:** прод pull в `/root/.openclaw/workspace-genri/autowarm` (claude-user ACL, без sudo),
+HEAD=`5a745ac`. `publisher.py` спавнится per-task (server.js child_process) → новый код подхватывается
+на следующем спавне, **PM2-restart не нужен**. Обе WP→Тестирование. Live-verify — по факту
+следующего оутэйджа шлюза (доминанта 147.45.251.85 восстановилась ~10:00).
+
+**Фоллоу-апы (вне этого фикса):** WP#210 (retry-churn: per-device cooldown/device-health-hold, связка
+#195 — авто-requeue против мёртвого хоста = 2.76 ретрая/задачу); ops-мониторинг/алерт SPOF-шлюза
+147.45.251.85 (один отказ утащил 36 устройств на 2ч); channel_deleted (78) — WP#200.
 
 ## Ключевая находка №2 — channel_deleted (78, banned) уже чинится
 Забаненные каналы («Канал удалён»). Таймлайн за сегодня: 00:00→16, 01→16, 02→16, 03→15,
