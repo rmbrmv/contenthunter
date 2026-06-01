@@ -4,9 +4,19 @@
 **Статус:** Дизайн утверждён → план реализации
 **OpenProject:** #199 (assignee Данил, «В разработке»)
 **Целевой репо (код):** `autowarm-testbench` (`GenGo2/delivery-contenthunter`), ветка `wp199-preflight-honest-classify`
-**Связанные:** #140 (каталог error_codes), #195 (device-health gate), #196 (adb_push_chunked), #207 (та же находка из TT-сессии — закрывается этим WP)
+**Связанные:** #140 (каталог error_codes), #195 (device-health gate), #196 (adb_push_chunked), #207/#208 (preflight-ordering — **уже в проде**), #210 (троттлинг ретраев device-unreachable)
 
 ---
+
+## ⚠️ РЕВИЗИЯ 2026-06-01 (re-scope → media-only)
+
+Во время реализации origin/main ушёл вперёд (параллельные сессии): смержены и задеплоены в прод **PR#138 (WP#207/#208)** — preflight-ordering через helper `_fail_with_preflight_error`, и **PR#139 (WP#210)** — троттлинг ретраев device-unreachable. Следствия:
+
+1. **Preflight-часть этого WP стала избыточной** — уже в проде (другим способом). WP#199 **пересобран в media-only**.
+2. **Поведение ретраев НЕ меняется** (исходная формулировка «263 задачи уйдут на manual» — неверна): движок `retry_decision.js`/`retry_controller.js` ключуется на `error_class` (network=adb_devices_unreachable/media → TRANSIENT, как и старый unknown). `retry_strategy` в каталоге — описательный, движком не используется. Эффект фикса — **чисто observability** (честный error_code на дашборде/триаже), net-neutral. Churn'ом device-unreachable отдельно занялся #210.
+3. **relaunch_failed/relaunch_skipped** (рядом в media-`try`) имеют ту же очерёдность, НО swap их не лечит (тип события не `error`/`fail` → Pass-1/2 не покрывают, нужен error-event + каталожный код) → вынесено в **отдельный follow-up WP**.
+
+**Итоговый scope WP#199:** helper `_fail_with_media_error(msg, err)` (зеркало #138) + вызов из media-блока (`if not remote_path:`) + поведенческий real-DB тест. Ветка `wp199-media-honest-classify` от origin/main. Разделы ниже отражают исходную диагностику (preflight+media); к реализации применима только media-часть.
 
 ## 1. Проблема и реальный root cause
 

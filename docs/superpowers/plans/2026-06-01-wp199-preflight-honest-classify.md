@@ -12,6 +12,20 @@
 
 ---
 
+## ⚠️ РЕВИЗИЯ 2026-06-01 — план пересобран в media-only
+
+Preflight-ordering уже починен и задеплоен в прод параллельно (PR#138 / WP#207/#208, helper `_fail_with_preflight_error`); ретраи отдельно затроттлены PR#139 (WP#210). Поэтому из исходного 2-точечного плана **выполнена только media-часть**, в идиоме #138:
+
+- **Реализовано (ветка `wp199-media-honest-classify` от origin/main `05dbf6c`, коммит `d09780f`):**
+  - helper `_fail_with_media_error(msg, err)` в `publisher_base.py` (log_event('error') → update_status('failed')), зеркало `_fail_with_preflight_error`;
+  - вызов из media-блока `if not remote_path:` (заменил buggy-порядок 2 строк);
+  - `tests/test_media_error_code_ordering.py` — 2 real-DB поведенческих теста (категория→error_code; error-событие с meta.category).
+  - 12/12 локальных тестов зелёные; финальный ревью (opus) — Ready to merge.
+- **НЕ делаем:** preflight-swap (избыточен), правки каталога/triage_classifier, kill-switch.
+- **Follow-up (отдельный WP):** `relaunch_failed`/`relaunch_skipped` — нужен error-event + каталожный код (swap не лечит).
+
+Задачи 1–2 ниже описывают исходный (preflight+media) подход и оставлены как история; фактическая реализация = media-only выше.
+
 ## File Structure
 
 - **Modify:** `publisher_base.py` — 2 точки swap (preflight-блок ~L4328-4332, media-блок ~L4458-4459). Единственный продовый писатель error_code.
