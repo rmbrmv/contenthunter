@@ -68,12 +68,13 @@ c9bf2b9 feat: logo-bg-service /remove-bg (rembg u2net + token auth)
 
 ### B. Backend (валидатор `72.56.107.157`)
 1. Влить ветку в main, прод pull.
-2. В backend `.env` валидатора:
+2. В backend `.env` валидатора (ВСЕ три обязательны — фича гейтится на enabled И token И url; дефолта URL больше нет):
    ```
    LOGO_BG_REMOVAL_TOKEN=<тот же секрет, что в ecosystem>
-   LOGO_BG_REMOVAL_URL=http://91.98.180.103:8077      # дефолт; см. ⚠️ ниже про защищённый канал
-   LOGO_BG_REMOVAL_ENABLED=true                        # ВКЛючить ПОСЛЕ прогрева сервиса (шаг A2) И защищённого канала
+   LOGO_BG_REMOVAL_URL=<URL сервиса; см. ⚠️ ниже — приватный IP или https://>
+   LOGO_BG_REMOVAL_ENABLED=true                        # ВКЛючить ПОСЛЕ прогрева сервиса (A2) И защищённого канала
    ```
+   Если любое из трёх не задано — capability-эндпоинт вернёт `available:false`, чекбокс скрыт, прокси отдаёт 503 (фича просто не активна, ничего не ломается).
 3. Рестарт валидатор-бэка (uvicorn/PM2), фронт пересобрать/задеплоить.
 
 ### ⚠️ Безопасность транзита (codex P2 — обязательно перед `ENABLED=true` в проде)
