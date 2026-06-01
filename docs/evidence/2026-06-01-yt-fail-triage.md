@@ -74,11 +74,18 @@ events: error "ADB preflight failed: adb_devices_unreachable"
 `update_status('failed', ...)`) — тогда Pass 1 маппера увидит preflight-категорию.
 Минимальный, низкорисковый, зеркалит интент фикса 2026-05-12.
 
-⚠️ Побочный эффект для обсуждения: `adb_devices_unreachable` в каталоге = `retry_strategy=manual`.
-Сейчас эти задачи ретраятся как `transient_within_limits` (backoff), т.к. коды-фантом=switch_failed
-(backoff). Для транзиентного 2ч-оутэйджа авто-backoff корректнее manual — возможно стоит сменить
-retry_strategy на backoff для adb_devices_unreachable, иначе после фикса 113 задач уйдут в ручную
-очередь. Решить при реализации (вне scope самого баг-фикса классификации).
+✅ Retry-поведение НЕ меняется (проверено в коде): `retry_decision.js` ключуется на `error_class`,
+а не на `retry_strategy` каталога. `TRANSIENT = {network, rate_limited, unknown}`. До фикса класс
+был `unknown` → requeue; после фикса `adb_devices_unreachable` → класс `network` → тоже в TRANSIENT
+→ requeue. Авто-ретрай сохраняется, меняется только корректность наблюдаемости. Колонка
+`retry_strategy=manual` каталога живым контроллером не используется (только diagnose/auto-rollback).
+
+## Реализация (фикс)
+PR **GenGo2/delivery-contenthunter#138**, ветка `fix/wp207-preflight-error-code-ordering`.
+Helper `_fail_with_preflight_error(category, adb_err)` в `publisher_base.py`: `log_event('error', ...)`
+ДО `update_status('failed', ...)`. TDD — 2 real-DB теста (`tests/test_preflight_error_code_ordering.py`).
+Регресс-срез: 283 passed (единственный фейл `test_publisher_ig_camera_recovery` — pre-existing на
+origin/main). Platform-agnostic — закрывает WP#208 (YT) и WP#207 (TT, заведён параллельной сессией).
 
 ## Ключевая находка №2 — channel_deleted (78, banned) уже чинится
 Забаненные каналы («Канал удалён»). Таймлайн за сегодня: 00:00→16, 01→16, 02→16, 03→15,
