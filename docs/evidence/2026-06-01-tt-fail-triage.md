@@ -113,3 +113,17 @@ caption введён (focus подтверждён, story-derail escape отра
 - К фиксу выбран **баг классификации/requeue ADB-preflight** (см. WP) — код-фиксабелен,
   максимальный масштаб (237/день по флоту), комплементарен WP#195/#140.
 - Genuine TT-UI бакет №2 (`tt_upload_confirmation_timeout`) уже закрыт WP#203 iter4.
+
+## Статус (обновлено 01.06)
+- **WP#207 (TT) + WP#208 (YT)** — ФИКС реализован в `publisher_base.py` (helper
+  `_fail_with_preflight_error`: `log_event('error')` до `update_status('failed')`),
+  PR GenGo2/delivery-contenthunter **#138 СМЕРЖЕН в main `5a745ac`** и **задеплоен на прод**
+  (`/root/.openclaw/workspace-genri/autowarm` HEAD=`5a745ac`, helper подтверждён; PM2-restart
+  не нужен — `publisher.py` спавнится per-task). Тесты `tests/test_preflight_error_code_ordering.py`
+  зелёные; `codex review` — чисто, 0 замечаний. Обе WP → «Тестирование», live-verify по факту
+  следующего отказа шлюза.
+- Поведение ретрая не меняется: `network` (=`adb_devices_unreachable`) уже в TRANSIENT
+  рядом с `unknown` → меняется только наблюдаемость.
+- **WP#210** — retry-churn per device (IG-угол), В разработке.
+- **WP#211** — инфра-резилентность шлюза `147.45.251.85` (SPOF: мониторинг + host-level
+  circuit-breaker), Бэклог.
