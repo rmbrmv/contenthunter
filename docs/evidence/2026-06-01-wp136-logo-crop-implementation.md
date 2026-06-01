@@ -93,9 +93,16 @@ c9bf2b9 feat: logo-bg-service /remove-bg (rembg u2net + token auth)
 - ✅ **Backend задеплоен:** прод-каталог `/root/.openclaw/workspace-genri/validator` подтянут до `558e0ca` (git pull, миграций нет), pm2 id 24 `validator` рестартован. Health 200; новые роуты `GET /api/brand/bg-removal-available` и `POST /api/brand/remove-bg` отвечают 403 (auth-gated, зарегистрированы).
 - ✅ **Frontend задеплоен:** `npm run build` (vue-tsc чист) → postbuild скопировал в `/var/www/validator/`; бандл содержит модалку кропа.
 - ✅ **Core-фича кропа 1:1 ЖИВА в проде** — модалка открывается для прямоугольных лого независимо от bg-removal (исходная боль закрыта).
-- ⏸️ **bg-removal OFF** (в `.env` нет `LOGO_BG_REMOVAL_*` → capability=false, чекбокс скрыт, прокси 503) — безопасно, ждёт микросервиса.
-- ❌ **Микросервис rembg НЕ задеплоен** — он для отдельного хоста `91.98.180.103` (уникализация), у агента нет SSH-доступа туда (Permission denied publickey). Остаётся за Данилом.
+- ✅ **bg-removal ВКЛЮЧЁН** (после деплоя микросервиса — см. ниже).
 
-## Остаток (только bg-removal часть — core-кроп уже в проде)
-- Деплой (A/B) + ручная проверка (C) — за Данилом (ops-доступы к `91.98.180.103` ufw/pm2 и валидатор-`.env`).
-- После verify → OP#136 «Тестирование» → «Готово».
+## Деплой микросервиса rembg на сервере уникализации (EasyPanel, 91.98.180.103) — ВЫПОЛНЕНО 01.06
+Данил выдал агенту SSH (root) + EasyPanel API-токен. Хост = EasyPanel на Docker Swarm + Traefik (панель `ep.gengo.io`).
+- ✅ **Dockerfile** добавлен в `logo-bg-service/` (python:3.12-slim + системные libs + pip + **модель u2net запечена в образ** → нет рантайм-зависимости от сети/кэша), main `8ae6a0a`. Тест-сборка на хосте: build OK, `/health`→200, `/remove-bg` без токена→401, с токеном→200 RGBA.
+- ✅ **EasyPanel-сервис `logo-bg`** создан в проекте `uniq_2` (рядом с `unic-processing`) через API: source=github `GenGo2/validator-contenthunter` ref `main` path `/logo-bg-service` build=dockerfile, env `LOGO_BG_REMOVAL_TOKEN`, autoDeploy=on. Деплой → Swarm-сервис `uniq_2_logo-bg 1/1 Running`.
+- ✅ **HTTPS-домен** `https://uniq-2-logo-bg.ovdg4s.easypanel.host` (бесплатный wildcard EasyPanel `*.ovdg4s.easypanel.host` → авто Let's Encrypt). Проверено снаружи: `/health`→200 с валидным TLS (`ssl_verify=0`). **Это закрывает codex-P2 про cleartext — канал теперь HTTPS, не голый http:8077.**
+- ✅ **Валидатор `.env`** дополнен: `LOGO_BG_REMOVAL_URL=https://uniq-2-logo-bg.ovdg4s.easypanel.host`, `LOGO_BG_REMOVAL_TOKEN=<секрет>`, `LOGO_BG_REMOVAL_ENABLED=true` (бэкап `.env.bak.wp136`); pm2 id24 рестартован.
+- ✅ **Сквозная проверка:** валидатор-хост → `https://uniq-2-logo-bg.ovdg4s.easypanel.host/remove-bg` (прод-токен + тест-PNG) → **200, RGBA, прозрачный пиксель** (TLS+токен OK). Это точный вызов, который делает прокси.
+
+## Статус: ПОЛНОСТЬЮ ЗАДЕПЛОЕНО И ВКЛЮЧЕНО
+Кроп 1:1 + ML-удаление фона — оба активны в проде. Остаток: только **ручная проверка в UI** (раздел C) → OP#136 «Тестирование» → «Готово».
+Безопасность: bg-removal-микросервис закрыт shared-токеном + HTTPS (Traefik). Доступы агента (SSH-ключ `wp136_logo_bg_deploy`, EasyPanel API-токен) можно отозвать — деплой завершён.
