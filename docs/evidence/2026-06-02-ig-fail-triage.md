@@ -47,6 +47,20 @@
 
 **Связи.** Follow-up WP#197 (родитель, honest-метка). Аналог на TikTok — WP#96 (account-picker bottomsheet silently fails to open) — Готово, можно подсмотреть подход.
 
+## Фикс (WP#219) — РЕАЛИЗОВАН + СМЕРЖЕН в main
+
+**Репо:** `GenGo2/delivery-contenthunter` (код autowarm). **PR #143** → merge main `5f342a0`.
+
+**Корень (подтверждён по коду):** `account_switcher.py:_tap_profile_header` при отсутствии элемента-username в шапке делает СЛЕПОЙ тап по fallback-координатам `(540,180)` и **всегда возвращает `True`**. В reguard-цикле `_ig_guard_picker_foreground`, когда телефон оказался на аудио-странице Reels, слепой тап попадает в сетку → дрейф глубже → sheet не открывается → `ig_picker_sheet_not_opened`. Существующий escape `_ig_on_inapp_overlay` (WP#197 iter2) аудио-страницу не покрывал.
+
+**Что сделано (kill-switch `IG_PICKER_AUDIO_ESCAPE_ENABLED`, default ON):**
+- pure-детектор `_ig_on_audio_page(xml)` — матч CTA «Использовать аудио»/«Use audio» по `.label` разобранных элементов (не raw-substring; clickable у узла не требуем — урок WP#203);
+- ветка escape в reguard-цикле: при fg=IG на аудио-странице → `KEYCODE_BACK` + bottom-nav профиль вместо слепого тапа (событие `ig_picker_reguard_audio_page_escaped`).
+
+**Проверки:** 11 новых тестов (`tests/test_account_switcher_ig_audio_page_escape.py`) + reguard/picker наборы зелёные; общая регрессия 142 passed (1 pre-existing YT-fail `test_yt_happy_path_returns_accounts`, вне скоупа). Встроенный код-ревью (3+ finder-агента + verify): 1 PLAUSIBLE-замечание (substring-ложный escape) закрыто label-based матчем + 2 анти-ложных теста; дублирование тела escape-веток признано приемлемым (раздельный kill-switch/категория). Codex CLI недоступен (model-entitlement).
+
+**Деплой:** `git pull` в прод-каталоге autowarm (`/root/.openclaw/workspace-genri/autowarm`) на 72.56.107.157; PM2-restart НЕ нужен (publisher per-task spawn). Выполняется на прод-сервере (этот триаж-хост — ContentHunter VPS, shell-доступа к autowarm-проду нет).
+
 ## Раннер-ап (отдельная задача, не этот фикс)
 
 `ig_upload_confirmation_timeout` (5/3д) — НЕ зависший upload-спиннер: скринкаст task14150 (`septic.helper`) на момент фейла показывает full-screen промо **«Meta Verified»** («Получите первый месяц бесплатно», Standard/Plus, «Получить преимущества»), перекрывшее флоу. Группа гетерогенна (часть может быть реальным зависанием загрузки) → отдельный триаж/WP. Семейство интерстишал-дисмисса (WP#193/#206).
