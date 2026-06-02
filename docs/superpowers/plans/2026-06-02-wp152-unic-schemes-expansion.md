@@ -613,27 +613,15 @@ PY
 ```
 Expected: `FAILED: НЕТ — все 36 отрендерились`.
 
-- [ ] **Step 3: Сгенерировать превью для тиндера (схемы 35–70)**
+- [ ] **Step 3: Превью — НЕ пре-рендерим вручную (исправление по факту реализации)**
 
-Превью рендерим напрямую и грузим в S3, upsert в `validator_scheme_previews` (НЕ через scheme_preview-задачу — ненадёжна, гоча WP#111). Использовать существующий путь генерации: проверить, как `backend/scripts/generate_scheme_previews.py` это делает, и вызвать его точечно по новым id, либо отрендерить превью тем же способом, что в Step 2, и `upsert`:
+**Корректировка модели (обнаружено при реализации):** превью в `validator_scheme_previews` хранятся **по-проектно** (пара scheme_id+project_id), генерируются при заведении проекта клиента через штатную `scheme_preview`-очередь (`scheme_preview_queue.py` → воркер рендерит ПОЛНЫМ пайплайном, с лицом+тряской). Универсальных (project_id=0) превью у существующих схем 1–34 **нет** (проверено: count=0). Поэтому ручной пре-рендер project_0-превью противоречит модели и создал бы строки-сироты.
 
-Run (проверить наличие готового скрипта превью):
-```bash
-sed -n '1,40p' /root/.openclaw/workspace-genri/validator/backend/scripts/generate_scheme_previews.py
-```
-Если скрипт умеет принимать список id — запустить его на 35–70. Иначе отрендерить превью пайплайном (как Step 2, выход в S3 `scheme-previews/0/<sid>/preview.mp4` + thumb.jpg) и:
-```bash
-source /tmp/pg.sh && psql -c "INSERT INTO validator_scheme_previews (scheme_id, project_id, video_url, thumb_url) VALUES (:sid,0,:vurl,:turl) ON CONFLICT (scheme_id, project_id) DO UPDATE SET video_url=EXCLUDED.video_url, thumb_url=EXCLUDED.thumb_url;"
-```
-Expected: превью для всех 36 схем загружены и доступны по URL.
+Действие: ничего не пре-рендерим. Когда заведут проект нового клиента и сгенерят превью штатно (UI/эндпоинт «генерировать превью»), все 70 схем (вкл. 36 новых) получат корректные превью автоматически — потому что воркер задеплоен (Step 1), новые оверлеи и схемы уже в БД. Рендер-тест (Step 2) — и есть доказательство, что превью/боевой рендер этих 36 схем отработают (тот же код-путь воркера).
 
-- [ ] **Step 4: Проверить, что превью видны для нового пула**
+- [ ] **Step 4: Подтвердить, что новый пул валиден end-to-end**
 
-Run:
-```bash
-source /tmp/pg.sh && psql -c "SELECT count(*) FROM validator_scheme_previews WHERE scheme_id BETWEEN 35 AND 70;"
-```
-Expected: `36`.
+Render-test из Step 2 = 36/36 PASS — достаточное доказательство. Дополнительно зафиксировать в evidence: превью генерируются per-project при настройке клиента; ручной project_0 пре-рендер не требуется.
 
 ---
 
