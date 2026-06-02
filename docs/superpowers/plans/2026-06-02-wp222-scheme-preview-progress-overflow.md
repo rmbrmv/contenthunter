@@ -418,7 +418,11 @@ git commit -m "feat(worker): подключить owner-guard в process_scheme_
 
 ---
 
-## Task 2: Бэкенд — идемпотентный прогресс (слой «б»)
+## Task 2: Бэкенд — зажим прогресса (слой «б»)
+
+> **РАЗВОРОТ ПРИ РЕАЛИЗАЦИИ (02.06):** COUNT-подход ниже отброшен после проверки живой БД (`last_task_id` ненадёжен, 70 % NULL → дал бы 0 % в проде). Фактическая реализация — зажим `progress = min(schemes_done, schemes_total)` за флагом `scheme_preview_progress_clamp_enabled` (default ON). Тесты: `test_progress_clamped_to_total` (64→34) + `test_progress_clamp_off_returns_raw_done` (64→64). Подробности — в спеке, раздел «Разворот при реализации». Текст ниже сохранён как исходный замысел.
+
+### (исходный замысел — COUNT, НЕ реализован)
 
 **Files:**
 - Modify: `/home/claude-user/validator-contenthunter/backend/src/config.py:50` (добавить флаг)

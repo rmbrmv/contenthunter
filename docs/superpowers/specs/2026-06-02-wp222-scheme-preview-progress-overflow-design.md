@@ -43,18 +43,22 @@ UPSERT в `validator_scheme_previews` уже идемпотентен (`ON CONFL
 
 **Kill-switch** `SCHEME_PREVIEW_OWNER_GUARD_ENABLED` (env воркера, default ON). Off → токен не штампуется, `WHERE`-гарды не добавляются → текущее поведение.
 
-### Слой (б) — идемпотентный прогресс. Репозиторий `validator-contenthunter/backend`, `services/scheme_preview_queue.py`
+### Слой (б) — зажим прогресса. Репозиторий `validator-contenthunter/backend`, `services/scheme_preview_queue.py`
 
-`read_scheme_preview_status` считает `progress` не из суммируемого `schemes_done`, а как число реально отрендеренных превью этого таска:
+`read_scheme_preview_status` зажимает прогресс на `schemes_total`:
 
-```sql
-SELECT COUNT(*) FROM validator_scheme_previews
- WHERE project_id = :pid AND last_task_id = <id выбранного scheme_preview-таска>
+```python
+progress = int(row['done'])
+total = int(row['total'])
+if settings.scheme_preview_progress_clamp_enabled and total > 0:
+    progress = min(progress, total)
 ```
 
-UPSERT идемпотентен по `(scheme_id, project_id)` → счёт = число **уникальных** отрендеренных схем ≤ `schemes_total`. «121 %» становится физически невозможным даже если что-то проскочит мимо слоя (а). `total` остаётся `schemes_total`.
+`progress` физически не может превысить `total` → «121 %» невозможно даже если что-то проскочит мимо слоя (а). `total` остаётся `schemes_total`.
 
-**Kill-switch** `SCHEME_PREVIEW_PROGRESS_FROM_COUNT_ENABLED` (env backend, default ON). Off → читать `schemes_done` как раньше.
+**Kill-switch** `scheme_preview_progress_clamp_enabled` (pydantic settings, default ON). Off → возвращать сырой `schemes_done` как раньше.
+
+> **Разворот при реализации (02.06):** изначально слой (б) планировался как «идемпотентный прогресс» через `COUNT(*) FROM validator_scheme_previews WHERE last_task_id = <task_id>`. Проверка **живой БД** показала, что `last_task_id` заполнен ненадёжно (1057 из 1515 строк = NULL; у реального проекта 117 `COUNT` по свежему таску = 0, т.к. превью чистятся/sample-строки и CLI-вставки идут без `last_task_id`). COUNT-подход дал бы **вечный 0 %** в проде — хуже исходного бага. Заменён на зажим `LEAST(done, total)`: не зависит от persistence превью, не может дать >100 %, а корень (инфляцию `schemes_done`) лечит слой (а).
 
 ### Слой (в) — зажим UI. Репозиторий `validator-contenthunter/frontend`, `pages/client/SchemesPage.vue`
 
@@ -90,7 +94,7 @@ UPDATE unic_tasks
 - Kill-switch off → старое поведение (нет `owner_run_id`, нет гард-`WHERE`).
 
 **backend** (`scheme_preview_queue`):
-- При искусственно раздутом `schemes_done=64`, `schemes_total=34` и N строк в `validator_scheme_previews` с `last_task_id=task_id`: `read_scheme_preview_status` возвращает `progress = COUNT(previews) ≤ 34`.
+- При искусственно раздутом `schemes_done=64`, `schemes_total=34`: `read_scheme_preview_status` возвращает `progress = 34` (зажато), `total = 34`. Flag-off → сырой `progress = 64`.
 - Kill-switch off → `progress = schemes_done` как раньше.
 
 **frontend** (`vitest`):
