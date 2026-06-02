@@ -1260,3 +1260,15 @@ Per-account handoff читает `device_serial/raspberry_number/pack_id/pack_na
 ### Индекс `uq_manual_pub_result_account` не покрыт миграцией
 
 `enqueueManualRow` опирается на partial unique index `uq_manual_pub_result_account (unic_result_id, account_username, platform) WHERE cancelled_at IS NULL` (ON CONFLICT). Индекс живёт в проде, но не создаётся ни одним файлом в `migrations/` (пре-existing — был и до WP #148). По правилу «миграции для любого писателя БД» стоит добить `CREATE UNIQUE INDEX IF NOT EXISTS` миграцию. Не блокер.
+
+## 2026-06-02 — WP #216 пост-шип (заморозка неактивных клиентов): follow-up
+
+Зашипан+задеплоен (delivery-contenthunter PR #145 → main `c0b9be7`). `validator_projects.active=false` теперь гейтит весь пайплайн (6 точек + mutation-эндпоинты + разовая очистка). См. spec/plan/evidence 2026-06-02-wp216-*.
+
+### (опционально, Подход C) Каскад-отмена по событию деактивации
+
+Сейчас заморозка = гейты (стоп новой работы) + разовый `cleanup_wp216_*.js --apply` (зачистка существующего бэклога). Каскад НЕ привязан к админ-тогглу «Неактивен» в валидаторе. Для атомарной семантики «деактивировал → вся in-flight работа отменена сразу» можно повесить на эндпоинт смены `active` в `validator-contenthunter` каскад-отмену (`publish_queue` pending→cancelled + `validator_manual_publish_queue` queued→cancelled). Гейты из A и так покрывают повторные прогоны и ре-активацию, поэтому это удобство, не блокер. Отдельной задачей.
+
+### (минор) Гейты ключатся на денормализованный project_id
+
+`dispatch/retry/listQueue/take/return/cleanup` фильтруют по хранимому `publish_queue.project_id` / `validator_manual_publish_queue.project_id`. Это намеренно (денормализация, чтобы не ре-деривить через 3-table slot-join на каждом тике). Инвариант на write-стороне держит его авторитетным (`run_auto_unic` из `content.project_id` NOT NULL; ассайнеры хранят слот-резолв `COALESCE(slot,task)`; manual-эндпоинт бэкфилит из пака). Эмпирически 0 NULL/stale в гейтируемых состояниях (0/517 расхождений). Codex (round-11) предлагал слот-резолв во ВСЕХ read-путях — отклонено как рефактор ради несуществующего состояния (см. evidence «обоснование сходимости»). Если когда-нибудь появятся stale-строки — kill-switch + cleanup `--apply`.
