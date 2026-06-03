@@ -17,11 +17,12 @@
 ## Цель
 
 1. Ретраи — **только день в день** (окно 1 день вместо 2).
-2. Авто-ретраи продолжаются **до 14:00 МСК**.
-3. **После 14:00** всё ещё-упавшее **передаётся операторам в ручную выкладку**
-   (а не «ждёт до завтра»).
-4. Если задача **исчерпала дневной кап** авто-ретраев ещё до 14:00 — передаём в
-   ручную **сразу** (не ждём 14:00).
+2. Авто-ретраи продолжаются **до 14:00 МСК** (час отсечки — **настраивается в UI**
+   «Глобальные настройки», 14:00 — дефолт).
+3. **После часа отсечки** всё ещё-упавшее **передаётся операторам в ручную
+   выкладку** (а не «ждёт до завтра»).
+4. Если задача **исчерпала дневной кап** авто-ретраев ещё до отсечки — передаём в
+   ручную **сразу** (не ждём отсечки).
 
 ## Контекст текущей реализации
 
@@ -100,21 +101,52 @@
 Ветка #5 (device-health троттлинг) — **не трогаем** (остаётся `wait`/`requeue`);
 после 14:00 её перехватывает ветка #2.
 
-**2. `retry_controller.js` — флаги/дефолты**
-Один новый kill-switch определяет и поведение, и дефолты времени/окна:
+**2. `retry_controller.js` — флаги/дефолты + чтение часа отсечки из БД**
+Один новый kill-switch определяет поведение и дефолт окна. **Час отсечки теперь
+управляется из UI** (`autowarm_settings.retry_cutoff_hour_msk`) и читается каждый
+тик:
 
 ```js
 const sameDayOnly = process.env.RETRY_SAME_DAY_ONLY_ENABLED !== 'false'; // дефолт ON
-const windowDays  = num(process.env.RETRY_WINDOW_DAYS,     sameDayOnly ? 1  : 2);
-const cutoffHour  = num(process.env.RETRY_CUTOFF_HOUR_MSK, sameDayOnly ? 14 : 23);
+const windowDays  = num(process.env.RETRY_WINDOW_DAYS, sameDayOnly ? 1 : 2);
+
+// Час отсечки — источник истины UI (autowarm_settings.retry_cutoff_hour_msk).
+// Приоритет: БД → env RETRY_CUTOFF_HOUR_MSK → дефолт (sameDayOnly ? 14 : 23).
+// Невалидное значение (не целое 0..23) игнорируется → берётся фолбэк.
+const dbCutoff = (await pool.query(
+  `SELECT value FROM autowarm_settings WHERE key='retry_cutoff_hour_msk'`)).rows[0]?.value;
+const envDefault = num(process.env.RETRY_CUTOFF_HOUR_MSK, sameDayOnly ? 14 : 23);
+const p = parseInt(dbCutoff, 10);
+const cutoffHour = (Number.isInteger(p) && p >= 0 && p <= 23) ? p : envDefault;
 ```
 
 Передать `sameDayHandoff: sameDayOnly` в `decideRetry`. При
 `RETRY_SAME_DAY_ONLY_ENABLED=false` восстанавливается **ровно старое поведение**
-(окно 2, отсечка 23, обе ветки `wait`). Явные env-оверрайды `RETRY_WINDOW_DAYS` /
-`RETRY_CUTOFF_HOUR_MSK` работают поверх (использован `num(env, fallback)`).
+(окно 2, обе ветки `wait`); час отсечки при этом всё равно управляем из UI
+(влияет только на момент, когда ветка #2 срабатывает — действие там `wait`).
+Гранулярность часа (как и в текущем коде: `extract(hour ...) < cutoffHour`) —
+целые часы 0..23; минуты осознанно вне рамок (см. YAGNI).
 
-**3. `retry_labels.js` — тексты событий (WP#138)**
+**3. UI «Глобальные настройки» — новое поле часа отсечки**
+- **`server.js`** — добавить ключ в seed (`server.js:372`):
+  `('retry_cutoff_hour_msk', '14')` в блок `INSERT INTO autowarm_settings ... ON
+  CONFLICT DO NOTHING`. Отдельный эндпоинт не нужен — generic `GET/PUT
+  /api/settings` уже отдаёт/принимает произвольные ключи.
+- **`public/index.html`**:
+  - разметка: в `section-global-settings` (рядом с «Часовой пояс») добавить поле
+    `<input id="global-setting-retry-cutoff-hour" type="number" min="0" max="23">`
+    с подписью «🕑 Час прекращения авто-ретраев (МСК)» и пояснением «После этого
+    часа упавшие публикации передаются операторам в ручную выкладку. По
+    умолчанию 14:00.»;
+  - `loadGlobalSettings()` — `field.value = s.retry_cutoff_hour_msk ?? '14'`
+    (UI показывает 14 даже если ключа ещё нет в БД);
+  - `saveGlobalSettings()` — добавить `retry_cutoff_hour_msk` в тело PUT с
+    клиентской валидацией (целое 0..23, иначе тост-ошибка).
+
+Бэкенд-валидация значения — на стороне контроллера при чтении (см. выше);
+generic `PUT /api/settings` намеренно не трогаем (он общий для всех ключей).
+
+**4. `retry_labels.js` — тексты событий (WP#138)**
 Добавить в `HANDOFF_MSG_BY_RULE`:
 
 - `after_cutoff_manual`: «После 14:00 автоматическая выкладка на сегодня
@@ -126,11 +158,13 @@ const cutoffHour  = num(process.env.RETRY_CUTOFF_HOUR_MSK, sameDayOnly ? 14 : 23
 опубликовать не удалось — задача передана на ручную выкладку.» (сейчас зашито
 «За 2 дня…», после смены окна на 1 это неверно).
 
-### Новый kill-switch
+### Новый kill-switch и UI-настройка
 
-| Флаг | Дефолт | Эффект |
-|---|---|---|
-| `RETRY_SAME_DAY_ONLY_ENABLED` | on | окно 1 день, отсечка 14:00, `wait→handoff` в ветках #2/#6. `=false` → полный откат к старому поведению одним флагом. |
+| Параметр | Где | Дефолт | Эффект |
+|---|---|---|---|
+| `RETRY_SAME_DAY_ONLY_ENABLED` | env | on | окно 1 день, `wait→handoff` в ветках #2/#6. `=false` → полный откат поведения одним флагом. |
+| `retry_cutoff_hour_msk` | UI (`autowarm_settings`) | `14` | час МСК, после которого упавшие публикации уходят в ручную. Меняется операторами в «Глобальные настройки» без передеплоя. |
+| `RETRY_CUTOFF_HOUR_MSK` | env | — | фолбэк для часа отсечки, если строки в БД нет/она невалидна. |
 
 ## Тестирование (TDD)
 
@@ -147,8 +181,9 @@ const cutoffHour  = num(process.env.RETRY_CUTOFF_HOUR_MSK, sameDayOnly ? 14 : 23
 - окно 1 день: `days>=1` → **handoff**.
 
 **`test_retry_controller.test.js`** — интеграция:
-- дефолты от `RETRY_SAME_DAY_ONLY_ENABLED` (on → window 1 / cutoff 14 / sameDayHandoff; off → 2 / 23 / wait);
-- явный env-оверрайд `RETRY_WINDOW_DAYS`/`RETRY_CUTOFF_HOUR_MSK` поверх kill-switch;
+- дефолты от `RETRY_SAME_DAY_ONLY_ENABLED` (on → window 1 / sameDayHandoff; off → 2 / wait);
+- **час отсечки из БД**: `autowarm_settings.retry_cutoff_hour_msk` читается и применяется; невалидное значение (напр. `99`, `abc`) → фолбэк на env/дефолт 14; отсутствие строки → дефолт 14;
+- явный env-оверрайд `RETRY_WINDOW_DAYS` поверх kill-switch;
 - хендофф реально заливает строку в ручную очередь (как существующие live-тесты).
 
 Регрессия: прогнать полный набор `test_retry_*` + `test_manual_*` — без падений.
@@ -157,14 +192,22 @@ const cutoffHour  = num(process.env.RETRY_CUTOFF_HOUR_MSK, sameDayOnly ? 14 : 23
 
 - Прод-каталог autowarm: `/root/.openclaw/workspace-genri/autowarm` (git pull),
   рестарт `sudo pm2 restart` id35 (контроллер живёт в долгоиграющем server.js,
-  рестарт нужен).
-- **Откат**: `RETRY_SAME_DAY_ONLY_ENABLED=false` — мгновенно, без передеплоя.
-- Миграции БД не требуются.
+  рестарт нужен). Фронт — статический `public/index.html` (отдаётся тем же
+  server.js), отдельной сборки нет → деплоится тем же pull + restart.
+- **Откат поведения**: `RETRY_SAME_DAY_ONLY_ENABLED=false` — мгновенно, без передеплоя.
+- **Смена часа отсечки**: операторами в UI «Глобальные настройки», применяется
+  со следующего тика контроллера (≤5 мин), без передеплоя.
+- Миграции БД не требуются: новый ключ добавляется в seed (`ON CONFLICT DO
+  NOTHING`); до первого сохранения контроллер и UI используют дефолт 14 через
+  фолбэк, так что прод корректен даже если seed не отработал на существующей БД.
 
 ## Вне рамок (YAGNI)
 
 - Не трогаем размер дневного капа (`RETRY_MAX_PER_CLASS_PER_DAY=3`).
 - Не меняем механику троттлинга device-health до 14:00 (WP#210).
 - Не добавляем отдельный «послеобеденный» крон — свип идёт штатными тиками
-  контроллера (≤5 мин после 14:00 всё уедет в ручную).
+  контроллера (≤5 мин после отсечки всё уедет в ручную).
 - Не меняем UI ручной очереди — хендофф пишет в неё существующим путём.
+- В UI выносим **только час отсечки**; окно дней и кап остаются env (по запросу).
+- Гранулярность часа — целые часы 0..23; HH:MM (минуты) вне рамок, при
+  необходимости расширим отдельной задачей.
