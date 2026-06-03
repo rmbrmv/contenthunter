@@ -28,6 +28,10 @@
 
 - «Не делать BACK по полу-открытому sheet» (overlay/audio-escape) — пост-тап poll и так восстанавливает: даже если escape сделал BACK на attempt0, attempt1 ре-тапает и poll ловит открытый sheet. Без прямого XML-доказательства конкретного overlay-маркера спекулятивную правку не вносил.
 
-## Деплой (за пределами этой сессии)
+## Деплой — SHIPPED+DEPLOYED 03.06
 
-`git pull` в прод-каталоге autowarm (`/root/.openclaw/workspace-genri/autowarm`); PM2-restart НЕ нужен (publisher per-task spawn). После мержа PR в `delivery-contenthunter` main. Verify по событию `ig_picker_sheet_opened_after_recheck` + падение `ig_picker_sheet_not_opened`.
+- PR `GenGo2/delivery-contenthunter#150` → squash-merge main `2ac722e`.
+- Прод-autowarm (`/root/.openclaw/workspace-genri/autowarm`): fast-forward `git pull` `254930c..2ac722e`, код на месте; PM2-restart НЕ нужен (publisher per-task spawn).
+- Kill-switch `IG_PICKER_SHEET_RECHECK_ENABLED` default ON.
+- OpenProject WP#225 → **Тестирование**.
+- Verify сутки: рост события `ig_picker_sheet_opened_after_recheck` + падение `ig_picker_sheet_not_opened`.
