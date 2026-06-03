@@ -1306,3 +1306,7 @@ Docstring упоминает фолбэк edits→generations при 404/400, к
 ### (минор) reset не чистит S3
 
 `POST /api/logo-variants/reset` удаляет строки БД, но не объекты в S3 (их подберёт TTL-крон). Можно дозеркалить чистку S3 как у scheme-reset. Не блокер.
+
+## WP#213 follow-up: авто-handoff застрявших в авто (из п.1)
+
+`lifecycle.js`/read-model теперь честно показывает «ЗАСТРЯЛ В АВТО» (LEX-012: `failed`+`process_interrupted`, в ручную не переданы, висят днями). По решению владельца в WP#213-A правится только отображение — сам механизм handoff/ретраев не трогали. Follow-up (если потребуется): после N фейлов авто реально передавать задачу в ручную. Затрагивает publisher/retry — отдельный тикет. Связь: WP#215 (sameDayHandoff), WP#210 (device_unreachable throttle).
