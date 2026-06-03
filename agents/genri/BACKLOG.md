@@ -1,5 +1,21 @@
 # BACKLOG — Генри
 
+## 🟢 WP #226 — TT: пост-публикац. модалка маскирует детект успеха → ложный `tt_publish_button_not_activated` (follow-up H2 WP#218) — SHIPPED+DEPLOYED 2026-06-03 (OpenProject #226)
+**Приоритет:** высокий
+**Статус:** merged `GenGo2/delivery-contenthunter`#149 (main `254930c`); прод-дерево `/root/.openclaw/workspace-genri/autowarm` обновлено `git pull --rebase` (ff). **PM2 restart НЕ нужен** (publisher per-task spawn). OpenProject #226 → **Тестирование**.
+
+Триаж TT 2026-06-03 (прод `publish_tasks`, МСК-сегодня, 27 failed): лидер код-фиксов `tt_publish_button_not_activated`=9/27 (33%). **Ложный fail** — публикация ПРОХОДИТ, но пост-публикац. промо-модалка (notifications opt-in «Включить уведомления о взаимодействиях с публикациями» / TikTok Amplify «Пусть вас заметят») перекрывает success-маркеры фида (фид «Друзья» их не содержит) → WP#218-gate `_tt_screen_indicates_publish_done`=False → retap-цикл → честный fail + handoff (риск дубля). Скринкаст 14727: t265 «Опубликовать» → t320 фид+модалка. Это отложенный «H2» из WP#218. Затронуто 9 устр./акк./проектов.
+
+**Сделано:** `_TT_NOTIF_MODAL_MARKERS` + pure-детектор `_detect_tt_notifications_modal` (маркеры вынесены из инлайн-списка wait-loop = единый источник); notif-модал И Amplify-модал подключены в `_tt_screen_indicates_publish_done` за kill-switch `TT_PUBLISH_POSTMODAL_SUCCESS_ENABLED` (default ON). Обе появляются только post-publish → safe; gate→True → wait-loop штатно дисмиссит → UPLOAD_OK. Нового error_code/миграции НЕ требуется. TDD +21 тест; файл WP#218/226 58 passed; TT-регрессия 683 passed / 2 failed (оба pre-existing на чистом main `7f434f5`).
+
+**Verify:** утренней пачкой по убыли `tt_publish_button_not_activated`; kill-switch наготове.
+
+**Остаток (follow-up, низкий):** WP#218 H2 имел вторую половину — **stale/нечитаемый (markerless) дамп на профиле, зеркало WP#181**. WP#226 закрыл МОДАЛЬНЫЙ под-кейс; если дамп после тапа genuinely нечитаем (uiautomator во время анимации, `<hierarchy/>` без маркеров), gate по-прежнему уходит в ветку «дамп неинформативен» → retap. Кандидат на пост-тап success-probe (зеркало WP#181 IG): при markerless-дампе после publish-tap — короткий повторный дамп/проверка `/video/`-URL вместо немедленного retap. Триггер: если после деплоя WP#226 `tt_publish_button_not_activated` не уходит в ноль.
+
+Evidence: `docs/evidence/2026-06-03-tt-fail-triage.md`. Spec: `docs/superpowers/specs/2026-06-03-wp226-tt-publish-postpublish-modal-design.md` (в delivery PR #149). Память: `project_tt_triage_2026_06_03_publish_button_h2`.
+
+---
+
 ## 🟢 WP #162 — канарейка кросс-репо контракта `skip_reason='moved_from_slot%'` (follow-up WP #154) — SHIPPED+DEPLOYED 2026-05-27 (OpenProject #162)
 **Приоритет:** низкий (хардинг)
 **Статус:** **2 PR** merged — `GenGo2/validator-contenthunter`#23 (`26e056c`) + `GenGo2/delivery-contenthunter`#113 (`3797aea`); прод-деревья синхронизированы `git pull --ff-only` (autowarm `3797aea`, validator `26e056c`); OpenProject #162 → **«Готово»**.

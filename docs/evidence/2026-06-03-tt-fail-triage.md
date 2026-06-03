@@ -106,3 +106,18 @@ TikTok Amplify (`Пусть вас заметят` / `TikTok Amplify`) — он�
 успешного тапа «Опубликовать» (уже задокументировано в коде, WP#118 r2 / FIX T9). Тогда
 WP#218-gate вернёт True → поток дойдёт до wait-loop, который дисмиссит модалку и
 подтвердит UPLOAD_OK. Отдельный kill-switch, TDD на pure-хелперах, без регрессий H1.
+
+---
+
+## Статус: SHIPPED+DEPLOYED 2026-06-03 (WP#226)
+
+Фикс реализован (TDD) и задеплоен в тот же день:
+- delivery-contenthunter PR **#149** → merged, main `254930c`.
+- Прод-каталог `/root/.openclaw/workspace-genri/autowarm` обновлён `git pull --rebase` (ff), фикс присутствует, PM2-restart не нужен (publisher per-task spawn).
+- Kill-switch `TT_PUBLISH_POSTMODAL_SUCCESS_ENABLED` default ON, в прод-`.env` не переопределён.
+- Smoke 21/21 (WP#226-подмножество) на прод-checkout зелёный.
+- OpenProject **WP#226 → Тестирование**.
+- Спека: `docs/superpowers/specs/2026-06-03-wp226-tt-publish-postpublish-modal-design.md` (в PR #149).
+- Остаточный follow-up (stale/markerless dump на профиле, зеркало WP#181) занесён в `agents/genri/BACKLOG.md`.
+
+Verify: утренней пачкой по убыли `tt_publish_button_not_activated`.
