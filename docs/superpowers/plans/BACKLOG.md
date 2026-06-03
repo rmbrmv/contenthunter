@@ -1282,3 +1282,27 @@ Per-account handoff читает `device_serial/raspberry_number/pack_id/pack_na
 ### (минор) Гейты ключатся на денормализованный project_id
 
 `dispatch/retry/listQueue/take/return/cleanup` фильтруют по хранимому `publish_queue.project_id` / `validator_manual_publish_queue.project_id`. Это намеренно (денормализация, чтобы не ре-деривить через 3-table slot-join на каждом тике). Инвариант на write-стороне держит его авторитетным (`run_auto_unic` из `content.project_id` NOT NULL; ассайнеры хранят слот-резолв `COALESCE(slot,task)`; manual-эндпоинт бэкфилит из пака). Эмпирически 0 NULL/stale в гейтируемых состояниях (0/517 расхождений). Codex (round-11) предлагал слот-резолв во ВСЕХ read-путях — отклонено как рефактор ради несуществующего состояния (см. evidence «обоснование сходимости»). Если когда-нибудь появятся stale-строки — kill-switch + cleanup `--apply`.
+
+## 2026-06-03 — WP #137 пост-шип (уникализация лого клиента): follow-up
+
+Зашипан+задеплоен (validator-contenthunter `origin/main` merge `7879568`; прод backend pull `/root/.openclaw/workspace-genri/validator` + `sudo pm2 restart 24`; frontend build → `/var/www/validator`). Фича **инертна** — оба kill-switch'а (`LOGO_VARIANTS_GENERATION_ENABLED`, `LOGO_VARIANT_GATE_ENABLED`) OFF. См. evidence `2026-06-03-wp137-logo-uniqualization-shipped.md`, spec/plan `2026-06-03-wp137-*`.
+
+### (блокер включения) Laozhang gpt-image-1 image-edit не проверен в бою
+
+`logo_variant_service._call_image_model` шлёт multipart на `settings.logo_image_api_url` (Laozhang images/edits) и ждёт `data[0].b64_json`. Точный путь/формат edits у Laozhang не подтверждён вживую. Перед включением `LOGO_VARIANTS_GENERATION_ENABLED`: задать `LOGO_IMAGE_API_URL`, прогнать смок. Гейт (`LOGO_VARIANT_GATE_ENABLED`) включать ТОЛЬКО после успешного смока — иначе клиенты застрянут на Шаге 1/2.
+
+### (минор) `_call_image_model` обещает фолбэк, но не реализует
+
+Docstring упоминает фолбэк edits→generations при 404/400, кода нет. Либо реализовать (если Laozhang edits недоступен), либо убрать обещание из docstring.
+
+### (минор) provenance: hash источника фиксируется на enqueue
+
+`process_task` ре-фетчит `logo_url` свежим, но тегирует варианты `logo_source_hash` из строки задачи (момент enqueue). Если лого проекта сменили между enqueue и обработкой — варианты сгенерены из новых байт, но под старым хешем. Риск низкий (очередь дренится быстро). Отметка.
+
+### (фоллап ТЗ) онбординг-тур для нового шага
+
+ТЗ «учесть изменения в онбординге (если надо)». Тур-шаг для экрана выбора лого не добавлен (механизм `useSeenTours`/`OnboardingFlow` требует уточнения). Отдельной мелкой задачей при включении фичи.
+
+### (минор) reset не чистит S3
+
+`POST /api/logo-variants/reset` удаляет строки БД, но не объекты в S3 (их подберёт TTL-крон). Можно дозеркалить чистку S3 как у scheme-reset. Не блокер.
