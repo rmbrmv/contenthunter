@@ -1,5 +1,15 @@
 # Backlog tickets
 
+## 2026-06-03 — WP #152 follow-up: техдолг по unic-воркерам (из разбора пустых превью)
+
+Не блокер; фикс пустых превью 35-70 зашипан (delivery PR #151/#152, standalone PR #2, бэкфилл). Evidence: `docs/evidence/2026-06-03-wp152-empty-previews-fix.md`. Память: `project_wp152_null_scheme_params_empty_previews`.
+
+**1. Split-brain двух unic-воркеров на одну БД.** standalone id0 (91.98.180.103, GenGo2/unic-worker, умеет unic+scheme_preview) и delivery id36 (72.56.107.157, delivery-contenthunter, умеет только unic) поллят один `unic_tasks`. Сейчас разведены гейтом `task_type='unic'` в delivery (kill-switch `UNIC_WORKER_TASK_TYPE_GUARD_ENABLED`), но `unic`-таски всё равно гоняются обоими (без коррупции, но дублируют работу). Следует консолидировать: либо один воркер на оба типа, либо явное разделение по `task_type` на уровне claim в обоих + единый источник кода (standalone отставал от delivery — не было shake/audio_bitrate-фиксов).
+
+**2. Превентив NULL в `unic_schemes`.** Схемы 35-70 вставили с NULL в logo_*/pattern_*/offset/audio-колонках → крашили рендер (`int(None)`). Код теперь null-safe (`get(k) or default`), но стоит добавить DEFAULT/NOT NULL на колонки `unic_schemes` (или валидацию при INSERT в admin-форме), чтобы новые партии схем не приходили с дырами.
+
+**3. Мусор в `unic_results`.** delivery id36 до фикса записал ~64 строки на scheme_preview-таски (4254/4257/4280, schemes 1-4). Безвредно (UI читает `validator_scheme_previews`), но можно почистить: `DELETE FROM unic_results WHERE task_id IN (SELECT id FROM unic_tasks WHERE task_type='scheme_preview')`.
+
 ## 2026-05-31 — WP #195: adb_device_not_ready спайк = 1 unauthorized девайс → scheduler device-health gate
 
 ### ✅ SHIPPED+DEPLOYED 2026-05-31 — OpenProject #195 → Тестирование; autowarm prod main `92cef97`, pm2#35 restart (verified)
