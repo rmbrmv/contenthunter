@@ -27,10 +27,16 @@
 | 14830 | procontent_lab | CAPTCHA «Подтвердите, что вы человек» | ops/блок |
 | 13989 | procontent_lab | CAPTCHA | ops/блок |
 
-## RC доминирующих 3/6
-`_verify_reels_camera_mode` (publisher_instagram.py:1160) подтверждает Reels только по resource-id `clips_tab` или точному тексту `'REELS'`/`'Reels camera'`. На билде Reels-камеры с расширенной творческой панелью таб-бар отдаёт текст иначе → точное сравнение в set промахивается → `unknown` → ветка ig_wrong_camera_mode `continue` → петля open_camera исчерпывается → `ig_camera_open_failed` (publisher_instagram.py:2408).
+## RC доминирующих 3/6 (уточнён по publish_tasks.events + UI-dump)
+Не детектор `_verify_reels_camera_mode`, а **ненадёжность UI-dump на camera-surface**: после промаха strict-плитки Reels (`ig_create_tile_strict_miss`) → deeplink fallback `instagram://reels-camera` камера РЕАЛЬНО открывается, но `dump_ui()` на свежей camera-surface после cold-start возвращает пустой/contentless dump → петля open_camera её не видит и через ~61с эмитит `ig_camera_open_failed` (`detected_state=unknown`, `tried_full_reset=false`, `consecutive_state_count={}`). Fail-артефакт `instagram_no_camera` (dump через ~2с) уже содержит `text=REELS`/`content-desc=Затвор,Галерея`/`resource-id=cam_dest_clips` — доказательство ложности. Watchdog open_camera = `STEP_TIMEOUT_DEFAULT` 120с (паттерны не матчат «open_camera»), на 61с не срабатывал.
 
-## Направление фикса (WP#238)
-1. Устойчивый позитивный маркер Reels-камеры: case-insensitive `reels` + сигнатуры открытой камеры (shutter/capture, flip_camera, музыка/эффекты), не только точный `'REELS'`/`clips_tab`.
-2. Отделить captcha-challenge и OS-permission-диалог в отдельные коды, чтобы ops-шум не маскировал код-RC.
-3. Kill-switch + TDD. Код: delivery-contenthunter / autowarm.
+## Реализация → SHIPPED+DEPLOYED 04.06 (PR #159, OP#238→Тестирование)
+Kill-switch `IG_CAMERA_OPEN_GRACE_RECHECK_ENABLED` (default ON):
+1. `_ig_camera_surface_ready(ui)` — устойчивые resource-id (`cam_dest_clips`, `camera_destination_picker`, `bottom_camera_capture_controls`, ...) + точные токены text/desc (REELS/ИСТОРИЯ/ПУБЛИКАЦИЯ/Затвор/Галерея/Добавить аудио/«Reels camera»); attribute-scoped, не ловит reels-feed (`clips_tab_feed`).
+2. `_ig_grace_recheck_camera()` — перед фейлом доп. settle 3×3с=9с + переснять dump → `camera_ready=True` (событие `ig_camera_open_grace_recovered`).
+3. Доп. сигнал в основном camera-ready чеке цикла.
+
+TDD: `tests/test_ig_camera_surface_ready.py` 15 тестов; целевая регрессия IG/caption/gallery 380 passed. Код: delivery-contenthunter `publisher_instagram.py` (main `e5a651d`, прод autowarm ff-pull, PM2-restart не нужен — publisher per-task spawn). Подробности: `2026-06-04-wp238-ig-camera-open-false.md`.
+
+## Follow-up (Бэклог)
+Отделить от `ig_camera_open_failed` две ops-RC, которые сейчас под него маскируются: CAPTCHA «Подтвердите, что вы человек» (procontent_lab 14830/13989 → account-challenge) и OS-диалог «Разрешить доступ к фото/видео» (14938 → permission-dismiss).
