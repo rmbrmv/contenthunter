@@ -500,6 +500,29 @@ Expected: PASS — планировщик группирует полуночн�
 
 ---
 
+## Task 3b — ДОБАВЛЕНО на финальном ревью: флип retry_controller.js (CRITICAL)
+
+Финальный холистический ревью нашёл пробел: аудит читателей в Task 3 искал только `naiveTzClause`,
+но `retry_controller.js:86,93` читали `publish_tasks.created_at` через **рукописную** двойную
+конвертацию `AT TIME ZONE 'UTC' AT TIME ZONE 'Europe/Moscow'`. После миграции это сломало бы
+дневной кап ретраев (день-бакетинг) в окне 22:00–24:00 UTC — рецидив WP#221-класса в пайплайне
+ретраев. `retry_controller.js` крутится в процессе server.js → ушло бы в прод сразу при рестарте.
+
+- Фикс: обе строки `(created_at AT TIME ZONE 'UTC' AT TIME ZONE 'Europe/Moscow')::date` /
+  `(min(created_at) …)::date` → одинарный `(… AT TIME ZONE 'Europe/Moscow')::date`. Части
+  `COALESCE($::timestamptz, now()) AT TIME ZONE 'Europe/Moscow'` оставлены (работают на timestamptz).
+- Red-тест: `test_wp247_phase2_retry_controller.test.js` (граница 22:00 UTC = 05-14 МСК).
+- SMOKE-тест test_wp221 сделан self-skip до миграции (убран ложный RED).
+- Коммит `ea7742b`. Финальный ревью после фикса: **READY TO DEPLOY**.
+- УРОК: аудит читателей должен искать и рукописные `AT TIME ZONE 'UTC' AT TIME ZONE`, не только хелпер.
+
+## Результат Task 4 (аудит писателей): AUDIT CLEAN
+
+Наивно-локальных (не-UTC wall-clock) писателей in-scope колонок НЕ найдено — все пишут UTC-инстант
+(`NOW()`/INTERVAL, `Date`-объекты, `.toISOString()`, `DEFAULT now()`). Миграция instant-preserving
+подтверждена. Информационно (не риск миграции): `index.html:8196 submitPublishTask` шлёт сырую
+`datetime-local`-строку без оффсета (соседние пути конвертят в UTC-ISO) — отдельный UX-тикет.
+
 ## Self-Review (выполнено при написании)
 
 - **Покрытие спеки:** миграция (Task 1), флип читателей (Task 3), шим naiveTzClause сохранён (Task 3 step 5), без рантайм-флага (Task 7 — деплой+rollback), аудит писателей (Task 4), instant-preserving проверки (Task 1/7), тестирование TDD (Task 1/2/5/6), верификация (Task 7). Все разделы спеки покрыты.
