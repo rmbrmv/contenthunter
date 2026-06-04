@@ -2,7 +2,7 @@
 
 **Дата:** 2026-06-04
 **OpenProject:** [WP#239](https://openproject.contenthunter.ru/work_packages/239) — «в расчёте success rate добавить переключатель на дату запланировано»
-**Статус:** В разработке
+**Статус:** SHIPPED+DEPLOYED 2026-06-04 (delivery main 6745b53, PM2 id35) → OP Тестирование
 **Ветка:** `wp239-success-rate-planned-date` (worktree `/home/claude-user/contenthunter-wp239`)
 **Репозиторий кода:** delivery-contenthunter (autowarm). Этот документ — в docs-репо rmbrmv/contenthunter.
 
