@@ -34,12 +34,16 @@ share-to-story медиа-пикер «Добавить в историю», а 
 
 ## Лид для Фазы 2 (research-first, по решению Данила)
 
-Switcher (`account_switcher.py`) после выхода на свой профиль тапает «+» по
-**хардкод-координатам (540, 2137)** (`TikTok.plus_button.coords`, :100) и верифицирует
-через `_tap_plus_and_verify` (final_step `tt_fp_editor`). На TikTok 44.x этот тап
-приземляет поток на `SocialMediaPickerActivity` (story-share), хотя switcher считает,
-что открыл редактор. own-profile маркеры включают «Создать историю»/«Create story»
-(:2683-2684) — на профиле есть story-CTA рядом с create-«+».
+Switcher (`account_switcher.py`) после выхода на свой профиль тапает «+» через
+`tap_element(ui, plus['desc'])` — для TikTok `plus['desc']=['Создать','Create','+']`
+(account_switcher.py:83, coords-фоллбэк (540,2320)). ⚠️ПОПРАВКА: строка 100/104
+(`['Создание видео',…]`, coords (540,2137)) — это **YouTube**, не TikTok (ранняя
+атрибуция была ошибочна; root-cause держится, т.к. реальный TT-desc `'Создать'`
+тоже коллизит). `tap_element` (publisher_base.py:1810) = substring-матч сверху-вниз
+→ `'Создать'` сматчивает профильную **«Создать историю»** ПЕРВОЙ → тап story-CTA →
+`SocialMediaPickerActivity`. verify через `_tap_plus_and_verify` (final_step
+`tt_fp_editor`, permissive: 0 editor_triggers→warning+SUCCESS) маскирует. own-profile
+маркеры включают «Создать историю»/«Create story» (:2683-2684).
 
 **Фаза 2 (отдельный план) начинается с точечного research:**
 1. Разобрать дамп `SocialMediaPickerActivity` (`/tmp/wp250-evidence/15491_post_switch_post_switch.xml`):
