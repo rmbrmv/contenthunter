@@ -70,3 +70,34 @@
 ### Отличие от существующих задач
 - **OP#202** — ops: на устройстве RFGYA19DB8K реально сменились Google-аккаунты (назначенных нет в пикере). Здесь обратное: аккаунт ЕСТЬ, матчер промахивается → код-баг.
 - **OP#66** — исходный channel-name-match (relisme); эта задача расширяет его правило.
+
+---
+
+## РЕАЛИЗАЦИЯ + ДЕПЛОЙ (TDD) 04.06 — SHIPPED+DEPLOYED, OP#237→Тестирование
+
+**PR #157 (GenGo2/delivery-contenthunter), main `13bde0a`.** Прод `/root/.openclaw/workspace-genri/autowarm` обновлён `git pull --ff-only` → `13bde0a`. PM2-restart не нужен (publisher спавнится per-task). Smoke на проде: helper ON, enoty-канал матчится (len=1).
+
+### Код (account_switcher.py)
+- `find_yt_channel_name_matches(elements, target, allow_numeric_suffix=True)`: добавлено правило
+  `norm(channel) == norm(target) + <digits>` (числовая YT-уникализация имени канала).
+- Ambiguity-guard сохранён: два кандидата `target+<digits>` → 2 матча → caller fail loudly.
+- Хелпер `_yt_channel_numeric_suffix_enabled()` + kill-switch `YT_PICKER_NUMERIC_SUFFIX_MATCH_ENABLED` (default ON).
+- В `_find_and_tap_account` вызов прокинут с `allow_numeric_suffix=<kill-switch>`.
+
+### Тесты (TDD, +7)
+core (15034) / sibling-school-no-collision / ambiguous-returns-all / disabled-by-flag /
+non-numeric-multichar-guard / env-helper / integration через `_find_and_tap_account`.
+- `test_switcher_youtube.py`: **47 passed**; регрессия свитчера: **135 + 74 passed**; широкий прогон **711 passed**.
+- ⚠️ 2 пред-существующих фейла на чистом main (`test_yt_happy_path_returns_accounts`,
+  `test_strict_verify_falls_back_safely_on_malformed_xml`) — мок `adb()` в `_detect_foreground_pkg`, НЕ связаны.
+
+### Data-фикс
+- Опечатка `factory_inst_accounts.gmail` у `enoty-po-polkam-poker` (id 1998):
+  `lenoty…` → `enoty.po.polkam.poker@gmail.com` — применена (guarded `UPDATE 1`).
+- Бэкфилл пустых gmail: `payworldcards`/`virtualcardpro` в `factory_inst_accounts` **отсутствуют**
+  (бэкфиллить нечего); всего **158** YT-аккаунтов с пустым gmail → массовый бэкфилл штатно через
+  `backfill_yt_gmails.py` (live-проба устройства, не слепой SQL). Код-фикс покрывает кейсы без gmail →
+  бэкфилл вынесен в **бэклог — OP#241**.
+
+### Verify
+Следующие `yt_picker_target_absent` по enoty/payworld/virtualcard должны исчезнуть (event `yt_channel_name_match`).
