@@ -58,3 +58,12 @@
 ### Направление фикса
 
 Расширить `_tt_screen_indicates_publish_done` на новые пост-публикационные сигнатуры (вкладка «Друзья»/«Входящие» в foreground + кружок прогресса NN% сразу после тапа «Опубликовать»). При обнаружении — не ретапать, фиксировать success + обычный URL-capture. За kill-switch.
+
+### Статус реализации — SHIPPED+DEPLOYED 04.06 → Тестирование
+
+Реализован модульный предикат `_tt_main_navbar_shell(ui)` в `publisher_tiktok.py`: True при двух editor-absent метках главного навбара («Главная»+«Входящие» / «Home»+«Inbox»). «Друзья» как маркер **не используется** — это ещё и значение видимости в редакторе (коллизия). Подключён в `_tt_screen_indicates_publish_done` за kill-switch `TT_PUBLISH_NAVBAR_SHELL_SUCCESS_ENABLED` (default ON). Распознаётся в top-of-loop проверке (`publisher_tiktok.py:3278`) и пост-тап verify (`:2691`) → success-break **до** fallback-тапов.
+
+- Код: `GenGo2/delivery-contenthunter`, **PR #158 → main `b4d9a9f`**; прод pull в `/root/.openclaw/workspace-genri/autowarm` (publisher per-task spawn → PM2-рестарт не нужен).
+- TDD: 17 новых тестов (`tests/test_publisher_tt_navbar_shell_success.py`), регрессия TT-сьют 70/70, полный публикатор-юнит 462 passed (3 пре-существующих фейла probes IG/tt не связаны).
+- OpenProject **#236 → «Тестирование»**; backlog **#233** перекрыт (RC уточнён: не «промах fallback-тапа», а нераспознанный навбар-шелл).
+- Verify (~сутки): тренд `tt_publish_button_not_activated` ↓ + событие `tt_publish_confirmed_in_share_loop`.
