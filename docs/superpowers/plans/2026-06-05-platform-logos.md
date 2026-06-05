@@ -418,6 +418,128 @@ git commit -m "feat(op92): крупная иконка карточки чере
 
 ---
 
+### Task 8: Бейджи аккаунтов (паки/публикация) → SVG (Full scope)
+
+**Files:** Modify `public/index.html`. Все места — innerHTML-чипы аккаунтов. Правило: иконка → `platformLogo(<platform>)`, текст/имя рядом не трогаем.
+
+- [ ] **Step 1: `PLATFORM_EMOJI` (def ~9276) → удалить; call-sites 9292, 9321**
+
+```
+// 9292/9321 (внутри .map, доступна a.platform)
+const emoji = PLATFORM_EMOJI[a.platform] || '🔗';   →   const emoji = platformLogo(a.platform);
+```
+(оба `${emoji}` идут в innerHTML `<span>` — ок). Затем удалить `const PLATFORM_EMOJI = {...}` (9276).
+
+- [ ] **Step 2: `PLATFORM_EMOJI_SPLIT` (def ~15183) → удалить; call-sites 15207, 15262, 15266**
+
+```
+(PLATFORM_EMOJI_SPLIT[a.platform] || '🔗') + ' ' + a.username   →   platformLogo(a.platform) + ' ' + a.username
+(PLATFORM_EMOJI_SPLIT[pl] || '🔗') + ' ' + pl + ' ×' + c         →   platformLogo(pl) + ' ' + pl + ' ×' + c
+```
+Удалить `const PLATFORM_EMOJI_SPLIT = {...}` (15183).
+
+- [ ] **Step 3: `_pubPlatMeta` (def ~8278) — иконка → SVG; call-sites 8320, 12321**
+
+```
+<span class="text-base leading-none">${pm.icon}</span>   →   <span class="inline-flex">${platformLogo(acc.platform)}</span>
+```
+(на обоих сайтах в скоупе доступна `acc.platform`). `pm.label`/`pm.url` НЕ трогать; `_pubPlatMeta` оставить (нужен для label/url/fallback).
+
+- [ ] **Step 4: PKG-чип `pf.emoji` в `<td>` (9547) → SVG**
+
+```
+${pf.emoji} ${pf.label}   →   ${platformLogo(pf.id)} ${pf.label}
+```
+ВАЖНО: НЕ трогать 9670 (`<option>`-label, эмодзи) и 9756 (`.textContent`, эмодзи) — там `pf.emoji`/`p.emoji` остаются.
+
+- [ ] **Step 5: Проверка**
+
+```bash
+grep -nE "\b(PLATFORM_EMOJI|PLATFORM_EMOJI_SPLIT)\b" public/index.html || echo "OK: эмодзи-дикты паков удалены"
+node --check server.js && echo OK
+```
+Убедиться, что `platformLogo` НЕ попал в 9670/9756.
+
+- [ ] **Step 6: Commit** `git commit -am "feat(op92): бейджи аккаунтов паков/публикации → SVG-логотипы"`
+
+---
+
+### Task 9: Social Audit → SVG + фикс шадоуинг-бага (Full scope)
+
+**Files:** Modify `public/index.html`. Две функции с локальным `const platformIcon = {...}` (15016, 15086), шадоуящим глобальную функцию. На 15124 объект вызывается как функция → **TypeError** (модалка деталей падает). Удаление локальных диктов чинит баг.
+
+- [ ] **Step 1: Список (≈15030) `<td>` innerHTML → SVG**
+
+```
+${platformIcon[r.platform] || ''} ${r.platform}   →   ${platformLogo(r.platform)} ${r.platform}
+```
+
+- [ ] **Step 2: Удалить локальный дикт 15016** `const platformIcon = { instagram:'📸', ... };`
+
+- [ ] **Step 3: Заголовок модалки (≈15087) `title.textContent` → ЭМОДЗИ через глобальную функцию**
+
+```
+title.textContent = `${platformIcon[r.platform] || ''} @${r.account}`;
+title.textContent = `${platformIcon(r.platform)} @${r.account}`;
+```
+(после удаления локального дикта 15086 `platformIcon` снова = глобальная функция-эмодзи; textContent → SVG нельзя, эмодзи корректно).
+
+- [ ] **Step 4: Деталь `<p>` (≈15124) innerHTML → SVG (чинит TypeError)**
+
+```
+${platformIcon(r.platform)} ${r.platform}   →   ${platformLogo(r.platform)} ${r.platform}
+```
+
+- [ ] **Step 5: Удалить локальный дикт 15086** `const platformIcon = { instagram:'📸', ... };`
+
+- [ ] **Step 6: Проверка**
+
+```bash
+grep -nE "const platformIcon *= *\{" public/index.html || echo "OK: локальные дикты Social Audit удалены"
+node --check server.js && echo OK
+```
+Глобальные `platformIcon`(функция)/`platformLabel`/`PLATFORM_ICONS` — остаются.
+
+- [ ] **Step 7: Commit** `git commit -am "feat(op92): Social Audit иконки→SVG + фикс шадоуинг platformIcon (TypeError)"`
+
+---
+
+### Task 10: Разбивка дашборда + статичные `<div>` → SVG (Full scope)
+
+**Files:** Modify `public/index.html`.
+
+- [ ] **Step 1: `DASH_PLATFORM_META` (def ~12497, `[key,'эмодзи Имя']`) — рендер 12539, 12582 → SVG+имя**
+
+`DASH_PLATFORM_META` оставить как `[key, label]` (label содержит эмодзи), но в рендере использовать `key` для лого и `platformName(key)` для текста:
+
+```
+<span class="text-sm font-semibold text-gray-700 w-28 shrink-0">${label}</span>
+<span class="text-sm font-semibold text-gray-700 w-28 shrink-0">${platformLogo(key)} ${platformName(key)}</span>
+```
+(в обоих местах 12539 и 12582 деструктуризация `([key, label])` уже есть — `key` доступен).
+
+- [ ] **Step 2: Статичные `<div>` (14853/14857/14861)**
+
+```
+<div class="text-xs text-gray-500 font-medium">📸 Instagram</div>
+<div class="text-xs text-gray-500 font-medium"><svg class="w-4 h-4 inline-block align-[-0.125em]" aria-hidden="true"><use href="#logo-instagram"></use></svg> Instagram</div>
+<div class="text-xs text-gray-500 font-medium">🎵 TikTok</div>
+<div class="text-xs text-gray-500 font-medium"><svg class="w-4 h-4 inline-block align-[-0.125em]" aria-hidden="true"><use href="#logo-tiktok"></use></svg> TikTok</div>
+<div class="text-xs text-gray-500 font-medium">▶️ YouTube</div>
+<div class="text-xs text-gray-500 font-medium"><svg class="w-4 h-4 inline-block align-[-0.125em]" aria-hidden="true"><use href="#logo-youtube"></use></svg> YouTube</div>
+```
+
+- [ ] **Step 3: Проверка**
+
+```bash
+grep -nE "font-medium\">(📸|🎵|▶️)" public/index.html || echo "OK: статичные div переведены"
+node --check server.js && echo OK
+```
+
+- [ ] **Step 4: Commit** `git commit -am "feat(op92): разбивка дашборда по платформам + статичные div → SVG-логотипы"`
+
+---
+
 ### Task 7: Финальная проверка и интеграция
 
 - [ ] **Step 1: Полный прогон тестов модуля**
