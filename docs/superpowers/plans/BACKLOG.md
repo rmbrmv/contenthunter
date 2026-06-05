@@ -1,5 +1,15 @@
 # Backlog tickets
 
+## 2026-06-05 — TT фейл-триаж: WP#256 SHIPPED + единичные коды на наблюдении
+
+Триаж TikTok-падений за 05.06 (13 failed из 44). Лидер кодовых = `tt_inapp_upload_unreached` ×4 → **WP#256 SHIPPED+DEPLOYED+канарейка-verified** (раскладко-независимый детектор тайла галереи; зеркальные раскладки камеры между версиями TikTok; v1 хардкод провалил канарейку → v2; merge delivery `7817868`; OP#256 → Тестирование). Evidence: `docs/evidence/2026-06-05-tt-triage-fails.md`. Память: `project_tt_triage_2026_06_05`.
+
+**Не-кодовое (ops):** `phone_or_email_link_required` ×4 (баны/привязка) → **OpenProject WP#266 на Анастасию** (простым языком). Правило: ops-задачи сразу на Анастасию → `feedback_ops_tasks_to_anastasia`.
+
+**Кандидаты-одиночки (по 1 шт за день, в баги только при рецидиве):** `tt_caption_field_not_focused`, `tt_profile_tab_broken`, `tt_post_switch_verify_unrecoverable`, `tt_publish_button_not_activated`. Сейчас не выделяются в задачи — мониторим повторяемость.
+
+**Остаток WP#256:** наблюдение done-rate TT (правая раскладка проверена фикстурой, живое подтверждение — по статистике прода ~сутки) → OP#256 → Готово.
+
 ## 2026-06-03 — WP #152 follow-up: техдолг по unic-воркерам (из разбора пустых превью)
 
 Не блокер; фикс пустых превью 35-70 зашипан (delivery PR #151/#152, standalone PR #2, бэкфилл). Evidence: `docs/evidence/2026-06-03-wp152-empty-previews-fix.md`. Память: `project_wp152_null_scheme_params_empty_previews`.
