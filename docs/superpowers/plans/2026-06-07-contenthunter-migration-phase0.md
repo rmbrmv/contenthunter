@@ -608,3 +608,28 @@ git commit -m "docs(migration): Фаза 0 готова — тест-стенд 
 - **Покрытие спека:** топология (Task 3,8,9), деплой-пайплайн (Task 6,11), ветки develop/main (Task 6,11), БД rename openclaw→contenthunter (Task 4,5,7), test-БД обезличенная + выкл. публикации (Task 10), чистка легаси (вне Фазы 0: ch-auth/producer не клонируются вовсе — покрыто тем, что в Task 7 клонируются только 2 репо; косметика логина и окно переезда — в плане Фазы 1–2), внешние зависимости/сеть (Task 2 Step 5). Плашка/заморозка/дамп/редиректы — сознательно в плане Фазы 1–2.
 - **Заглушки:** значения секретов и точные `-t` таблицы/команды миграций помечены как «уточнить из Task 2/по проекту» — это шаги сбора факта внутри плана, а не заглушки результата.
 - **Согласованность имён:** стенды `prod-delivery/prod-client/test-delivery/test-client`, БД `contenthunter`/`contenthunter_test`, порты delivery 3848/3948, client 8000/8100 — единообразны по всем задачам.
+
+---
+
+## ПОПРАВКИ К ПЛАНУ ПОСЛЕ РАЗВЕДКИ (2026-06-07) — ПРИОРИТЕТНО
+
+Разведка изменила картину БД. Эти поправки переопределяют соответствующие задачи выше. Подробности — в спеке, раздел «Обновление после разведки».
+
+- **Task 3 (провижн):** добавить `docker` + `docker compose` плагин; добавить **swap** (на NEW swap=0, 30 ГБ RAM — создать 8–16 ГБ swapfile); НЕ ставить `postgresql-16` сервером (БД будет в Docker). `postgresql-client-16` оставить (для psql/pg_restore). Включить ufw с правилами (22/80/443).
+- **Task 4 (PostgreSQL) → переписать как «Docker-compose pgvector»:** `/opt/contenthunter/_ops/db/compose.yml` с образом `pgvector/pgvector:pg16`, volume для данных, порт 5432 (только localhost), пароль роли из секрета. Внутри создать БД `contenthunter` и `contenthunter_test`, роль `contenthunter`, расширения `pg_trgm`+`pgcrypto` в обеих. Бэкап — на уровне volume + Hetzner-снапшоты.
+- **Task 5 (имя БД в env) → расширить до «креды delivery полностью из env»:** `server.js` — `database/user/password/host/port` из `process.env.PG*` (дефолт БД `contenthunter`), убрать хардкод `openclaw/openclaw123`. Это правка через ветку `develop`.
+- **Новая Task 5b (код-фиксы cross-schema → public, через `develop`):**
+  - `sim_scanner.py:117` `factory.device_numbers`→`public.factory_device_numbers`; `:118` `factory.raspberry_port`→`public.raspberry_port`.
+  - `server.js:8767` `factory.device_numbers`→`public.factory_device_numbers` (рядом, :8769, уже public — привести к согласованности).
+  - `warmer.py:1198/2478` `factory.hashtags`→`public.factory_hashtags`.
+  - Вычистить мёртвую `FACTORY_DB_*` из `validator/.env` (+ бэкап-копии).
+  - Проверка: `grep -rnE "\b(factory|hr|team|finance)\.[a-z_]+"` по коду CH (искл. node_modules/ложные `.run(`) → пусто в SQL-контексте.
+- **Task 10 (тестовый слепок) → переписать под выборочный дамп:**
+  1. Дамп с OLD ТОЛЬКО CH-owned public-таблиц (схема public с `-T`-исключениями: убрать `LiteLLM_*`,`systematika_*`,`billing_*`,CRM `meetings/people/transcriptions/client_messages/telegram_messages`, 4 ничейные). Источник — Docker-контейнер: `sudo docker exec openclaw-postgres pg_dump -U openclaw -d openclaw --schema=public -T 'LiteLLM_*' -T 'systematika_*' ... -Fc -f /tmp/ch.dump` (полный список `-T` — из артефакта code-recon). Структуру `factory`/`hr`/`team`/`finance` НЕ включаем (по умолчанию `--schema=public` их и не берёт).
+  2. Разово скопировать `factory.hashtags`→`public.factory_hashtags` (создать таблицу + данные) ДО дампа, чтобы попало в слепок.
+  3. `pg_restore` в `contenthunter_test`; затем обезличивание (Task 10 Step 2-3) + выкл. реальной публикации (Step 4).
+  4. Полные данные (включая `autowarm_device_metrics` 4.1 млн строк) — НЕ обрезать.
+- **factory_sync:** на NEW **не переносим и не запускаем** `scripts/factory_sync.py`; внешний канал к `193.124.112.222` не нужен; схему `factory` не создаём.
+- **farm-platform** — не разворачиваем.
+
+Эти же поправки применяются и к плану окна переезда (Фаза 1–2), который пишется после Фазы 0.

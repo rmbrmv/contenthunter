@@ -1,7 +1,7 @@
 # Переезд ContentHunter на новый сервер + схема деплоя через GitHub
 
 **Дата:** 2026-06-07
-**Статус:** дизайн утверждён, ожидает вычитки
+**Статус:** дизайн утверждён; дополнен разделом «Обновление после разведки» (см. в конце) — он ИМЕЕТ ПРИОРИТЕТ над более ранними допущениями про БД.
 **Автор обсуждения:** Данил Павлов + Claude
 
 ## Цель
@@ -130,3 +130,42 @@ Worktree — локальный инструмент разработки (не�
 - **Сетевой доступ к устройствам/внешнему уникализатору** с нового сервера (firewall/whitelist по IP) — проверить на смоук-тесте, возможно потребуется добавить новый IP в разрешённые на стороне Raspberry Pi / 91.98.180.103.
 - **Telegram Login виджет** на client требует, чтобы домен бота в BotFather соответствовал сайту — при смене канонического домена на `prod-client.contenthunter.ru` проверить настройку бота.
 - Точный список cron-задач старого сервера, пишущих в `openclaw` (прочитать root-crontab после выдачи доступа), чтобы заморозка была полной.
+
+---
+
+## Обновление после разведки (2026-06-07) — ПРИОРИТЕТНО
+
+Разведка на живом сервере (артефакты `docs/superpowers/plans/_artifacts/phase0-recon.md`, `phase0-external-audit.md`, `phase0-farming-repos.md`) уточнила реальную картину БД и зависимостей. Решения ниже согласованы с Данилом и заменяют более ранние допущения.
+
+### Реальная картина БД
+- БД ContentHunter — **не системный PostgreSQL, а Docker-контейнер** `openclaw-postgres` (образ `pgvector/pgvector:pg16`) на `localhost:5432`, запущен «голым» `docker run` (без compose). Реальный размер — **1.9 ГБ, 153 таблицы в схеме `public`** (а не 114 МБ — тот замер попал в чужой системный кластер на `:5433`).
+- База **общая на много продуктов**: помимо CH в ней живут `LiteLLM_*` (57 табл.), `systematika_*`, `billing_*`, CRM/митинги (`meetings`,`people`,`transcriptions`,`client_messages`,`telegram_messages`) и чужие схемы `factory`/`hr`/`team`/`finance`.
+- Креды БД у delivery **захардкожены** в `server.js` (`openclaw`/`openclaw`/`openclaw123`). client — через `DATABASE_URL` (env) + `ALEMBIC_DATABASE_URL`.
+
+### Движок БД на NEW (РЕШЕНО)
+**docker-compose + образ `pgvector/pgvector:pg16`** (воспроизводимо, заменяет «голый docker run»). Расширения: `pg_trgm` + `pgcrypto` (vector-колонок в CH нет — vector только у чужого LiteLLM, но образ суперсет, годится). Две БД: `contenthunter` (prod) и `contenthunter_test`.
+
+### Состав дампа (РЕШЕНО) — выборочный, безопасный
+- **Переносим: все CH-owned таблицы схемы `public`** — ядро delivery/client + **фарминг/регистрацию/прогрев** (`farming_*`, `warmup_*`, `phone_warm_tasks`, `tg_*`, `wa_*`, `sim_cards`, `factory_*` public, `account_packages` и т.д.), с **полными данными, включая историю метрик** `autowarm_device_metrics` (4.1 млн строк) и `factory_inst_reels_stats`.
+- **Исключаем:** чужие семейства (`LiteLLM_*`, `systematika_*`, `billing_*`, CRM `meetings/people/transcriptions/client_messages/telegram_messages`); 4 «ничейные» таблицы (`account_purchases`, `fw_interest_clicks`, `install_queue`, `installer_logs`); чужие схемы `factory`/`hr`/`team`/`finance` целиком.
+- **Межпродуктовых FK нет** — выборочный дамп безопасен. Стратегия: дамп схемы `public` с `-T`-исключениями (сохраняет enum-типы validator: `contenttype`/`slotstatus`/`userrole` и пр. + extensions), либо явный список таблиц + типы. Точная команда — в плане окна переезда.
+
+### Фарминг и регистрация аккаунтов (РЕШЕНО)
+**Отдельного репо нет** — код регистрации (`account_factory.py`, `register_social.py`, `gmail_factory_appium.py`) и прогрева (`warmer.py`, `phone_warmer.py`, `telegram_warmer.py`, `sim_scanner.py`, `farming_orchestrator.py`) **уже внутри `delivery-contenthunter`**. Едут вместе с delivery, сливать ничего не нужно. Это **актуальный функционал** (будет дорабатываться), а не легаси. Не везём как прод только **QA-тестбенч-процессы** (pm2 id26/28/29/33).
+
+### Внешний продукт «factory» и factory_sync (РЕШЕНО — отключаем)
+- Внешняя БД `193.124.112.222:49002/factory` (readonly) — **старая БД прошлой версии платформы**, без живой регистрации; служила разовой синхронизацией на прошлом переезде. **Будет удалена.**
+- `scripts/factory_sync.py` (лил внешнюю factory → public-таблицы) — **отключаем совсем.** Сетевой канал к `193.124.112.222` на NEW не нужен. Схему `factory` (35 табл.) **не переносим.**
+- Текущие данные аккаунтов/устройств уже лежат в public-таблицах (`factory_inst_accounts`, `factory_device_numbers` и т.д.) и переезжают как снимок. Новая регистрация — будущая работа на нашей платформе (`account_factory.py` уже едет).
+- Мёртвая конфигурация `FACTORY_DB_*` в `validator/.env` — **вычистить.**
+
+### Код-фиксы как часть переезда (через флоу develop→test→main)
+1. **Креды delivery из env:** `server.js` — `database/user/password/host/port` из `process.env.PG*` (дефолты: БД `contenthunter`, новая роль/пароль). Убрать хардкод `openclaw123`.
+2. **Переключить 3 cross-schema обращения на `public`** (CH должен ходить только в public): `sim_scanner.py:117` (`factory.device_numbers`→`public.factory_device_numbers`), `sim_scanner.py:118` (`factory.raspberry_port`→`public.raspberry_port`), `server.js:8767` (`factory.device_numbers`→`public.factory_device_numbers`). Public-аналоги уже существуют с теми же/свежее данными — drop-in.
+3. **`public.factory_hashtags`:** создать таблицу + разово скопировать данные `factory.hashtags` (628 строк) при переезде; `warmer.py:1198/2478` переключить на `public.factory_hashtags`.
+4. **Вычистить мёртвую `FACTORY_DB_*`** из `validator/.env` (+ бэкап-копии).
+
+### Прочее
+- `farm-platform` (репо `GenGo2/farm-platform`, дашборд фермы, порт 3853, не запущен) — **пропускаем**.
+- Сеть с NEW до S3 / ffmpeg `91.98.180.103` / ADB-шлюза `147.45.251.85` — **OPEN** (TCP), whitelist по IP не нужен (хендшейк подтвердить в окне).
+- NEW: Ubuntu 24.04, 16 vCPU / 30 ГБ RAM (**swap 0** — добавить) / 575 ГБ свободно; стоит только python3/git/ufw — провижн: docker+compose, node, caddy, python venv, adb, psql-client.
