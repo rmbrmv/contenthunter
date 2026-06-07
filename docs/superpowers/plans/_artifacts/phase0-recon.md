@@ -217,3 +217,103 @@ device_state, raspberry_port, sim_cards, install_queue, installer_logs, phone_wa
 
 ### Статус: **DONE_WITH_CONCERNS**
 Разведка выполнена полностью. Главный concern — БД общая и нетривиальна для переноса (табличный отбор + две PG-инстанции + pgvector + захардкоженные креды). Открытые вопросы помечены выше.
+
+---
+
+## Разведка по коду: CH-таблицы и FK
+
+> Метод: полный список public-таблиц из БД (`openclaw-postgres` :5432) пересечён с грепом обеих кодовых баз — delivery `/root/.openclaw/workspace-genri/autowarm` (raw SQL в JS/PY) и client `/root/.openclaw/workspace-genri/validator/backend` (SQLAlchemy `__tablename__` + raw `text()` + alembic). Для пограничных таблиц проверены ИМЕНА ФАЙЛОВ-потребителей (живой publish/validator vs farming/warming/testbench). READ-ONLY, в БД ничего не менялось.
+
+### Сводка по схемам БД
+public = 152 табл. Чужие схемы (НЕ трогаем): `factory`(35), `hr`(12), `pg_catalog`(64), `team`(6), `finance`(4), `information_schema`(4), `analytics_auth`,`client_service`,`drive`,`knowledge`,`knowledge_base`,`meetings`,`mymeet`. Все FK внутри этих схем замкнуты на себя.
+
+> ВАЖНО: схема `factory` (35 табл: `factory.factory_inst_accounts`, `factory.device_numbers`, `factory.content` …) — это ОТДЕЛЬНЫЙ продукт (account/creator factory), НЕ CH. Не путать с public-таблицами `factory_*`, которые ЯВЛЯЮТСЯ инвентарём аккаунтов CH (живой `publisher.py` читает `FROM factory_pack_accounts JOIN factory_inst_accounts` БЕЗ схемы → public). Единственное обращение CH-кода к чужой схеме: `server.js` читает `factory.device_numbers` (cross-schema, НЕ FK) — рантайм-связь, см. concern ниже.
+
+### Классификация 152 public-таблиц
+
+**CH-CORE — 65 табл. (переносим).** Кандидат на `-t`-список:
+
+_delivery (publish/autowarm/инвентарь аккаунтов), 47:_
+`account_audience_snapshots, account_daily_delta, ad_hoc_runs, agent_runs, agent_task_queue, approval_notify_runs, archive_log, archive_tasks, autowarm_day_logs, autowarm_device_metrics, autowarm_llm_spend, autowarm_protocols, autowarm_settings, autowarm_tasks, autowarm_token_logs, autowarm_users, child_packs, daily_report_runs, factory_accounts_fans, factory_device_numbers, factory_inst_accounts, factory_inst_reels, factory_inst_reels_stats, factory_pack_accounts, factory_parsing_logs, factory_reg_accounts, factory_reg_tasks, factory_sync_exclusions, publish_error_codes, publish_investigations, publish_project_limits, publish_queue, publish_tasks, publisher_fixes, publisher_obstacle_outcomes, publisher_obstacles, raspberry_port, social_audit_snapshots, social_credentials, system_flags, unic_result_assignments, unic_results, unic_schemes, unic_settings, unic_tasks, user_permissions, user_sessions`
+
+_client (validator/FastAPI), 18:_
+`alembic_version, logo_generation_tasks, logo_selections, logo_variants, validator_audit_log, validator_brand_profiles, validator_carousel_images, validator_content, validator_manual_publish_queue, validator_moderation_rules, validator_projects, validator_schedule_slots, validator_scheme_preferences, validator_scheme_previews, validator_support_history, validator_unic_content, validator_users, validator_virality_rules`
+
+> ⚠️ ГРЕЙ-ЗОНА внутри CH-CORE: `factory_reg_accounts` / `factory_reg_tasks` создаются продуктом регистрации аккаунтов (`account_factory.py`, `gmail_factory_appium.py`, `register_social.py` — это farming-сторона), НО их читают ЖИВЫЕ publish-файлы `account_switcher.py`, `publisher_base.py`, `account_blocks.py`, `slot_matcher_cron.js` (проверка блокировок/готовности аккаунта). Оставлены в CORE на всякий случай; подтвердить с человеком — нужны ли реально для публикации, или это только для регистрации (тогда LEGACY).
+> `alembic_version` грепом не находится (управляется библиотекой Alembic), но это таблица версий миграций validator (`backend/alembic/versions/001..010`) → структурно CH-CORE-client.
+
+**CH-LEGACY — 12 табл. (НЕ переносим: farming/warming/testbench).**
+| Таблица | Почему legacy (файлы-потребители) |
+|---|---|
+| `farming_error_codes`, `farming_fixes`, `farming_investigations` | только `farming_*.py/js` (триаж фермы) + server.js-админка фермы |
+| `phone_warm_tasks` | `phone_warmer.py`, `phone_status.js`, `scheduler.js` — прогрев телефонов |
+| `tg_accounts`, `tg_warm_tasks` | `telegram_warmer.py` — прогрев Telegram |
+| `wa_accounts`, `wa_warm_tasks` | `whatsapp_warmer.py` — прогрев WhatsApp |
+| `sim_cards` | `sim_scanner.py` + `whatsapp_warmer.py` — sim-инфра прогрева |
+| `warmup_daily_marks`, `warmup_entries` | 0 живых ссылок, FK-пара «warmup» (прогрев) |
+| `incidents` | ссылки ТОЛЬКО в `tests/` (фикстура), живого кода нет |
+
+**FOREIGN — 71 табл. (чужие продукты).**
+`LiteLLM_*` (57), `systematika_*` (5: billing_alerts, client_frameworks, clients, packages, token_usage), `billing_events`, `billing_spend_watermarks`, `billing_watermarks` (0 ссылок CH), `telegram_messages` (0 ссылок CH, 15 MB CRM), `client_messages` (CRM), `people`, `people_ratings` (CRM), `backup_logs` (FK→systematika_clients), `factory_users` (продукт account-factory, 0 ссылок CH).
+
+**UNKNOWN — 4 табл. (0 упоминаний нигде, разобрать с человеком).**
+`account_purchases`, `fw_interest_clicks`, `install_queue`, `installer_logs` — пустых/неиспользуемых имён нет в коде ни delivery, ни client. Скорее всего мёртвые/чужие; по умолчанию НЕ переносить, но подтвердить.
+
+Итог: 65 CORE + 12 LEGACY + 71 FOREIGN + 4 UNKNOWN = 152 ✓.
+
+### Анализ внешних ключей (Шаг 4)
+Все 66 FK в БД перечислены и сопоставлены с классификацией. Результат:
+
+- **Межпродуктовых FK CH-CORE ↔ FOREIGN — НЕТ.** Ни одна CH-CORE-таблица не ссылается на чужую и наоборот.
+- **Межсхемных FK из public CH в `factory`/`hr`/`team`/`finance` — НЕТ.** FK этих схем замкнуты внутри себя.
+- Единственный FK CORE ↔ LEGACY: `farming_investigations`(LEGACY) → `autowarm_tasks`(CORE). Так как `farming_investigations` мы НЕ переносим, ссылающаяся таблица просто отсутствует в дампе; цель (`autowarm_tasks`) переносится. **Безопасно** (sink есть, source выкинут).
+- FK CORE ↔ CORE через границу delivery/client: `validator_manual_publish_queue` → `autowarm_users` (×2, published_by/taken_by) и validator_content/projects/slots → validator_users. Все участники в CH-CORE → попадают в один дамп. **Безопасно.**
+
+**ВЕРДИКТ FK: выборочный дамп CH-CORE безопасен — межпродуктовых и межсхемных FK у CH нет.** Все FK CH-CORE замкнуты внутри множества CH-CORE.
+
+### Вердикт по пограничным (Шаг 5)
+- **`billing_*`** (billing_events / billing_spend_watermarks / billing_watermarks): **0 ссылок** ни в delivery, ни в client → **FOREIGN (billing-продукт). Не переносим.**
+- **`telegram_messages`**: **0 ссылок** в CH-коде (15 MB, CRM/мессенджер) → **FOREIGN. Не переносим.**
+- **`factory_inst_reels`** и public `factory_*`: используются ЖИВЫМ CH (publisher.py, validator analytics/contract/accounts_service) → **CH-CORE (инвентарь аккаунтов + аналитика рилсов).** Переносим.
+- **схема `factory` (35 табл.)**: чужой продукт (account/creator factory). CH-код к ней почти не обращается, кроме одного `factory.device_numbers` в server.js → **FOREIGN-схема, не переносим**, но см. рантайм-concern.
+
+### Рекомендация по дампу (Шаг 6)
+Окружение: расширения в БД — `vector 0.8.1`, `pg_trgm 1.6`, `pgcrypto 1.3`, `plpgsql`. Кастомные enum-типы в public: `contentniche, contentstatus, contenttype, moderationstatus, schemepreferencestatus, slotstatus, slottype, userrole` (все принадлежат `validator_*` → нужны для CH) + `JobStatus` (LiteLLM, безвреден). **vector-колонок в CH-CORE-таблицах НЕТ** (vector нужен только чужим LiteLLM/knowledge); для CH достаточно `pg_trgm` + `pgcrypto`.
+
+**ГОТЧА выборочного дампа:** `pg_dump -t <table>` НЕ выгружает CREATE TYPE (enum) и CREATE EXTENSION — они уровня схемы/БД. При чистом `-t`-листе restore validator-таблиц упадёт на отсутствующих enum-типах.
+
+**Рекомендуемая стратегия — schema-level с исключениями (типы/расширения подтянутся сами):**
+```bash
+pg_dump -h 127.0.0.1 -p 5432 -U openclaw -d openclaw \
+  --schema=public --no-owner --no-privileges \
+  -T 'LiteLLM_*' \
+  -T 'systematika_*' \
+  -T 'billing_*' \
+  -T people -T people_ratings -T client_messages -T telegram_messages -T backup_logs -T factory_users \
+  -T 'farming_*' -T phone_warm_tasks -T tg_accounts -T tg_warm_tasks \
+  -T wa_accounts -T wa_warm_tasks -T sim_cards -T warmup_daily_marks -T warmup_entries -T incidents \
+  -T account_purchases -T fw_interest_clicks -T install_queue -T installer_logs \
+  --exclude-table-data=autowarm_device_metrics \
+  --exclude-table-data=factory_inst_reels_stats \
+  --exclude-table-data=factory_inst_reels \
+  --exclude-table-data=factory_parsing_logs \
+  -Fc -f /tmp/ch_public.dump
+```
+Плюсы: enum-типы validator и `CREATE EXTENSION` попадут автоматически; останется лишний enum `JobStatus` (безвреден). Минус: список `-T` длинный, но он по семействам.
+
+На целевой БД ДО restore: `CREATE EXTENSION IF NOT EXISTS pg_trgm; CREATE EXTENSION IF NOT EXISTS pgcrypto; CREATE EXTENSION IF NOT EXISTS vector;` (vector — т.к. образ pgvector и на случай чужих остатков).
+
+**Альтернатива — явный `-t`-вайтлист 65 CH-CORE** (надёжнее против утечки чужих данных, но руками донести 8 enum-типов + 2 extension перед restore). Подходит, если нужен максимально чистый CH-дамп без чужих строк.
+
+**Таблицы-тяжеловесы (кандидаты на дамп без истории, `--exclude-table-data`):**
+| Таблица | Размер | Строк | Решение |
+|---|---|---|---|
+| `factory_inst_reels_stats` | 896 MB | 29.6k | аналитика трендов — структура без истории (догрузить при нужде) |
+| `autowarm_device_metrics` | 701 MB | 4.1M | телеметрия устройств — структура без истории |
+| `factory_inst_reels` | 53 MB | 79.7k | аналитика рилсов — по желанию урезать |
+| `factory_parsing_logs` | 10 MB | 47.9k | логи парсинга — урезать |
+
+Без этих историй дамп CH-CORE сжимается с ~1.6 GB до ~единиц-десятков MB.
+
+### Рантайм-concern (не дамп, но связность)
+`server.js` исполняет запрос к `factory.device_numbers` (чужая схема factory, которую НЕ мигрируем) + есть внешняя FACTORY_DB `193.124.112.222:49002` (см. п.8 выше). Если CH в рантайме реально читает локальную схему `factory` — на NEW её не будет. Проверить: это рудимент (account-factory) или живая зависимость публикации. Скорее всего инвентарь аккаунтов уже унифицирован в public `factory_*` (комментарий в accounts_service.py: «factory unification, 2026-04-22»), а `factory.device_numbers` в server.js — легаси-чтение. Подтвердить перед отключением OLD.
