@@ -1,0 +1,68 @@
+#!/usr/bin/env bash
+# Идемпотентный деплой одного стенда ContentHunter на NEW-сервере.
+# Использование: deploy.sh <test-delivery|prod-delivery|test-client|prod-client>
+# Логика: git reset --hard origin/<branch> → зависимости → миграции/вью → pm2 restart
+#         → health-check → при отсутствии ответа на порту откат на предыдущий commit.
+set -euo pipefail
+
+STAND="${1:?usage: deploy.sh <test-delivery|prod-delivery|test-client|prod-client>}"
+DIR="/opt/contenthunter/$STAND"
+cd "$DIR"
+
+BRANCH=$(git rev-parse --abbrev-ref HEAD)
+PREV=$(git rev-parse HEAD)
+echo ">> deploy $STAND (branch=$BRANCH, prev=$PREV)"
+
+git fetch --quiet origin
+git reset --hard "origin/$BRANCH"
+
+case "$STAND" in
+  *-delivery)
+    npm ci
+    # Python-рантайм publisher/спавн-скриптов (чистый ADB, без Appium).
+    if [ -f requirements-runtime.txt ]; then
+      echo ">> pip install requirements-runtime.txt (системный python3)"
+      pip install --break-system-packages -q -r requirements-runtime.txt
+    fi
+    # ffmpeg/ffprobe — для remux screen-record (системно, не pip).
+    command -v ffmpeg >/dev/null 2>&1 || {
+      echo ">> installing ffmpeg"
+      DEBIAN_FRONTEND=noninteractive apt-get install -y -qq ffmpeg
+    }
+    if [ "${STAND%-*}" = "prod" ]; then DB=contenthunter; else DB=contenthunter_test; fi
+    if [ -f db/device_state_view.sql ]; then
+      echo ">> applying db/device_state_view.sql to $DB"
+      docker exec -i contenthunter-postgres psql -v ON_ERROR_STOP=1 -U contenthunter -d "$DB" < db/device_state_view.sql
+    fi
+    PORT=$(grep -E '^PORT=' .env | cut -d= -f2)
+    ;;
+  *-client)
+    ( cd backend && .venv/bin/pip install -q -r requirements.txt && .venv/bin/alembic upgrade head )
+    ( cd frontend && npm ci && npx vite build )
+    PORT=$(grep -E '^BACKEND_PORT=' backend/.env | cut -d= -f2)
+    ;;
+  *)
+    echo "unknown stand: $STAND" >&2; exit 2
+    ;;
+esac
+
+# Рестарт (или старт, если процесса ещё нет — кейс старта прод-стендов в окно переезда)
+pm2 restart "$STAND" --update-env 2>/dev/null \
+  || pm2 start /opt/contenthunter/ecosystem.test.config.js --only "$STAND" 2>/dev/null \
+  || true
+pm2 save || true
+
+# Health-check: любой HTTP-ответ на порту = жив; 000 = мёртв.
+sleep 4
+CODE=$(curl -s -o /dev/null -w "%{http_code}" --max-time 8 "http://localhost:${PORT}/login" || true)
+if [ "$CODE" = "000" ] || [ -z "$CODE" ]; then
+  CODE=$(curl -s -o /dev/null -w "%{http_code}" --max-time 8 "http://localhost:${PORT}/" || true)
+fi
+if [ "$CODE" = "000" ] || [ -z "$CODE" ]; then
+  echo "HEALTHCHECK FAILED (no response on :$PORT) → rollback to $PREV"
+  git reset --hard "$PREV"
+  pm2 restart "$STAND" --update-env || true
+  exit 1
+fi
+
+echo "deploy $STAND OK (HTTP $CODE on :$PORT)"
